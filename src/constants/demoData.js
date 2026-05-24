@@ -46,3 +46,61 @@ ZS-001,3,Klima-Tech Sp. z o.o.,P-KOD-100-100,40,2026-05-27,1
 ZS-002,3,VentPro S.A.,P-TLU-KUL-01,20,2026-05-27,2
 ZS-003,3,AirSystem Kraków,P-SKR-ROZ-02,40,2026-05-27,3
 ZS-004,3,HVAC Południe,P-KRA-MAS-03,80,2026-05-27,4`;
+export const DEMO_HISTORY = `zp_id,product,workcenter,operation,start_ts,end_ts,reason_code,volume
+ZP-H01,P-KOD-100-100,G-01,"Wycinanie laserowe podstawy",2026-05-01 07:00,2026-05-01 07:03,,10
+ZP-H01,P-KOD-100-100,G-02,"Gięcie profili podstawy",2026-05-01 07:10,2026-05-01 07:30,PRZEZBROJENIE,10
+ZP-H01,P-KOD-100-100,G-03,"Spawanie narożników korpusu",2026-05-01 08:27,2026-05-01 08:40,KONTROLA_KJ,10
+ZP-H01,P-KOD-100-100,G-04,"Izolacja PIR i montaż poliwęglanu",2026-05-01 09:15,2026-05-01 09:29,,10
+ZP-H01,P-KOD-100-100,G-05,"Montaż siłownika i testy KJ",2026-05-01 11:14,2026-05-01 11:31,,10
+ZP-H02,P-TLU-KUL-01,G-01,"Wycinanie paneli obudowy",2026-05-03 09:00,2026-05-03 09:06,,8
+ZP-H02,P-TLU-KUL-01,G-02,"Gięcie obudowy zewnętrznej",2026-05-03 09:31,2026-05-03 09:35,,8
+ZP-H02,P-TLU-KUL-01,G-03,"Spawanie i zgrzewanie obudowy",2026-05-03 10:29,2026-05-03 10:57,KONTROLA_KJ,8
+ZP-H02,P-TLU-KUL-01,G-04,"Napełnianie kulis wełną",2026-05-03 12:04,2026-05-03 13:05,,8
+ZP-H02,P-TLU-KUL-01,G-05,"Montaż końcowy i nitowanie",2026-05-03 13:31,2026-05-03 13:50,BRAK_OPERATORA,8
+ZP-H03,P-SKR-ROZ-02,G-01,"Wycinanie obudowy skrzynki",2026-04-30 07:00,2026-04-30 07:01,,20
+ZP-H03,P-SKR-ROZ-02,G-02,"Gięcie skrzynki",2026-04-30 07:22,2026-04-30 07:26,,20
+ZP-H03,P-SKR-ROZ-02,G-03,"Zgrzewanie liniowe korpusu",2026-04-30 08:34,2026-04-30 08:46,INNE,20
+ZP-H03,P-SKR-ROZ-02,G-04,"Wyklejanie matą kauczukową",2026-04-30 10:09,2026-04-30 10:19,AWARIA,20
+ZP-H03,P-SKR-ROZ-02,G-05,"Montaż króćców i przepustnicy",2026-04-30 11:37,2026-04-30 11:53,BRAK_OPERATORA,20
+ZP-H04,P-KRA-MAS-03,G-01,"Wycinanie ramki i lameli",2026-05-15 07:00,2026-05-15 07:01,,50
+ZP-H04,P-KRA-MAS-03,G-02,"Gięcie ramki i profilowanie",2026-05-15 07:36,2026-05-15 07:42,,50
+ZP-H04,P-KRA-MAS-03,G-04,"Montaż uszczelki i sprężynek",2026-05-15 08:05,2026-05-15 08:32,BRAK_MATERIALU,50
+ZP-H04,P-KRA-MAS-03,G-05,"Składanie żaluzji i nitowanie",2026-05-15 09:45,2026-05-15 10:02,,50
+ZP-H05,P-KOD-100-100,G-01,"Wycinanie laserowe podstawy",2026-05-05 09:00,2026-05-05 09:05,,15
+ZP-H05,P-KOD-100-100,G-02,"Gięcie profili podstawy",2026-05-05 09:32,2026-05-05 09:55,,15
+ZP-H05,P-KOD-100-100,G-03,"Spawanie narożników korpusu",2026-05-05 10:48,2026-05-05 11:12,AWARIA,15
+ZP-H05,P-KOD-100-100,G-04,"Izolacja PIR i montaż poliwęglanu",2026-05-05 11:19,2026-05-05 11:40,BRAK_MATERIALU,15
+ZP-H05,P-KOD-100-100,G-05,"Montaż siłownika i testy KJ",2026-05-05 13:02,2026-05-05 13:56,,15
+ZP-H06,P-SKR-ROZ-02,G-01,"Wycinanie obudowy skrzynki",2026-04-28 09:00,2026-04-28 09:04,,30
+ZP-H06,P-SKR-ROZ-02,G-02,"Gięcie skrzynki",2026-04-28 10:31,2026-04-28 10:39,,30
+ZP-H06,P-SKR-ROZ-02,G-03,"Zgrzewanie liniowe korpusu",2026-04-28 12:23,2026-04-28 12:33,,30
+ZP-H06,P-SKR-ROZ-02,G-04,"Wyklejanie matą kauczukową",2026-04-28 13:18,2026-04-28 13:38,,30
+ZP-H06,P-SKR-ROZ-02,G-05,"Montaż króćców i przepustnicy",2026-04-28 13:57,2026-04-28 14:16,BRAK_OPERATORA,30
+ZP-H07,P-TLU-KUL-01,G-01,"Wycinanie paneli obudowy",2026-05-03 09:00,2026-05-03 09:15,,12
+ZP-H07,P-TLU-KUL-01,G-02,"Gięcie obudowy zewnętrznej",2026-05-03 09:39,2026-05-03 09:44,,12
+ZP-H07,P-TLU-KUL-01,G-03,"Spawanie i zgrzewanie obudowy",2026-05-03 10:37,2026-05-03 11:07,,12
+ZP-H07,P-TLU-KUL-01,G-04,"Napełnianie kulis wełną",2026-05-03 11:47,2026-05-03 12:22,,12
+ZP-H07,P-TLU-KUL-01,G-05,"Montaż końcowy i nitowanie",2026-05-03 12:52,2026-05-03 13:07,,12
+ZP-H08,P-KRA-MAS-03,G-01,"Wycinanie ramki i lameli",2026-05-15 07:00,2026-05-15 07:02,,40
+ZP-H08,P-KRA-MAS-03,G-02,"Gięcie ramki i profilowanie",2026-05-15 08:23,2026-05-15 08:28,,40
+ZP-H08,P-KRA-MAS-03,G-04,"Montaż uszczelki i sprężynek",2026-05-15 09:57,2026-05-15 10:12,BRAK_MATERIALU,40
+ZP-H08,P-KRA-MAS-03,G-05,"Składanie żaluzji i nitowanie",2026-05-15 10:56,2026-05-15 11:13,BRAK_OPERATORA,40
+ZP-H09,P-KOD-100-100,G-01,"Wycinanie laserowe podstawy",2026-05-08 07:00,2026-05-08 07:03,,8
+ZP-H09,P-KOD-100-100,G-02,"Gięcie profili podstawy",2026-05-08 07:56,2026-05-08 08:11,,8
+ZP-H09,P-KOD-100-100,G-03,"Spawanie narożników korpusu",2026-05-08 09:05,2026-05-08 09:24,INNE,8
+ZP-H09,P-KOD-100-100,G-04,"Izolacja PIR i montaż poliwęglanu",2026-05-08 10:45,2026-05-08 11:07,AWARIA,8
+ZP-H09,P-KOD-100-100,G-05,"Montaż siłownika i testy KJ",2026-05-08 11:07,2026-05-08 11:28,,8
+ZP-H10,P-TLU-KUL-01,G-01,"Wycinanie paneli obudowy",2026-05-01 09:00,2026-05-01 09:05,,6
+ZP-H10,P-TLU-KUL-01,G-02,"Gięcie obudowy zewnętrznej",2026-05-01 10:03,2026-05-01 10:07,,6
+ZP-H10,P-TLU-KUL-01,G-03,"Spawanie i zgrzewanie obudowy",2026-05-01 11:43,2026-05-01 12:03,AWARIA,6
+ZP-H10,P-TLU-KUL-01,G-04,"Napełnianie kulis wełną",2026-05-01 12:27,2026-05-01 13:00,BRAK_MATERIALU,6
+ZP-H10,P-TLU-KUL-01,G-05,"Montaż końcowy i nitowanie",2026-05-01 13:30,2026-05-01 13:45,,6
+ZP-H11,P-SKR-ROZ-02,G-01,"Wycinanie obudowy skrzynki",2026-05-15 07:00,2026-05-15 07:06,,25
+ZP-H11,P-SKR-ROZ-02,G-02,"Gięcie skrzynki",2026-05-15 08:02,2026-05-15 08:11,INNE,25
+ZP-H11,P-SKR-ROZ-02,G-03,"Zgrzewanie liniowe korpusu",2026-05-15 09:25,2026-05-15 09:34,AWARIA,25
+ZP-H11,P-SKR-ROZ-02,G-04,"Wyklejanie matą kauczukową",2026-05-15 10:14,2026-05-15 10:40,,25
+ZP-H11,P-SKR-ROZ-02,G-05,"Montaż króćców i przepustnicy",2026-05-15 12:00,2026-05-15 12:07,,25
+ZP-H12,P-KRA-MAS-03,G-01,"Wycinanie ramki i lameli",2026-05-15 09:00,2026-05-15 09:03,,60
+ZP-H12,P-KRA-MAS-03,G-02,"Gięcie ramki i profilowanie",2026-05-15 09:03,2026-05-15 09:09,PRZEZBROJENIE,60
+ZP-H12,P-KRA-MAS-03,G-04,"Montaż uszczelki i sprężynek",2026-05-15 09:36,2026-05-15 09:46,,60
+ZP-H12,P-KRA-MAS-03,G-05,"Składanie żaluzji i nitowanie",2026-05-15 10:48,2026-05-15 12:00,KONTROLA_KJ,60`;
