@@ -1,0 +1,61 @@
+@import url('https://fonts.googleapis.com/css2?family=DM+Sans:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap');
+
+:root {
+  --fo-bg: #07090c;
+  --fo-surface: #10141a;
+  --fo-surface2: #161b24;
+  --fo-surface3: #1e2530;
+  --fo-border: rgba(255, 255, 255, 0.08);
+  --fo-border2: rgba(255, 255, 255, 0.14);
+  --fo-text: #f0f2f8;
+  --fo-text2: #a8b0c0;
+  --fo-text3: #626d80;
+  --fo-accent: #4d94ff;
+  --fo-accent-bg: rgba(77, 148, 255, 0.15);
+  --fo-gantt-bg: #060810;
+
+  font-family: 'DM Sans', system-ui, sans-serif;
+  font-synthesis: none;
+  text-rendering: optimizeLegibility;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+  color-scheme: dark;
+}
+
+*,
+*::before,
+*::after {
+  box-sizing: border-box;
+}
+
+body {
+  margin: 0;
+  padding: 0;
+  background-color: var(--fo-bg);
+  color: var(--fo-text);
+  font-family: 'DM Sans', system-ui, sans-serif;
+}
+
+#root {
+  width: 100%;
+  min-height: 100svh;
+  margin: 0;
+  text-align: initial;
+  border: none;
+}
+
+button,
+input[type='date'],
+input[type='file'] {
+  font-family: inherit;
+}
+
+code,
+pre {
+  font-family: 'JetBrains Mono', ui-monospace, Consolas, monospace;
+}
+
+input[type='date']::-webkit-calendar-picker-indicator {
+  filter: invert(0.8);
+  cursor: pointer;
+}

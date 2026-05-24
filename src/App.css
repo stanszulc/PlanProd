@@ -1,0 +1,133 @@
+.flowops-app {
+  min-height: 100vh;
+  background: var(--fo-bg);
+  color: var(--fo-text);
+}
+
+.flowops-nav {
+  background: var(--fo-surface);
+  border-bottom: 1px solid var(--fo-border);
+  padding: 0 24px;
+  display: flex;
+  align-items: center;
+  height: 52px;
+  position: sticky;
+  top: 0;
+  z-index: 100;
+}
+
+.flowops-nav-brand {
+  font-size: 14px;
+  font-weight: 700;
+  margin-right: 32px;
+  color: var(--fo-text);
+}
+
+.flowops-nav-tab {
+  height: 52px;
+  padding: 0 16px;
+  font-size: 13px;
+  font-weight: 500;
+  border: none;
+  background: none;
+  cursor: pointer;
+  color: var(--fo-text3);
+  border-bottom: 2px solid transparent;
+  transition: color 0.15s, border-color 0.15s;
+}
+
+.flowops-nav-tab:hover {
+  color: var(--fo-text2);
+}
+
+.flowops-nav-tab.active {
+  color: var(--fo-text);
+  border-bottom-color: var(--fo-accent);
+}
+
+.flowops-main {
+  max-width: 1160px;
+  margin: 0 auto;
+  padding: 28px 24px;
+}
+
+.flowops-export-btn {
+  margin-left: auto;
+}
+
+/* ── Plan tab: 3 niezależne panele ze scrollowaniem ── */
+.plan-tab {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  height: calc(100vh - 130px);
+  min-height: 480px;
+}
+
+.plan-panel {
+  display: flex;
+  flex-direction: column;
+  min-height: 160px;
+  background: var(--fo-surface);
+  border: 1px solid var(--fo-border);
+  border-radius: 12px;
+  overflow: hidden;
+}
+
+.plan-panel--gantt {
+  flex: 2 1 38%;
+}
+
+.plan-panel--grafik {
+  flex: 2 1 32%;
+}
+
+.plan-panel--status {
+  flex: 1 1 22%;
+  min-height: 120px;
+  max-height: 36vh;
+  overflow: auto;
+}
+
+.plan-panel__header {
+  flex-shrink: 0;
+  font-size: 11px;
+  font-weight: 700;
+  color: var(--fo-text2);
+  padding: 8px 14px;
+  background: var(--fo-surface2);
+  border-bottom: 1px solid var(--fo-border);
+}
+
+.plan-panel__body {
+  flex: 1;
+  min-height: 0;
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
+  padding: 8px 12px 12px;
+}
+
+.gantt-tab--embedded,
+.grafik-tab--embedded {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  min-height: 0;
+}
+
+.gantt-tab--embedded .gantt-tab-controls,
+.gantt-tab--embedded .gantt-tab-legend,
+.grafik-tab--embedded .grafik-tab-legend {
+  flex-shrink: 0;
+}
+
+.gantt-tab--embedded .gantt-chart-wrap,
+.grafik-tab--embedded .grafik-chart-wrap {
+  flex: 1;
+  min-height: 0;
+  overflow: auto;
+  border-radius: 12px;
+  background: var(--fo-gantt-bg);
+  position: relative;
+}

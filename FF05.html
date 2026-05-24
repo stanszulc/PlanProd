@@ -1,0 +1,2854 @@
+<!DOCTYPE html>
+<html lang="pl">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>FlowOps - Capacity Planning Tool</title>
+    <!-- React & ReactDOM -->
+    <script src="https://unpkg.com/react@18/umd/react.production.min.js" crossorigin></script>
+    <script src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js" crossorigin></script>
+    <!-- Babel dla kompilacji JSX w przeglądarce -->
+    <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+    <!-- Czcionki -->
+    <link href="https://fonts.googleapis.com/css2?family=DM+Sans:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+    <style>
+        body {
+            margin: 0;
+            padding: 0;
+            background-color: #0d0f12;
+            color: #e8eaf0;
+            font-family: 'DM Sans', system-ui, sans-serif;
+        }
+    </style>
+</head>
+<body>
+    <div id="root"></div>
+
+    <script type="text/babel">
+        const { useState, useCallback, useMemo } = React;
+
+        // ─── DESIGN TOKENS ─────────────────────────────────────────────────────────
+        const T = {
+          bg:       "#07090c",
+          surface:  "#10141a",
+          surface2: "#161b24",
+          surface3: "#1e2530",
+          border:   "rgba(255,255,255,0.08)",
+          border2:  "rgba(255,255,255,0.14)",
+          text:     "#f0f2f8",
+          text2:    "#a8b0c0",
+          text3:    "#626d80",
+          accent:   "#4d94ff",
+          accentBg: "rgba(77,148,255,0.15)",
+          ok:       "#34d399",
+          okBg:     "rgba(52,211,153,0.14)",
+          warn:     "#fbbf24",
+          warnBg:   "rgba(251,191,36,0.14)",
+          bn:       "#f87171",
+          bnBg:     "rgba(248,113,113,0.14)",
+          crit:     "#ff4444",
+          critBg:   "rgba(255,68,68,0.20)",
+          ganttBg:  "#060810",
+        };
+
+        const PALETTE = [
+          "#3b82f6","#22c55e","#a855f7","#f59e0b","#06b6d4",
+          "#ec4899","#84cc16","#f97316","#6366f1","#14b8a6",
+        ];
+
+        // ─── DANE DEMO ──────────────────────────────────────────────────────────────
+        const DEMO_ROUTING = `product,operation,workcenter,ct_min,sequence,capacity_h,predecessors
+P-KOD-100-100,Wycinanie laserowe podstawy,G-01,3.0,1,8,
+P-KOD-100-100,Gięcie profili podstawy,G-02,8.0,2,8,1
+P-KOD-100-100,Spawanie narożników korpusu,G-03,6.0,3,8,
+P-KOD-100-100,Izolacja PIR i montaż poliwęglanu,G-04,12.0,4,8,3
+P-KOD-100-100,Montaż siłownika i testy KJ,G-05,15.0,5,8,2|4
+P-TLU-KUL-01,Wycinanie paneli obudowy,G-01,5.0,1,8,
+P-TLU-KUL-01,Gięcie obudowy zewnętrznej,G-02,4.0,2,8,
+P-TLU-KUL-01,Spawanie i zgrzewanie obudowy,G-03,15.0,3,8,
+P-TLU-KUL-01,Napełnianie kulis wełną,G-04,20.0,4,8,
+P-TLU-KUL-01,Montaż końcowy i nitowanie,G-05,10.0,5,8,
+P-SKR-ROZ-02,Wycinanie obudowy skrzynki,G-01,1.0,1,8,
+P-SKR-ROZ-02,Gięcie skrzynki,G-02,2.0,2,8,
+P-SKR-ROZ-02,Zgrzewanie liniowe korpusu,G-03,2.0,3,8,
+P-SKR-ROZ-02,Wyklejanie matą kauczukową,G-04,5.0,4,8,
+P-SKR-ROZ-02,Montaż króćców i przepustnicy,G-05,4.0,5,8,
+P-KRA-MAS-03,Wycinanie ramki i lameli,G-01,0.4,1,8,
+P-KRA-MAS-03,Gięcie ramki i profilowanie,G-02,0.6,2,8,
+P-KRA-MAS-03,Montaż uszczelki i sprężynek,G-04,1.5,3,8,
+P-KRA-MAS-03,Składanie żaluzji i nitowanie,G-05,3.0,4,8,`;
+
+        const DEMO_ZP = `zp_id,product,volume,due_date,priority
+ZP-001,P-KOD-100-100,30,2026-05-25,1
+ZP-002,P-KRA-MAS-03,100,2026-05-25,4
+ZP-003,P-SKR-ROZ-02,50,2026-05-25,3
+ZP-004,P-TLU-KUL-01,25,2026-05-25,2
+ZP-005,P-KOD-100-100,20,2026-05-26,1
+ZP-006,P-KRA-MAS-03,150,2026-05-26,4
+ZP-007,P-SKR-ROZ-02,60,2026-05-26,3
+ZP-008,P-TLU-KUL-01,30,2026-05-26,2
+ZP-009,P-KOD-100-100,40,2026-05-27,1
+ZP-010,P-KRA-MAS-03,80,2026-05-27,4
+ZP-011,P-SKR-ROZ-02,40,2026-05-27,3
+ZP-012,P-TLU-KUL-01,20,2026-05-27,2`;
+
+        const DEMO_ZS = `zs_id,pozycja,klient,product,volume,due_date,priority
+ZS-001,1,Klima-Tech Sp. z o.o.,P-KOD-100-100,30,2026-05-25,1
+ZS-002,1,VentPro S.A.,P-TLU-KUL-01,25,2026-05-25,2
+ZS-003,1,AirSystem Kraków,P-SKR-ROZ-02,50,2026-05-25,3
+ZS-004,1,HVAC Południe,P-KRA-MAS-03,100,2026-05-25,4
+ZS-001,2,Klima-Tech Sp. z o.o.,P-KOD-100-100,20,2026-05-26,1
+ZS-002,2,VentPro S.A.,P-TLU-KUL-01,30,2026-05-26,2
+ZS-003,2,AirSystem Kraków,P-SKR-ROZ-02,60,2026-05-26,3
+ZS-004,2,HVAC Południe,P-KRA-MAS-03,150,2026-05-26,4
+ZS-001,3,Klima-Tech Sp. z o.o.,P-KOD-100-100,40,2026-05-27,1
+ZS-002,3,VentPro S.A.,P-TLU-KUL-01,20,2026-05-27,2
+ZS-003,3,AirSystem Kraków,P-SKR-ROZ-02,40,2026-05-27,3
+ZS-004,3,HVAC Południe,P-KRA-MAS-03,80,2026-05-27,4`;
+
+        // Konwersja Date → 'YYYY-MM-DD' w lokalnej strefie czasowej (nie UTC)
+        function localDateStr(dt) {
+          const d = new Date(dt);
+          return d.getFullYear() + '-' +
+            String(d.getMonth()+1).padStart(2,'0') + '-' +
+            String(d.getDate()).padStart(2,'0');
+        }
+
+        // Bezpieczny podział linii CSV
+        function safeSplitCSV(line, sep) {
+          const result = [];
+          let current = "";
+          let inQuotes = false;
+          
+          for (let i = 0; i < line.length; i++) {
+            const char = line[i];
+            if (char === '"') {
+              inQuotes = !inQuotes;
+            } else if (char === sep && !inQuotes) {
+              result.push(current.trim());
+              current = "";
+            } else {
+              current += char;
+            }
+          }
+          result.push(current.trim());
+          return result.map(v => v.replace(/^"|"$/g, ''));
+        }
+
+        function parseRouting(text) {
+          const cleanText = text.replace(/^﻿/, ""); 
+          const lines = cleanText.trim().split("\n").map(l => l.trim()).filter(Boolean);
+          if (lines.length < 2) return [];
+          const sep = lines[0].includes(";") ? ";" : ",";
+          const headers = safeSplitCSV(lines[0], sep).map(h => h.toLowerCase());
+          
+          return lines.slice(1).map(line => {
+            const vals = safeSplitCSV(line, sep);
+            const r = {}; headers.forEach((h, i) => r[h] = vals[i] || "");
+            
+            const ct = Math.max(0, parseFloat(r.ct_min || r.ct || 0));
+            const cap = parseFloat(r.capacity_h || r.cap || r.capacity || 8);
+
+            return {
+              product: r.product || "",
+              operation: r.operation || "",
+              workcenter: (r.workcenter || r.wc || "").toUpperCase(),
+              ct_min: ct,
+              sequence:     parseInt(r.sequence || r.seq || 1),
+              predecessors: (r.predecessors || r.pred || '').split(/[,|]/)
+                              .map(s => parseInt(s.trim())).filter(n => !isNaN(n)),
+              capacity_h: cap <= 0 ? 8 : cap,
+            };
+          }).filter(r => r.product && r.workcenter && r.ct_min > 0);
+        }
+
+        function parseZP(text) {
+          const cleanText = text.replace(/^﻿/, ""); 
+          const lines = cleanText.trim().split("\n").map(l => l.trim()).filter(Boolean);
+          if (lines.length < 2) return [];
+          const sep = lines[0].includes(";") ? ";" : ",";
+          const headers = safeSplitCSV(lines[0], sep).map(h => h.toLowerCase());
+          
+          return lines.slice(1).map(line => {
+            const vals = safeSplitCSV(line, sep);
+            const r = {}; headers.forEach((h, i) => r[h] = vals[i] || "");
+            return {
+              zp_id: r.zp_id || r.zp || r.id || "",
+              product: r.product || "",
+              volume: Math.max(0, parseFloat(r.volume || r.vol || r.qty || 0)),
+              due_date: r.due_date || r.due || r.data || "",
+              priority: parseInt(r.priority || r.prio || 1),
+            };
+          }).filter(r => r.product && r.volume > 0 && r.due_date);
+        }
+
+
+        function parseZS(text) {
+          const cleanText = text.replace(/^\uFEFF/, "");
+          const lines = cleanText.trim().split("\n").map(l => l.trim()).filter(Boolean);
+          if (lines.length < 2) return [];
+          const sep = lines[0].includes(";") ? ";" : ",";
+          const headers = safeSplitCSV(lines[0], sep).map(h => h.toLowerCase());
+          return lines.slice(1).map(line => {
+            const vals = safeSplitCSV(line, sep);
+            const r = {}; headers.forEach((h, i) => r[h] = vals[i] || "");
+            return {
+              zs_id:    r.zs_id || r.zs || "",
+              pozycja:  parseInt(r.pozycja || r.poz || 1),
+              klient:   r.klient || r.client || r.customer || "",
+              product:  r.product || "",
+              volume:   Math.max(0, parseFloat(r.volume || r.vol || 0)),
+              due_date: r.due_date || r.due || "",
+              priority: parseInt(r.priority || r.prio || 1),
+            };
+          }).filter(r => r.product && r.volume > 0 && r.due_date);
+        }
+
+        // Konwertuj ZS → ZP (1 pozycja ZS = 1 ZP wiodące)
+        function zsToZP(zsList) {
+          // Format zp_id: ZP-001/01/01 = nr_ZS / pozycja / nr_ZP_w_pozycji
+          return zsList.map(zs => {
+            const zsNum  = zs.zs_id.replace(/[^0-9]/g,'').padStart(3,'0') || '001';
+            const pozNum = String(zs.pozycja || 1).padStart(2,'0');
+            return {
+              zp_id:    'ZP-' + zsNum + '/' + pozNum,
+              zs_id:    zs.zs_id,
+              pozycja:  zs.pozycja,
+              klient:   zs.klient,
+              product:  zs.product,
+              volume:   zs.volume,
+              due_date: zs.due_date,
+              priority: zs.priority,
+            };
+          });
+        }
+
+        // Back-scheduling engine
+        // Wejście: ZP lista + routingByProduct + grafik (schedule per wc per dayName)
+        // Wyjście: lista pod-ZP z {zp_id, sub_id, workcenter, operation, start_dt, end_dt, durH}
+
+        // Back-scheduling engine
+        // wcSchedule: { "G-01": [pon,wt,sr,czw,pt,sob,nd] } — tablica 7 elementów, index 0=pon
+        // JS getDay(): 0=nd, 1=pon ... 6=sob → mapujemy na index w tablicy
+
+        // ─── SCHEDULER ENGINE ─────────────────────────────────────────────────────────
+        // wcSchedule: { "G-01": [pon,wt,sr,czw,pt,sob,nd] } — idx 0=pon
+        // JS getDay(): 0=nd,1=pon...6=sob
+
+        function jsDay2idx(jsDay) {
+          return jsDay === 0 ? 6 : jsDay - 1;
+        }
+
+        function getAvail(wc, dt, wcSchedule) {
+          const sched = wcSchedule && wcSchedule[wc];
+          if (!sched) return 16;
+          const d = new Date(dt);
+          // Nowy format: obiekt z datami { "2026-05-25": 16 }
+          if (!Array.isArray(sched) && typeof sched === 'object') {
+            const dateKey = localDateStr(d);
+            if (sched[dateKey] !== undefined) return sched[dateKey];
+            // Fallback: domyślnie pon-pt=16, sob-nd=0
+            const jsDay = d.getDay();
+            return (jsDay===0||jsDay===6) ? 0 : 16;
+          }
+          // Stary format: tablica [pon..nd]
+          return sched[jsDay2idx(d.getDay())] !== undefined ? sched[jsDay2idx(d.getDay())] : 0;
+        }
+
+        // Podziel operację na segmenty (bloki) z cięciem na granicach dni roboczych
+        // Zwraca: { startDt, segments: [{segStart, segEnd, durH}] }
+        function backScheduleOp(endDt, hoursNeeded, wc, wcSchedule) {
+          const segments = [];
+          let cursor    = new Date(endDt);
+          let remaining = hoursNeeded;
+          let safety    = 0;
+
+          while (remaining > 0.0001 && safety++ < 5000) {
+            const avail  = getAvail(wc, cursor, wcSchedule);
+
+            if (avail === 0) {
+              cursor.setDate(cursor.getDate() - 1);
+              cursor.setHours(23, 59, 0, 0);
+              continue;
+            }
+
+            const dayEnd     = avail;
+            const curH       = cursor.getHours() + cursor.getMinutes() / 60;
+            const availToday = Math.min(curH, dayEnd);
+
+            if (availToday <= 0.0001) {
+              cursor.setDate(cursor.getDate() - 1);
+              const prevAvail = getAvail(wc, cursor, wcSchedule);
+              cursor.setHours(prevAvail > 0 ? prevAvail : 23, prevAvail > 0 ? 0 : 59, 0, 0);
+              continue;
+            }
+
+            const take   = Math.min(remaining, availToday);
+            remaining   -= take;
+            const startH = curH - take;
+
+            // Zachowaj koniec segmentu PRZED jakąkolwiek modyfikacją kursora
+            const segEndDt   = new Date(cursor);
+            // Teraz oblicz start
+            const segStartDt = new Date(cursor);
+            segStartDt.setHours(Math.floor(startH), Math.round((startH % 1) * 60), 0, 0);
+
+            segments.unshift({ segStart: segStartDt, segEnd: segEndDt, durH: take });
+
+            if (remaining > 0.0001) {
+              cursor = new Date(segStartDt);
+              cursor.setDate(cursor.getDate() - 1);
+              const prevAvail = getAvail(wc, cursor, wcSchedule);
+              cursor.setHours(prevAvail > 0 ? prevAvail : 23, prevAvail > 0 ? 0 : 59, 0, 0);
+            } else {
+              cursor = new Date(segStartDt);
+            }
+          }
+
+          return { startDt: cursor, segments };
+        }
+
+        // Back-schedule wszystkich ZP z listy
+        // Zwraca listę pod-ZP, każde z tablicą segmentów (bloki na Ganttcie)
+        function backSchedule(zpList, routingByProduct, wcSchedule) {
+          const result = [];
+          const zpOpCounter = {}; // per zp_id → licznik operacji
+
+          zpList.forEach(zp => {
+            const ops = (routingByProduct[zp.product] || [])
+              .slice()
+              .sort((a, b) => b.sequence - a.sequence); // od ostatniej do pierwszej
+            if (!ops.length) return;
+
+            // Kursor = koniec dnia due_date
+            let cursor = new Date(zp.due_date + 'T00:00:00');
+            const lastAvail = getAvail(ops[0].workcenter, cursor, wcSchedule) || 16;
+            cursor.setHours(lastAvail, 0, 0, 0);
+
+            const doneStarts = {}; // sequence → startDt (dla predecessors w back)
+
+            ops.forEach(op => {
+              const durH   = zp.volume * op.ct_min / 60;
+              // W back-schedule: endDt = min(startów successors) jeśli ma predecessors
+              let endDt = new Date(cursor);
+              if (op.predecessors && op.predecessors.length > 0) {
+                // Znajdź successors — operacje które mają ten sequence w predecessors
+                const successorStarts = ops
+                  .filter(o => o.predecessors && o.predecessors.includes(op.sequence))
+                  .map(o => doneStarts[o.sequence])
+                  .filter(Boolean);
+                if (successorStarts.length > 0)
+                  endDt = new Date(Math.min(...successorStarts.map(d => new Date(d).getTime())));
+              }
+              const { startDt, segments } = backScheduleOp(endDt, durH, op.workcenter, wcSchedule);
+              doneStarts[op.sequence] = startDt;
+
+              result.push({
+                zp_id:      (() => { if (!zpOpCounter[zp.zp_id]) zpOpCounter[zp.zp_id]=0; zpOpCounter[zp.zp_id]++; return zp.zp_id+'/'+String(zpOpCounter[zp.zp_id]).padStart(3,'0'); })(),
+                 parent_zp:  zp.zp_id,
+                zs_id:      zp.zs_id || '',
+                klient:     zp.klient || '',
+                sub_id:     result.length > 0 ? result[result.length] : zp.zp_id,
+                product:    zp.product,
+                workcenter: op.workcenter,
+                operation:  op.operation,
+                sequence:   op.sequence,
+                volume:     zp.volume,
+                durH,
+                start_dt:   startDt,
+                end_dt:     endDt,
+                segments,           // bloki cięte na granicach dni
+                due_date:   zp.due_date,
+                priority:   zp.priority,
+              });
+
+              cursor = new Date(startDt);
+            });
+          });
+
+          return result.sort((a, b) => a.start_dt - b.start_dt);
+        }
+
+
+        // ─── FORWARD SCHEDULER Z KOLEJKĄ ──────────────────────────────────────────
+        // Wejście: zpList (posortowane wg priorytetu), routingByProduct, wcSchedule, planStart (Date)
+        // Wyjście: tablica { zp_id, product, due_date, start_dt, end_dt, delay_h, bufferConsumed, segments[] }
+        //          + backStart (z back-schedule) per ZP dla TOC
+
+        function forwardScheduleOp(fromDt, hoursNeeded, wc, wcSchedule, occupancy) {
+          let cursor    = new Date(fromDt);
+          let remaining = hoursNeeded;
+          const segs    = [];
+          let safety    = 0;
+
+          while (remaining > 0.0001 && safety++ < 10000) {
+            // Pomiń weekendy/dni wolne
+            const avail = getAvail(wc, cursor, wcSchedule);
+            if (avail === 0) {
+              cursor = new Date(cursor); cursor.setDate(cursor.getDate()+1); cursor.setHours(0,0,0,0);
+              continue;
+            }
+
+            // Okno dnia roboczego: cursor.day 00:00 → avail:00
+            const dayEnd = new Date(cursor); dayEnd.setHours(avail, 0, 0, 0);
+
+            // Jeśli cursor poza oknem — następny dzień
+            if (cursor >= dayEnd) {
+              cursor = new Date(cursor); cursor.setDate(cursor.getDate()+1); cursor.setHours(0,0,0,0);
+              continue;
+            }
+
+            // Przesuń cursor za zajęte sloty
+            let slotStart = new Date(cursor);
+            let shifted = true;
+            while (shifted) {
+              shifted = false;
+              for (const o of (occupancy[wc] || [])) {
+                if (new Date(o.from) <= slotStart && new Date(o.to) > slotStart) {
+                  slotStart = new Date(o.to);
+                  shifted = true;
+                  break;
+                }
+              }
+            }
+
+            // Jeśli po przesunięciu wychodzimy poza dzień — następny dzień
+            if (slotStart >= dayEnd) {
+              cursor = new Date(slotStart);
+              cursor.setDate(cursor.getDate()+1); cursor.setHours(0,0,0,0);
+              continue;
+            }
+
+            // Koniec slotu = min(dayEnd, następna rezerwacja)
+            let slotEnd = new Date(dayEnd);
+            for (const o of (occupancy[wc] || [])) {
+              const oFrom = new Date(o.from);
+              if (oFrom > slotStart && oFrom < slotEnd) slotEnd = oFrom;
+            }
+
+            const availH = (slotEnd - slotStart) / 3600000;
+            if (availH < 0.0001) { cursor = new Date(slotEnd); continue; }
+
+            const take   = Math.min(remaining, availH);
+            remaining   -= take;
+            const segEnd = new Date(slotStart.getTime() + take * 3600000);
+
+            segs.push({ segStart: new Date(slotStart), segEnd: new Date(segEnd), durH: take });
+
+            if (!occupancy[wc]) occupancy[wc] = [];
+            occupancy[wc].push({ from: new Date(slotStart), to: new Date(segEnd) });
+            occupancy[wc].sort((a,b) => new Date(a.from)-new Date(b.from));
+
+            cursor = new Date(segEnd);
+          }
+
+          return {
+            startDt: segs.length ? segs[0].segStart    : new Date(fromDt),
+            endDt:   segs.length ? segs[segs.length-1].segEnd : new Date(fromDt),
+            segments: segs,
+          };
+        }
+
+        function forwardSchedule(zpList, routingByProduct, wcSchedule, planStart) {
+          const occupancy = {};
+          const result = [];
+          const zpOpCounter = {};
+
+          const sorted = [...zpList].sort((a, b) =>
+            a.priority - b.priority || a.due_date.localeCompare(b.due_date)
+          );
+
+          sorted.forEach(zp => {
+            const ops = (routingByProduct[zp.product] || [])
+              .slice().sort((a, b) => a.sequence - b.sequence);
+            if (!ops.length) return;
+
+            const doneEnds = {}; // sequence → endDt (dla predecessors)
+            const subOps = [];
+
+            ops.forEach(op => {
+              const durH = zp.volume * op.ct_min / 60;
+              // cursor = max(końców predecessors) lub planStart
+              let cursor = new Date(planStart);
+              if (op.predecessors && op.predecessors.length > 0) {
+                op.predecessors.forEach(seq => {
+                  if (doneEnds[seq] && doneEnds[seq] > cursor)
+                    cursor = new Date(doneEnds[seq]);
+                });
+              } else if (subOps.length > 0) {
+                // brak predecessors i nie pierwsza op → sekwencja (stara logika)
+                const prevEnd = subOps[subOps.length-1].end_dt;
+                if (prevEnd && new Date(prevEnd) > cursor)
+                  cursor = new Date(prevEnd);
+              }
+              const { startDt, endDt, segments } = forwardScheduleOp(
+                cursor, durH, op.workcenter, wcSchedule, occupancy
+              );
+              doneEnds[op.sequence] = endDt;
+              subOps.push({
+                zp_id:      (() => { if (!zpOpCounter[zp.zp_id]) zpOpCounter[zp.zp_id]=0; zpOpCounter[zp.zp_id]++; return zp.zp_id+'/'+String(zpOpCounter[zp.zp_id]).padStart(3,'0'); })(),
+                 parent_zp:  zp.zp_id,
+                zs_id:      zp.zs_id || '',
+                klient:     zp.klient || '',
+                sub_id:     zp.zp_id + '/' + String(op.sequence).padStart(3,'0'),
+                product:    zp.product,
+                workcenter: op.workcenter,
+                operation:  op.operation,
+                sequence:   op.sequence,
+                volume:     zp.volume,
+                durH,
+                start_dt:   startDt,
+                end_dt:     endDt,
+                segments,
+                due_date:   zp.due_date,
+                priority:   zp.priority,
+              });
+              cursor = new Date(endDt);
+            });
+
+            // realEnd = koniec ostatniej operacji
+            const realEnd  = subOps.length ? subOps[subOps.length-1].end_dt : new Date(planStart);
+            const dueDate  = new Date(zp.due_date + 'T23:59:59');
+            const delayMs  = Math.max(0, realEnd - dueDate);
+            const delayH   = delayMs / 3600000;
+            const delayDays = +(delayH / 16).toFixed(1);
+
+            result.push(...subOps.map(s => ({ ...s, realEnd, delayH, delayDays })));
+          });
+
+          return result;
+        }
+
+        // TOC buffer zones
+        // backStart = idealny start z back-schedule
+        // planStart = dziś
+        // dueDate   = termin
+        function tocBuffer(backStartDt, planStartDt, dueDateDt, realEndDt) {
+          // Jeśli realEnd > dueDate → zawsze spóźnione, niezależnie od bufora
+          if (realEndDt && realEndDt > dueDateDt) {
+            const overH = (realEndDt - dueDateDt) / 3600000;
+            return { zone: 'black', consumed: 1, label: 'SPÓŹNIONE', overH };
+          }
+          const bufferTotal = dueDateDt - backStartDt;
+          if (bufferTotal <= 0) return { zone: 'black', consumed: 1, label: 'PRZEKROCZONY' };
+          const bufferRemaining = dueDateDt - planStartDt;
+          const consumed = 1 - bufferRemaining / bufferTotal;
+          if (consumed < 0)    return { zone: 'green',  consumed, label: 'OK' };
+          if (consumed < 0.33) return { zone: 'green',  consumed, label: 'OK' };
+          if (consumed < 0.67) return { zone: 'yellow', consumed, label: 'UWAGA' };
+          if (consumed < 1.0)  return { zone: 'red',    consumed, label: 'ZAGROŻONE' };
+          return                      { zone: 'black',  consumed, label: 'SPÓŹNIONE' };
+        }
+
+        function tocColor(zone) {
+          switch(zone) {
+            case 'green':  return { bg: T.okBg,   border: T.ok,   text: T.ok   };
+            case 'yellow': return { bg: T.warnBg, border: T.warn, text: T.warn };
+            case 'red':    return { bg: T.bnBg,   border: T.bn,   text: T.bn   };
+            case 'black':  return { bg: 'rgba(100,100,100,0.15)', border: T.text3, text: T.text3 };
+            default:       return { bg: T.okBg,   border: T.ok,   text: T.ok   };
+          }
+        }
+
+
+        // Helpers
+        function fmtDt(dt) {
+          if (!dt) return '';
+          const d = new Date(dt);
+          return `${String(d.getDate()).padStart(2,'0')}.${String(d.getMonth()+1).padStart(2,'0')} ${String(d.getHours()).padStart(2,'0')}:${String(d.getMinutes()).padStart(2,'0')}`;
+        }
+
+
+        function computeLoads(routingByProduct, zpList, wcSchedule, date) {
+          const wcMap = {};
+
+          // Wylicz cap per gniazdo z grafiku (jeśli podany)
+          function getCapH(wc, fallback) {
+            if (!wcSchedule || !date) return fallback || 8;
+            const sched = wcSchedule[wc];
+            if (!sched) return fallback || 16;
+            // Nowy format: obiekt z datami { "2026-05-25": 16, ... }
+            if (!Array.isArray(sched) && typeof sched === 'object') {
+              const v = sched[date];
+              return v !== undefined ? v : (() => {
+                const jsDay = new Date(date+"T12:00:00").getDay();
+                return (jsDay===0||jsDay===6) ? 0 : 16;
+              })();
+            }
+            // Stary format: tablica [pon..nd]
+            const jsDay = new Date(date + "T12:00:00").getDay();
+            const idx = jsDay === 0 ? 6 : jsDay - 1;
+            return sched[idx] !== undefined ? sched[idx] : 0;
+          }
+
+          zpList.forEach(z => {
+            const ops = routingByProduct[z.product] || [];
+            ops.forEach(op => {
+              const capH = getCapH(op.workcenter, op.capacity_h);
+              if (!wcMap[op.workcenter]) wcMap[op.workcenter] = { load: 0, cap: capH, contrib: {} };
+              wcMap[op.workcenter].cap = capH; // odświeź
+              const h = z.volume * op.ct_min / 60;
+              wcMap[op.workcenter].load += h;
+              if (!wcMap[op.workcenter].contrib[z.zp_id]) wcMap[op.workcenter].contrib[z.zp_id] = { h: 0, product: z.product };
+              wcMap[op.workcenter].contrib[z.zp_id].h += h;
+            });
+          });
+          Object.keys(wcMap).forEach(w => {
+            wcMap[w].util = wcMap[w].cap > 0 ? wcMap[w].load / wcMap[w].cap : 999;
+          });
+          return wcMap;
+        }
+
+
+        function dlCSV(rows, filename) {
+          const csv = rows.map(r => r.map(v => typeof v === 'string' && v.includes(';') ? `"${v}"` : v).join(";")).join("\n");
+          const a = document.createElement("a");
+          a.href = "data:text/csv;charset=utf-8," + encodeURIComponent(csv);
+          a.download = filename;
+          a.click();
+        }
+
+        function uStatus(u) {
+          if (u <= 0.85) return { label: "OK",    bg: T.okBg,   text: T.ok,   dot: T.ok };
+          if (u <= 1.00) return { label: "UWAGA", bg: T.warnBg, text: T.warn, dot: T.warn };
+          if (u <= 1.30) return { label: "BN",    bg: T.bnBg,   text: T.bn,   dot: T.bn };
+          return                 { label: "KRYT", bg: T.critBg, text: T.crit, dot: T.crit };
+        }
+
+        // ─── STYLES ─────────────────────────────────────────────────────────────────
+        const s = {
+          card: {
+            background: T.surface, border: `1px solid ${T.border}`,
+            borderRadius: 12, padding: "20px",
+          },
+          cardTitle: {
+            fontSize: 10, fontWeight: 600, letterSpacing: "0.1em",
+            textTransform: "uppercase", color: T.text3, marginBottom: 14,
+          },
+          badge: (st) => ({
+            display: "inline-flex", alignItems: "center", gap: 5,
+            padding: "3px 9px", borderRadius: 6, fontSize: 11, fontWeight: 600,
+            background: st.bg, color: st.text,
+          }),
+          btn: (active) => ({
+            padding: "6px 14px", fontSize: 12, fontWeight: 500, borderRadius: 8,
+            border: `1px solid ${active ? T.accent : T.border2}`,
+            background: active ? T.accentBg : "transparent",
+            color: active ? T.accent : T.text2,
+            cursor: "pointer", transition: "all 0.15s",
+          }),
+          btnSm: (active) => ({
+            padding: "4px 10px", fontSize: 11, fontWeight: 500, borderRadius: 6,
+            border: `1px solid ${active ? T.accent : T.border}`,
+            background: active ? T.accentBg : "transparent",
+            color: active ? T.accent : T.text2,
+            cursor: "pointer",
+          }),
+          tag: (color) => ({
+            display: "inline-flex", alignItems: "center", gap: 5,
+            padding: "2px 8px", borderRadius: 5, fontSize: 11, fontWeight: 500,
+            background: color + "22", color: color,
+          }),
+        };
+
+        // ─── KOMPONENTY WSPÓLNE ──────────────────────────────────────────────────────
+        function Dot({ color, size = 8 }) {
+          return <span style={{ display: "inline-block", width: size, height: size, borderRadius: "50%", background: color, flexShrink: 0 }} />;
+        }
+
+        // Poprawiony Bar, aby poprawnie obsługiwał gradient na czystym CSS bez ostrzeżeń
+        function Bar({ value, max = 1, color, height = 6 }) {
+          const utilPct = value / max;
+          const displayPct = Math.min(utilPct * 100, 100);
+          const isOverloaded = utilPct > 1.0;
+
+          return (
+            <div style={{ height, borderRadius: 3, background: T.border2, overflow: "hidden", flex: 1, minWidth: 60, position: "relative" }}>
+              <div style={{ height: "100%", width: `${displayPct}%`, background: isOverloaded ? `linear-gradient(90deg, ${color} 70%, #dc2626 100%)` : color, borderRadius: 3, transition: "width 0.4s" }} />
+              {isOverloaded && (
+                <div style={{
+                  position: "absolute", right: 0, top: 0, width: "15%", height: "100%",
+                  background: "repeating-linear-gradient(45deg, transparent, transparent 2px, rgba(255,255,255,0.4) 2px, rgba(255,255,255,0.4) 4px)"
+                }} />
+              )}
+            </div>
+          );
+        }
+
+        function KpiCard({ label, value, sub, color }) {
+          return (
+            <div style={{ ...s.card, padding: "16px 18px" }}>
+              <div style={{ fontSize: 10, fontWeight: 600, letterSpacing: "0.1em", textTransform: "uppercase", color: T.text3, marginBottom: 8 }}>{label}</div>
+              <div style={{ fontSize: 26, fontWeight: 700, letterSpacing: "-0.03em", color: color || T.text, lineHeight: 1 }}>{value}</div>
+              {sub && <div style={{ fontSize: 12, color: T.text2, marginTop: 5 }}>{sub}</div>}
+            </div>
+          );
+        }
+
+        function DatePicker({ dates, selected, onChange, label = "Termin:" }) {
+          return (
+            <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap", marginBottom: 16 }}>
+              <span style={{ fontSize: 12, color: T.text3 }}>{label}</span>
+              {dates.map(d => (
+                <button key={d} style={s.btnSm(d === selected)} onClick={() => onChange(d)}>{d}</button>
+              ))}
+            </div>
+          );
+        }
+
+        function EmptyState({ icon, title, sub }) {
+          return (
+            <div style={{ textAlign: "center", padding: "80px 24px" }}>
+              <div style={{ fontSize: 44, marginBottom: 16, opacity: 0.4 }}>{icon}</div>
+              <div style={{ fontSize: 16, fontWeight: 600, color: T.text, marginBottom: 8 }}>{title}</div>
+              <div style={{ fontSize: 13, color: T.text2 }}>{sub}</div>
+            </div>
+          );
+        }
+
+        // ─── ZAKŁADKA: IMPORT ────────────────────────────────────────────────────────
+        const DAY_NAMES = ['Nd','Pon','Wt','Śr','Czw','Pt','Sob'];
+        function ImportTab({ routing, zp, onLoad }) {
+          const [rLoaded, setRLoaded] = useState(routing.length > 0);
+          const [zsLoaded, setZsLoaded] = useState(false);
+
+          function readFile(file, type) {
+            const reader = new FileReader();
+            reader.onload = e => {
+              onLoad(e.target.result, type);
+              if (type === "zs") setZsLoaded(true);
+              if (type === "routing") setRLoaded(true);
+            };
+            reader.readAsText(file);
+          }
+
+          const DropBox = ({ type, loaded, label, icon, desc, cols }) => (
+            <div
+              style={{
+                border: `1.5px dashed ${loaded ? T.ok : T.border2}`,
+                borderRadius: 12, padding: 28, textAlign: "center",
+                background: loaded ? "rgba(34,197,94,0.05)" : T.surface,
+                cursor: "pointer", transition: "all 0.2s",
+              }}
+              onClick={() => document.getElementById(`file_${type}`).click()}
+              onDragOver={e => e.preventDefault()}
+              onDrop={e => { e.preventDefault(); const f = e.dataTransfer.files[0]; if (f) readFile(f, type); }}
+            >
+              <div style={{ fontSize: 30, marginBottom: 10 }}>{icon}</div>
+              <div style={{ fontSize: 14, fontWeight: 600, color: T.text, marginBottom: 4 }}>{label}</div>
+              <div style={{ fontSize: 12, color: T.text2, marginBottom: 12 }}>{desc}</div>
+              {loaded
+                ? <div style={{ fontSize: 12, color: T.ok, fontWeight: 600 }}>✓ Załadowano</div>
+                : <div style={{ display: "flex", gap: 6, justifyContent: "center", flexWrap: "wrap" }}>
+                    {cols.map(c => <span key={c.n} style={{ ...s.tag(c.req ? T.accent : T.text3) }}>{c.n}</span>)}
+                  </div>
+              }
+              <input id={`file_${type}`} type="file" accept=".csv" style={{ display: "none" }}
+                onChange={e => { const f = e.target.files[0]; if (f) readFile(f, type); }} />
+            </div>
+          );
+
+          return (
+            <div>
+              <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 20, marginBottom: 24 }}>
+                <DropBox type="routing" loaded={rLoaded || routing.length > 0} label="routing.csv" icon="🗂️"
+                  desc="Definicja operacji per produkt · predecessors: numery seq poprzedników (np. 2|4) dla równoległego WIP"
+                  cols={[{n:"product",req:true},{n:"operation",req:true},{n:"workcenter",req:true},{n:"ct_min",req:true},{n:"sequence",req:true},{n:"capacity_h",req:false}]} />
+                <DropBox type="zs" loaded={zsLoaded} label="zs.csv" icon="🧾"
+                  desc="Zamówienia sprzedaży z pozycjami"
+                  cols={[{n:"zs_id",req:true},{n:"pozycja",req:true},{n:"klient",req:false},{n:"product",req:true},{n:"volume",req:true},{n:"due_date",req:true},{n:"priority",req:false}]} />
+              </div>
+
+              <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 16, marginBottom: 24 }}>
+                {[
+                  { title: "Przykład routing.csv", content: `product,operation,workcenter,ct_min,sequence,capacity_h\nP-KOD,Wycinanie,G-01,3,1,8\nP-KOD,Gięcie,G-02,8,2,8\nP-KOD,Spawanie,G-03,6,3,8` },
+                  { title: "Przykład zs.csv", content: `zs_id,pozycja,klient,product,volume,due_date,priority\nZS-001,1,Kowalski,P-KOD,30,2026-05-25,1\nZS-001,2,Kowalski,P-KOD,20,2026-05-26,1\nZS-002,1,ABC Vent,P-TLU,25,2026-05-25,2` },
+                ].map(ex => (
+                  <div key={ex.title} style={s.card}>
+                    <div style={s.cardTitle}>{ex.title}</div>
+                    <pre style={{ fontFamily: "'JetBrains Mono', monospace", fontSize: 11, color: T.text2, lineHeight: 1.8, overflowX: "auto" }}>{ex.content}</pre>
+                  </div>
+                ))}
+              </div>
+
+              <div style={{ textAlign: "center" }}>
+                <button
+                  style={{ padding: "12px 32px", fontSize: 13, fontWeight: 600, borderRadius: 10, border: "none", background: T.accent, color: "#fff", cursor: "pointer" }}
+                  onClick={() => onLoad(null, "demo")}
+                >
+                  Załaduj demo (routing + zs)
+                </button>
+              </div>
+            </div>
+          );
+        }
+
+        // ─── ZAKŁADKA: BOTTLENECK ────────────────────────────────────────────────────
+        function BottleneckTab({ routing, zp, globalLookups, wcSchedule, subZP }) {
+          const dates    = useMemo(() => [...new Set(zp.map(z => z.due_date))].sort(), [zp]);
+          const allDates = useMemo(() => {
+            const set = new Set(dates);
+            if (subZP) subZP.forEach(s => {
+              if (s.start_dt) set.add(localDateStr(new Date(s.start_dt)));
+            });
+            return [...set].sort();
+          }, [dates.join(','), subZP ? subZP.length : 0]);
+
+          const [date, setDate]  = useState(dates[0] || '');
+          React.useEffect(() => { if (!date && dates.length) setDate(dates[0]); }, [dates.join(',')]);
+
+          const products  = useMemo(() => [...new Set(routing.map(r => r.product))], [routing]);
+          const zpForDate = useMemo(() => zp.filter(z => z.due_date === date), [zp.length, date]);
+          const loads     = useMemo(() => {
+            if (!date) return {};
+            return computeLoads(globalLookups.routingByProduct, zpForDate, wcSchedule, date);
+          }, [zpForDate.length, date, wcSchedule]);
+          const entries   = useMemo(() => Object.entries(loads).sort((a,b) => b[1].util-a[1].util), [loads]);
+          const maxU      = entries.length ? Math.max(...entries.map(([,v]) => v.util)) : 0;
+          const bn        = entries[0]?.[0] || '–';
+
+          if (!dates.length) return <EmptyState icon="📊" title="Brak danych" sub="Wgraj pliki w zakładce Import" />;
+
+          const st = uStatus(maxU);
+
+          // Kolor przycisku daty wg statusu (obliczamy tylko dla due_dates, lekko)
+          function dateColor(d) {
+            if (!dates.includes(d)) return { border: T.border, text: T.text3, bg: 'transparent' };
+            const zpD = zp.filter(z => z.due_date === d);
+            const lds = computeLoads(globalLookups.routingByProduct, zpD, wcSchedule, d);
+            const u   = Object.values(lds).length ? Math.max(...Object.values(lds).map(v=>v.util)) : 0;
+            if (u > 1.3) return { border: T.crit, text: T.crit, bg: T.critBg };
+            if (u > 1.0) return { border: T.bn,   text: T.bn,   bg: T.bnBg   };
+            if (u > 0.85)return { border: T.warn, text: T.warn, bg: T.warnBg };
+            if (u > 0)   return { border: T.ok,   text: T.ok,   bg: T.okBg   };
+            return              { border: T.border,text: T.text3,bg:'transparent' };
+          }
+
+          return (
+            <div>
+              {/* Nagłówek */}
+              <div style={{ background:T.surface2, border:`1px solid ${T.border}`, borderRadius:10,
+                padding:'10px 16px', marginBottom:16, display:'flex', gap:16, flexWrap:'wrap', alignItems:'center' }}>
+                <div style={{ flex:1 }}>
+                  <span style={{ fontSize:12, fontWeight:600, color:T.text }}>📊 Obciążenie per termin ZP</span>
+                  <span style={{ fontSize:11, color:T.text3, marginLeft:10 }}>
+                    Zapotrzebowanie h per gniazdo dla wybranego due_date · "Czy mam wystarczającą pojemność?"
+                  </span>
+                </div>
+                <span style={{ fontSize:11, color:T.text3, borderLeft:`1px solid ${T.border}`, paddingLeft:12 }}>
+                  Rozkład dzienny → <strong style={{color:T.accent}}>Grafik zasobów</strong>
+                </span>
+              </div>
+
+              {/* KPI */}
+              <div style={{ display:'grid', gridTemplateColumns:'repeat(auto-fit,minmax(140px,1fr))', gap:12, marginBottom:20 }}>
+                <KpiCard label="Bottleneck" value={bn} sub={`${Math.round(maxU*100)}% obciążenia`} color={st.text}/>
+                <KpiCard label="Gniazda" value={entries.length} sub="aktywne"/>
+                <KpiCard label="ZP na termin" value={zpForDate.length} sub={date}/>
+                <KpiCard label="Terminów" value={dates.length} sub={`${dates[0]?.slice(5)} – ${dates[dates.length-1]?.slice(5)}`}/>
+              </div>
+
+              {/* Przyciski dat z kolorami */}
+              <div style={{ display:'flex', alignItems:'center', gap:6, marginBottom:16, flexWrap:'wrap' }}>
+                <span style={{ fontSize:12, color:T.text3 }}>Termin:</span>
+                {allDates.map(d => {
+                  const isDue = dates.includes(d);
+                  const dc    = isDue ? dateColor(d) : { border:T.border, text:T.text3, bg:'transparent' };
+                  const isSel = d === date;
+                  return (
+                    <button key={d} onClick={() => setDate(d)}
+                      style={{ padding:'4px 10px', fontSize:11, fontWeight:isSel?700:400, borderRadius:6,
+                        border:`1px solid ${isSel ? dc.border : isDue ? dc.border+'88' : T.border}`,
+                        background: isSel ? dc.bg : 'transparent',
+                        color: isSel ? dc.text : isDue ? dc.text : T.text3,
+                        cursor:'pointer', opacity: isDue ? 1 : 0.55 }}>
+                      {d.slice(5)}
+                      {isDue && <span style={{ display:'inline-block', width:5, height:5,
+                        borderRadius:'50%', background:dc.border, marginLeft:4, verticalAlign:'middle' }}/>}
+                    </button>
+                  );
+                })}
+              </div>
+              <div style={{ display: "grid", gridTemplateColumns: "1.4fr 1fr", gap: 16, marginBottom: 16 }}>
+                <div style={s.card}>
+                  <div style={s.cardTitle}>Obciążenie vs Pojemność — {date}</div>
+                  <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 13 }}>
+                    <thead>
+                      <tr>{["Gniazdo","Load (h)","Cap (h)","Obciążenie","Status"].map(h => (
+                        <th key={h} style={{ fontSize: 10, fontWeight: 600, letterSpacing: "0.08em", textTransform: "uppercase", color: T.text3, padding: "0 10px 10px", textAlign: "left", borderBottom: `1px solid ${T.border}` }}>{h}</th>
+                      ))}</tr>
+                    </thead>
+                    <tbody>
+                      {entries.map(([wc, v]) => {
+                        const st2 = uStatus(v.util);
+                        return (
+                          <tr key={wc} style={{ background: v.util > 1 ? "rgba(239,68,68,0.03)" : "transparent" }}>
+                            <td style={{ padding: "9px 10px", borderBottom: `1px solid ${T.border}`, fontWeight: 700, color: T.text }}>{wc}</td>
+                            <td style={{ padding: "9px 10px", borderBottom: `1px solid ${T.border}`, color: T.text2, fontFamily: "monospace" }}>{v.load.toFixed(2)}</td>
+                            <td style={{ padding: "9px 10px", borderBottom: `1px solid ${T.border}`, color: T.text3, fontFamily: "monospace" }}>{v.cap.toFixed(1)}</td>
+                            <td style={{ padding: "9px 10px", borderBottom: `1px solid ${T.border}` }}>
+                              <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                                <Bar value={v.util} max={1} color={st2.dot} />
+                                <span style={{ fontSize: 12, color: T.text2, minWidth: 36, fontFamily: "monospace" }}>{Math.round(v.util * 100)}%</span>
+                              </div>
+                            </td>
+                            <td style={{ padding: "9px 10px", borderBottom: `1px solid ${T.border}` }}>
+                              <span style={s.badge(st2)}><Dot color={st2.dot} size={6} />{st2.label}</span>
+                            </td>
+                          </tr>
+                        );
+                      })}
+                    </tbody>
+                  </table>
+                </div>
+
+                <div style={s.card}>
+                  <div style={s.cardTitle}>Zlecenia na dzień {date}</div>
+                  <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 13 }}>
+                    <thead>
+                      <tr>{["ZP ID","Produkt","Ilość","Prio"].map(h => (
+                        <th key={h} style={{ fontSize: 10, fontWeight: 600, letterSpacing: "0.08em", textTransform: "uppercase", color: T.text3, padding: "0 8px 10px", textAlign: "left", borderBottom: `1px solid ${T.border}` }}>{h}</th>
+                      ))}</tr>
+                    </thead>
+                    <tbody>
+                      {[...zpForDate].sort((a, b) => a.priority - b.priority).map(zp2 => {
+                        const col = globalLookups.zpColorMap[zp2.zp_id] || T.text2;
+                        return (
+                          <tr key={zp2.zp_id}>
+                            <td style={{ padding: "8px", borderBottom: `1px solid ${T.border}` }}>
+                              <code style={{ fontSize: 11, color: T.accent, background: T.accentBg, padding: "2px 6px", borderRadius: 4 }}>{zp2.zp_id}</code>
+                            </td>
+                            <td style={{ padding: "8px", borderBottom: `1px solid ${T.border}` }}>
+                              <span style={{ display: "inline-flex", alignItems: "center", gap: 7 }}>
+                                <Dot color={col} size={7} />
+                                <span style={{ color: T.text }}>{zp2.product}</span>
+                              </span>
+                            </td>
+                            <td style={{ padding: "8px", borderBottom: `1px solid ${T.border}`, color: T.text2, fontFamily: "monospace" }}>{zp2.volume} szt.</td>
+                            <td style={{ padding: "8px", borderBottom: `1px solid ${T.border}`, color: T.text3 }}>{zp2.priority}</td>
+                          </tr>
+                        );
+                      })}
+                    </tbody>
+                  </table>
+                </div>
+              </div>
+
+              {entries.length > 0 && loads[bn] && (() => {
+                const bnData = loads[bn];
+                const contribs = Object.entries(bnData.contrib);
+                const totalLoad = bnData.load;
+                return (
+                  <div style={s.card}>
+                    <div style={s.cardTitle}>Struktura obciążenia bottlenecku {bn} — {date}</div>
+                    <div style={{ fontSize: 12, color: T.text2, marginBottom: 12 }}>
+                      Łączny czas: <strong style={{ color: bnData.util > 1 ? T.bn : T.text }}>{bnData.load.toFixed(2)}h</strong> / {bnData.cap}h dostępu
+                    </div>
+                    <div style={{ display: "flex", height: 20, borderRadius: 6, overflow: "hidden", marginBottom: 16 }}>
+                      {contribs.map(([zpid, v]) => {
+                        const col = globalLookups.zpColorMap[zpid] || T.text3;
+                        return <div key={zpid} style={{ width: `${totalLoad > 0 ? v.h / totalLoad * 100 : 0}%`, background: col }} />;
+                      })}
+                    </div>
+                    <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+                      {contribs.map(([zpid, v]) => {
+                        const col = globalLookups.zpColorMap[zpid] || T.text3;
+                        const pct = totalLoad > 0 ? v.h / totalLoad : 0;
+                        return (
+                          <div key={zpid} style={{ display: "flex", justifyContent: "space-between", fontSize: 12 }}>
+                            <span style={{ display: "flex", alignItems: "center", gap: 7 }}>
+                              <Dot color={col} size={7} />
+                              <code>{zpid}</code> <span style={{ color: T.text3 }}>({v.product})</span>
+                            </span>
+                            <span style={{ fontFamily: "monospace", color: T.text2 }}>{v.h.toFixed(2)}h ({Math.round(pct * 100)}%)</span>
+                          </div>
+                        );
+                      })}
+                    </div>
+                  </div>
+                );
+              })()}
+            </div>
+          );
+        }
+
+        // ─── ZAKŁADKA: HEATMAPA ──────────────────────────────────────────────────────
+        function HeatmapTab({ routing, zp, globalLookups, wcSchedule }) {
+          const dates = useMemo(() => [...new Set(zp.map(z => z.due_date))].sort(), [zp.length]);
+          const allWC = useMemo(() => [...new Set(routing.map(r => r.workcenter))].sort(), [routing.length]);
+          
+          const loadsCache = useMemo(() => {
+            const c = {};
+            dates.forEach(d => { 
+              const zpForDate = zp.filter(z => z.due_date === d);
+              c[d] = computeLoads(globalLookups.routingByProduct, zpForDate, wcSchedule, d); 
+            });
+            return c;
+          }, [zp.length, dates.join(','), JSON.stringify(wcSchedule)]);
+
+          if (!dates.length) return <EmptyState icon="🌡️" title="Brak danych" sub="Wgraj pliki CSV" />;
+
+          function hmStyle(u) {
+            if (u <= 0)   return { bg: T.surface2, color: T.text3 };
+            if (u <= .85) return { bg: "rgba(34,197,94,0.12)",  color: "#22c55e" };
+            if (u <= 1.0) return { bg: "rgba(245,158,11,0.15)", color: "#f59e0b" };
+            if (u <= 1.1) return { bg: "rgba(249,115,22,0.15)", color: "#f97316" };
+            if (u <= 1.3) return { bg: "rgba(239,68,68,0.15)",  color: "#ef4444" };
+            return               { bg: "rgba(220,38,38,0.25)",  color: "#fca5a5" };
+          }
+
+
+          return (
+            <div style={s.card}>
+              <div style={s.cardTitle}>Obłożenie gniazd w czasie (Gniazdo x Termin)</div>
+              <div style={{ overflowX: "auto" }}>
+                <table style={{ borderCollapse: "collapse", fontSize: 12 }}>
+                  <thead>
+                    <tr>
+                      <th style={{ padding: "0 16px 12px 0", textAlign: "left", fontSize: 10, fontWeight: 600, textTransform: "uppercase", color: T.text3 }}>Gniazdo</th>
+                      {dates.map(d => (
+                        <th key={d} style={{ padding: "0 6px 12px", textTransform: "uppercase", color: T.text3, fontSize: 10 }}>{d}</th>
+                      ))}
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {allWC.map(w => (
+                      <tr key={w}>
+                        <td style={{ padding: "6px 16px 6px 0", fontWeight: 700, color: T.text, fontSize: 13 }}>{w}</td>
+                        {dates.map(d => {
+                          const u = loadsCache[d]?.[w]?.util || 0;
+                          const hs = hmStyle(u);
+                          return (
+                            <td key={d} style={{ padding: "4px" }}>
+                              <div style={{ display: "inline-flex", alignItems: "center", justifyContent: "center", width: 68, height: 28, borderRadius: 6, background: hs.bg, color: hs.color, fontSize: 11, fontWeight: 600, fontFamily: "monospace" }}>
+                                {u > 0 ? `${Math.round(u * 100)}%` : "–"}
+                              </div>
+                            </td>
+                          );
+                        })}
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            </div>
+          );
+        }
+
+        // ─── ZAKŁADKA: ROUTING (GRAF) ────────────────────────────────────────────────
+        function RoutingTab({ routing, zp, globalLookups }) {
+          const products = useMemo(() => [...new Set(routing.map(r => r.product))], [routing]);
+          const dates = useMemo(() => [...new Set(zp.map(z => z.due_date))].sort(), [zp]);
+          
+          const firstDateZP = useMemo(() => dates.length ? zp.filter(z => z.due_date === dates[0]) : [], [zp, dates]);
+          const wcLoads = useMemo(() => dates.length ? computeLoads(globalLookups.routingByProduct, firstDateZP) : {}, [dates.join(','), firstDateZP.length]);
+          const maxUtil = Object.values(wcLoads).length ? Math.max(...Object.values(wcLoads).map(v => v.util)) : 0;
+          
+          if (!routing.length) return <EmptyState icon="🔀" title="Brak danych" sub="Wgraj routing.csv" />;
+
+          const BW = 140, BH = 72, GAP = 48, ROW_H = 130, LEFT = 120;
+          const maxOps = Math.max(...products.map(p => (globalLookups.routingByProduct[p] || []).length));
+          const svgW = LEFT + maxOps * (BW + GAP) + 40;
+          const svgH = products.length * ROW_H + 60;
+
+          return (
+            <div style={{ ...s.card, overflowX: "auto" }}>
+              <div style={s.cardTitle}>Wizualizacja procesów technologicznych (Routingu)</div>
+              <svg width="100%" viewBox={`0 0 ${svgW} ${svgH}`} style={{ display: "block" }}>
+                <defs>
+                  <marker id="ra" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+                    <path d="M1 1L9 5L1 9" fill="none" stroke="#555c6b" strokeWidth="1.5" />
+                  </marker>
+                </defs>
+                {products.map((p, pi) => {
+                  const rowY = 30 + pi * ROW_H;
+                  const boxY = rowY + (ROW_H - 30 - BH) / 2;
+                  const ops = globalLookups.routingByProduct[p] || [];
+                  const col = PALETTE[globalLookups.productIndexMap[p] % PALETTE.length];
+                  return (
+                    <g key={p}>
+                      {pi > 0 && <line x1="0" y1={rowY - 10} x2={svgW} y2={rowY - 10} stroke={T.border} />}
+                      <text x={LEFT - 25} y={boxY + BH / 2} fontSize="13" fontWeight="700" fill={col} textAnchor="middle" dominantBaseline="central">{p}</text>
+                      {ops.map((op, oi) => {
+                        const boxX = LEFT + oi * (BW + GAP);
+                        const wcData = wcLoads[op.workcenter] || { util: 0 };
+                        const u = wcData.util;
+                        const isBn = Math.abs(u - maxUtil) < 0.001 && u > 0.85;
+                        return (
+                          <g key={oi}>
+                            <rect x={boxX} y={boxY} width={BW} height={BH} rx="8" fill={T.surface2} stroke={isBn ? T.bn : T.border2} strokeWidth={isBn ? 2 : 1} />
+                            <rect x={boxX} y={boxY} width={BW} height={4} fill={col} rx="2" />
+                            <text x={boxX + BW / 2} y={boxY + 22} textAnchor="middle" fontSize="13" fontWeight="700" fill={T.text}>{op.workcenter}</text>
+                            <text x={boxX + BW / 2} y={boxY + 40} textAnchor="middle" fontSize="10" fill={T.text2}>{op.operation}</text>
+                            <text x={boxX + BW / 2} y={boxY + 58} textAnchor="middle" fontSize="10" fill={T.text3}>{op.ct_min} min</text>
+                            {oi < ops.length - 1 && (
+                              <line x1={boxX + BW + 2} y1={boxY + BH / 2} x2={boxX + BW + GAP - 4} y2={boxY + BH / 2} stroke="#555c6b" strokeWidth="1.5" markerEnd="url(#ra)" />
+                            )}
+                          </g>
+                        );
+                      })}
+                    </g>
+                  );
+                })}
+              </svg>
+            </div>
+          );
+        }
+
+        // ─── ZAKŁADKA: SWIMLANE ──────────────────────────────────────────────────────
+        function SwimlaneTab({ routing, zp, globalLookups, wcSchedule }) {
+          const dates = useMemo(() => [...new Set(zp.map(z => z.due_date))].sort(), [zp]);
+          const [date, setDate] = useState(dates[0] || "");
+          const allWC = useMemo(() => [...new Set(routing.map(r => r.workcenter))].sort(), [routing]);
+          
+          const zpForDate = useMemo(() => zp.filter(z => z.due_date === date), [zp, date]);
+          const loads = useMemo(() => date ? computeLoads(globalLookups.routingByProduct, zpForDate, wcSchedule, date) : {}, [globalLookups.routingByProduct, zpForDate, wcSchedule, date]);
+          const maxUtil = Object.values(loads).length ? Math.max(...Object.values(loads).map(v => v.util)) : 0;
+          
+          if (!dates.length) return <EmptyState icon="🏊" title="Brak danych" sub="Wgraj pliki CSV" />;
+
+          const LANE_H = 80, LABEL_W = 120, CAP_W = 500;
+          const svgW = LABEL_W + CAP_W + 80;
+          const svgH = allWC.length * LANE_H;
+
+          return (
+            <div>
+              <DatePicker dates={dates} selected={date} onChange={setDate} />
+              <div style={{ ...s.card, padding: 0, overflowX: "auto" }}>
+                <svg width="100%" viewBox={`0 0 ${svgW} ${svgH}`} style={{ display: "block" }}>
+                  {allWC.map((w, wi) => {
+                    const y = wi * LANE_H;
+                    const wcData = loads[w] || { util: 0, cap: 8, load: 0, contrib: {} };
+                    const isBn = Math.abs(wcData.util - maxUtil) < 0.001 && wcData.util > 0.85;
+                    const scale = wcData.load > 0 ? Math.min(CAP_W / (wcData.cap * 1.4), CAP_W / (wcData.load * 1.05)) : CAP_W / wcData.cap;
+                    let curX = LABEL_W + 10;
+                    return (
+                      <g key={w}>
+                        <rect x="0" y={y} width={svgW} height={LANE_H} fill={wi % 2 === 0 ? T.surface : T.surface2} />
+                        <text x="20" y={y + LANE_H / 2 + 4} fontSize="13" fontWeight="700" fill={isBn ? T.bn : T.text}>{w} ({wcData.cap}h)</text>
+                        <line x1={LABEL_W + 10 + wcData.cap * scale} y1={y + 5} x2={LABEL_W + 10 + wcData.cap * scale} y2={y + LANE_H - 5} stroke="#555c6b" strokeDasharray="4 3" />
+                        {Object.entries(wcData.contrib).map(([zpid, v]) => {
+                          const col = globalLookups.zpColorMap[zpid] || T.text3;
+                          const w_px = v.h * scale;
+                          const block = (
+                            <g key={zpid}>
+                              <rect x={curX} y={y + 15} width={w_px} height={LANE_H - 30} rx="4" fill={col} opacity="0.85" />
+                              {w_px > 35 && <text x={curX + w_px / 2} y={y + LANE_H / 2 + 4} textAnchor="middle" fontSize="10" fontWeight="600" fill="white">{zpid}</text>}
+                            </g>
+                          );
+                          curX += w_px + 2;
+                          return block;
+                        })}
+                        <text x={curX + 10} y={y + LANE_H / 2 + 4} fontSize="11" fontWeight="700" fill={T.text2}>{Math.round(wcData.util * 100)}%</text>
+                      </g>
+                    );
+                  })}
+                </svg>
+              </div>
+            </div>
+          );
+        }
+
+        // ─── ZAKŁADKA: GANTT ─────────────────────────────────────────────────────────
+        function GanttTab({ routing, zp, globalLookups, wcSchedule, subZP, fwdZP, zpStatus, onRecalc, ganttDirty, onViewChange, slaveMode, planStart, onPlanStartChange }) {
+          const { useRef } = React;
+          const allWC  = useMemo(() => [...new Set(routing.map(r => r.workcenter))].sort(), [routing]);
+          const dates  = useMemo(() => [...new Set(zp.map(z => z.due_date))].sort(), [zp]);
+          const allZP  = useMemo(() => [...zp].sort((a,b) => a.priority-b.priority || a.due_date.localeCompare(b.due_date)), [zp]);
+
+          // Skale: px/h → odpowiadające tickStep i labelFormat
+          const SCALES = [
+            { key:'4h',  hourW:96,  tick:1,  label:'1h'  },
+            { key:'8h',  hourW:56,  tick:2,  label:'2h'  },
+            { key:'1d',  hourW:28,  tick:4,  label:'4h'  },
+            { key:'3d',  hourW:14,  tick:8,  label:'8h'  },
+            { key:'1w',  hourW:6,   tick:24, label:'1d'  },
+            { key:'2w',  hourW:3,   tick:48, label:'2d'  },
+          ];
+          const [scaleIdx,  setScaleIdx]  = useState(2);
+          const [panX,      setPanX]      = useState(0);
+          const [isPan,     setIsPan]     = useState(false);
+          const [tableOpen,  setTableOpen]  = useState(false);
+          const [tooltip,    setTooltip]    = useState(null);
+          const svgRef      = useRef(null);
+          const panRef      = useRef(null);
+          const containerRef = useRef(null);
+
+          // Callback do PlanTab gdy view się zmienia — PO wszystkich hookach
+          React.useEffect(() => {
+            if (onViewChange) onViewChange({ panX, scaleIdx, hourW: SCALES[scaleIdx].hourW });
+          }, [panX, scaleIdx]);
+
+          const scale  = SCALES[scaleIdx];
+          const HOUR_W = scale.hourW;
+
+          React.useEffect(() => { /* skala zmienia HOUR_W, panX zostaje */ }, [scaleIdx]);
+          // ── INTERAKCJA ────────────────────────────────────────────────────
+          // useEffect: wheel + passive:false (React wheel jest pasywny)
+          React.useEffect(() => {
+            const el = containerRef.current; if (!el) return;
+            function onWheel(e) {
+              e.preventDefault();
+              if (e.ctrlKey || e.metaKey) {
+                // Ctrl+scroll → zoom skali
+                if (e.deltaY < 0) setScaleIdx(v => Math.max(0, v-1));
+                else              setScaleIdx(v => Math.min(SCALES.length-1, v+1));
+              } else {
+                // scroll → pan poziomy
+                setPanX(v => {
+                  const maxPan = 0;
+                  const minPan = -(contentW - 200);
+                  return Math.min(maxPan, Math.max(minPan, v - e.deltaY * 1.5));
+                });
+              }
+            }
+            el.addEventListener('wheel', onWheel, { passive: false });
+            return () => el.removeEventListener('wheel', onWheel);
+          }, [contentW, SCALES.length]);
+
+          if (!dates.length) return <EmptyState icon="📅" title="Brak danych" sub="Wgraj pliki CSV" />;
+
+          // Używaj forward-scheduled danych jeśli dostępne, inaczej back-scheduled
+          const displayZP = (fwdZP && fwdZP.length) ? fwdZP : subZP;
+          const planStartDt = new Date((planStart || '2026-05-22') + 'T00:00:00');
+
+          // ── LAYOUT ────────────────────────────────────────────────────────
+          const allSegs   = displayZP.flatMap(s => s.segments || []);
+          const allStarts = allSegs.map(s => s.segStart).filter(Boolean);
+          const allEnds   = allSegs.map(s => s.segEnd).filter(Boolean);
+          const allDues   = dates.map(d => new Date(d + 'T23:59:59'));
+          // axisEnd = max(due_dates, segment ends) — obejmuje spóźnione bloki
+          const maxDueDt = new Date(Math.max(
+            ...allDues.map(d=>d.getTime()),
+            ...allEnds.map(d=>new Date(d).getTime()),
+            new Date(planStartDt).getTime() + 7*24*3600000  // min 7 dni od dziś
+          ));
+          const minDt = new Date(planStartDt); // zawsze zacznij od planStart
+
+          // axisStart = planStart (synchronizacja z Grafikiem zasobów)
+          const axisStart = new Date(planStartDt); axisStart.setHours(0,0,0,0);
+          const axisEnd   = new Date(maxDueDt); axisEnd.setHours(24,0,0,0);
+          const totalH    = Math.max((axisEnd-axisStart)/3600000, 16);
+
+          const LABEL_W = 110, LANE_H = 54, TOP = 56;
+          const contentW = Math.ceil(totalH) * HOUR_W;  // szerokość całej osi
+          const svgH     = TOP + allWC.length * LANE_H + 16;
+
+          // xOf zwraca pozycję w przestrzeni SVG (przed panX)
+          function xOf(dt) {
+            return LABEL_W + Math.max(0, (new Date(dt)-axisStart)/3600000) * HOUR_W;
+          }
+
+          // Ticki
+          const ticks = [];
+          const tickH = scale.tick;
+          for (let t=new Date(axisStart); t<=axisEnd; t.setHours(t.getHours()+tickH)) {
+            ticks.push(new Date(t));
+          }
+
+          // Niedostępne strefy
+          const unavailZones = [];
+          const dayIter = new Date(axisStart);
+          while (dayIter <= axisEnd) {
+            allWC.forEach((wc, wi) => {
+              const avail = getAvail(wc, dayIter, wcSchedule);
+              const ds = new Date(dayIter); ds.setHours(0,0,0,0);
+              const de = new Date(dayIter); de.setHours(24,0,0,0);
+              if (avail===0) unavailZones.push({wi, x1:xOf(ds), x2:xOf(de)});
+              else if (avail<24) {
+                const we=new Date(dayIter); we.setHours(avail,0,0,0);
+                unavailZones.push({wi, x1:xOf(we), x2:xOf(de)});
+              }
+            });
+            dayIter.setDate(dayIter.getDate()+1);
+          }
+
+          const loads   = computeLoads(globalLookups.routingByProduct, allZP, wcSchedule, dates[0]);
+          const maxUtil = Object.values(loads).length ? Math.max(...Object.values(loads).map(v=>v.util)) : 0;
+
+
+          // Przy zmianie skali — zachowaj relative position (nie resetuj do 0)
+
+          function onBgMouseDown(e) {
+            const tag = e.target.tagName;
+            const isBg = (tag==='rect' && (e.target.getAttribute('fill')==='transparent' || e.target.getAttribute('data-bg')==='1')) || tag==='svg';
+            if (isBg) {
+              panRef.current = { startX: e.clientX, startPanX: panX };
+              setIsPan(true);
+            }
+          }
+          function onMouseMove(e) {
+            if (!panRef.current) return;
+            const dx = e.clientX - panRef.current.startX;
+            const newPan = panRef.current.startPanX + dx;
+            const minPan = -(contentW - 200);
+            setPanX(Math.min(0, Math.max(minPan, newPan)));
+          }
+          function onMouseUp() { panRef.current = null; setIsPan(false); }
+
+          // Scrollbar thumb
+          const containerW = 900; // przybliżona szerokość kontenera
+          const visibleW   = containerW - LABEL_W;
+          const thumbPct   = Math.min(1, visibleW / contentW);
+          const thumbPos   = contentW > 0 ? (-panX / contentW) * 100 : 0;
+
+          return (
+            <div>
+              {/* Controls */}
+              <div style={{ display:'flex', alignItems:'center', gap:8, marginBottom:12, flexWrap:'wrap' }}>
+                <span style={{ fontSize:13, color:T.text2 }}>
+                  <strong style={{color:T.text}}>{dates[0]?.slice(5)} – {dates[dates.length-1]?.slice(5)}</strong>
+                  &nbsp;·&nbsp; {allZP.length} ZP &nbsp;·&nbsp; {allWC.length} gniazd
+                </span>
+                <div style={{ display:'flex', alignItems:'center', gap:6, background:T.surface2, padding:'4px 10px', borderRadius:8, border:`1px solid ${T.border}` }}>
+                  <span style={{ fontSize:11, color:T.text3 }}>Planuj od:</span>
+                  <input type="date" value={planStart || '2026-05-22'}
+                    onChange={e => onPlanStartChange && onPlanStartChange(e.target.value)}
+                    style={{ fontSize:11, background:'transparent', border:'none', color:T.text, cursor:'pointer', outline:'none' }}/>
+                </div>
+
+                {/* Skala */}
+                <div style={{ display:'flex', gap:2, background:T.surface2, borderRadius:8, padding:2, marginLeft:8 }}>
+                  {SCALES.map((sc,i) => (
+                    <button key={sc.key} onClick={() => setScaleIdx(i)}
+                      style={{ padding:'4px 10px', fontSize:11, fontWeight:600, borderRadius:6, border:'none',
+                        background: i===scaleIdx ? T.accent : 'transparent',
+                        color: i===scaleIdx ? '#fff' : T.text3, cursor:'pointer' }}>
+                      {sc.key}
+                    </button>
+                  ))}
+                </div>
+
+
+                <div style={{ display:'flex', gap:4, marginLeft:'auto', alignItems:'center' }}>
+                  <span style={{ fontSize:10, color:T.text3 }}>
+                    Ctrl+scroll=zoom &nbsp;·&nbsp; scroll=pan &nbsp;·&nbsp; drag=pan
+                  </span>
+                  <button onClick={() => { setPanX(0); setScaleIdx(2); }}
+                    style={{ ...s.btn(false), fontSize:11, padding:'4px 10px' }}>⊡ Reset</button>
+                  <button onClick={onRecalc}
+                    style={{ padding:'6px 14px', fontSize:12, fontWeight:600, borderRadius:8, border:'none',
+                      background: ganttDirty ? T.accent : T.surface3,
+                      color: ganttDirty ? '#fff' : T.text3, cursor:'pointer' }}>
+                    {ganttDirty ? '⟳ Przelicz' : '✓ OK'}
+                  </button>
+                </div>
+              </div>
+
+              {/* Legenda ZP */}
+              <div style={{ display:'flex', gap:12, fontSize:11, color:T.text3, marginBottom:8, flexWrap:'wrap', alignItems:'center' }}>
+                {allZP.map(zp2 => {
+                  const col = globalLookups.zpColorMap[zp2.zp_id] || T.text3;
+                  return <span key={zp2.zp_id} style={{display:'flex',alignItems:'center',gap:4}}>
+                    <Dot color={col} size={7}/>{zp2.zp_id}
+                  </span>;
+                })}
+                <span style={{marginLeft:'auto',display:'flex',alignItems:'center',gap:5}}>
+                  <span style={{width:14,height:3,background:T.bn,display:'inline-block',borderRadius:2}}/>
+                  due_date
+                </span>
+                <span style={{display:'flex',alignItems:'center',gap:5}}>
+                  <span style={{width:14,height:12,background:'rgba(0,0,0,0.25)',display:'inline-block',borderRadius:2}}/>
+                  niedostępne
+                </span>
+              </div>
+
+              {/* SVG Gantt */}
+              <div style={{...s.card, padding:0, overflow:'hidden'}}>
+                <div ref={containerRef}
+                  style={{ background:T.ganttBg, borderRadius:12, overflow:'hidden',
+                    height:'calc(100vh - 240px)', minHeight:380,
+                    cursor: isPan ? 'grabbing' : 'default', userSelect:'none',
+                    position:'relative' }}
+                  onMouseDown={onBgMouseDown}
+                  onMouseMove={onMouseMove}
+                  onMouseUp={onMouseUp}
+                  onMouseLeave={onMouseUp}
+                >
+                  {displayZP.length === 0
+                    ? <div style={{padding:'48px',textAlign:'center',color:T.text3,fontSize:13}}>
+                        Kliknij <strong style={{color:T.accent}}>⟳ Przelicz</strong> aby zaplanować
+                      </div>
+                    : <svg ref={svgRef} width="100%" height="100%" style={{display:'block'}}>
+                        <defs>
+                          {/* clipPath ogranicza scrollowaną zawartość do obszaru za kolumną */}
+                          <clipPath id="ganttClip">
+                            <rect x={LABEL_W} y="0" width="10000" height="10000"/>
+                          </clipPath>
+                        </defs>
+
+                        {/* Tło całego SVG */}
+                        <rect x="0" y="0" width="100%" height="100%" fill={T.ganttBg} data-bg="1"/>
+
+                        {/* SCROLLOWANA zawartość — tło lanes, ticki, bloki */}
+                        <g clipPath="url(#ganttClip)">
+                          <g transform={`translate(${panX},0)`}>
+
+                          {/* Lane backgrounds (tylko prawa część) */}
+                          {allWC.map((w,wi) => (
+                            <rect key={`bg-${w}`} x={LABEL_W} y={TOP+wi*LANE_H}
+                              width={contentW+40} height={LANE_H}
+                              fill={wi%2===0?T.surface:T.surface2}/>
+                          ))}
+                          {/* Linie poziome lane */}
+                          {allWC.map((_,wi) => (
+                            <line key={`hl-${wi}`} x1={LABEL_W} y1={TOP+(wi+1)*LANE_H}
+                              x2={LABEL_W+contentW+40} y2={TOP+(wi+1)*LANE_H}
+                              stroke={T.border} strokeWidth="0.5"/>
+                          ))}
+
+                          {/* Niedostępne strefy */}
+                          {unavailZones.map((z,zi) => (
+                            <rect key={`uz${zi}`} x={z.x1} y={TOP+z.wi*LANE_H+1}
+                              width={Math.max(z.x2-z.x1,0)} height={LANE_H-2}
+                              fill="rgba(0,0,0,0.22)"/>
+                          ))}
+
+                          {/* Ticki + nagłówek */}
+                          {ticks.map((t,ti) => {
+                            const x = xOf(t);
+                            const isDay = t.getHours()===0;
+                            const dn = DAY_NAMES[t.getDay()];
+                            return <g key={ti}>
+                              <line x1={x} y1={TOP-8} x2={x} y2={TOP+allWC.length*LANE_H}
+                                stroke={isDay?T.border2:T.border}
+                                strokeWidth={isDay?1.5:0.5}/>
+                              {/* Dzień — duży nagłówek */}
+                              {isDay && <text x={x+4} y={TOP-30} fontSize="11" fontWeight="600" fill={T.text2}>
+                                {dn} {String(t.getDate()).padStart(2,'0')}.{String(t.getMonth()+1).padStart(2,'0')}
+                              </text>}
+                              {/* Godzina */}
+                              {!isDay && <text x={x+3} y={TOP-14} fontSize="9" fill={T.text3}>
+                                {String(t.getHours()).padStart(2,'0')}:00
+                              </text>}
+                            </g>;
+                          })}
+
+                          {/* Linia "dziś" / planStart */}
+                          {(() => {
+                            const px = xOf(planStartDt);
+                            return (
+                              <g>
+                                <line x1={px} y1={TOP-8} x2={px} y2={TOP+allWC.length*LANE_H}
+                                  stroke={T.accent} strokeWidth="2" opacity="0.9"/>
+                                <rect x={px+3} y={TOP-22} width="30" height="14" rx="3" fill={T.accentBg}/>
+                                <text x={px+6} y={TOP-12} fontSize="9" fontWeight="700" fill={T.accent}>dziś</text>
+                              </g>
+                            );
+                          })()}
+
+                          {/* Due_date linie */}
+                          {allDues.map((dt,i) => {
+                            const dx = xOf(dt);
+                            return <g key={`due${i}`}>
+                              <line x1={dx} y1={TOP-8} x2={dx} y2={TOP+allWC.length*LANE_H}
+                                stroke={T.bn} strokeWidth="2" strokeDasharray="5 3" opacity="0.9"/>
+                              <rect x={dx+3} y={TOP-22} width="38" height="14" rx="3" fill={T.bnBg}/>
+                              <text x={dx+6} y={TOP-12} fontSize="9" fontWeight="700" fill={T.bn}>
+                                {dates[i]?.slice(5)}
+                              </text>
+                            </g>;
+                          })}
+
+                          {/* Bloki operacji (forward-scheduled) */}
+                          {displayZP.map(s2 => {
+                            const wi = allWC.indexOf(s2.workcenter);
+                            if (wi<0) return null;
+                            const col = globalLookups.zpColorMap[s2.parent_zp] || globalLookups.zpColorMap[s2.zp_id] || T.text3;
+                            const y = TOP+wi*LANE_H+5, bH = LANE_H-10;
+                            const dueDtForZP = allDues[dates.indexOf(s2.due_date)];
+                            return (s2.segments||[]).map((seg,si) => {
+                              const x   = xOf(seg.segStart);
+                              const x2  = xOf(seg.segEnd);
+                              const wpx = Math.max(x2-x, 2);
+                              const dueDtLocal = allDues[dates.indexOf(s2.due_date)];
+                              const isOver = dueDtLocal && new Date(seg.segEnd) > dueDtLocal;
+                              const isLast = si===s2.segments.length-1;
+                              const zpSt = zpStatus && zpStatus.find(st => st.zp_id === (s2.parent_zp || s2.zp_id));
+                              const tocZone = zpSt ? (zpSt.toc && zpSt.toc.zone) : (isOver ? 'black' : 'green');
+                              const borderCol = tocZone==='black'?T.bn:tocZone==='red'?T.bn:tocZone==='yellow'?T.warn:'transparent';
+                              const borderW   = tocZone==='green'||!tocZone ? 0 : 2.5;
+                              const borderDash = tocZone==='yellow'?'4 2':'none';
+                              return <g key={`${s2.sub_id}-${si}`}>
+                              <rect x={x} y={y} width={wpx} height={bH} rx="4"
+                                fill={col} opacity={0.9}
+                                stroke={borderCol} strokeWidth={borderW}/>
+                                {isLast && wpx>30 && <text
+                                  x={x+Math.min(wpx/2,38)} y={y+bH/2-4}
+                                  fontSize={wpx>52?10:9} fontWeight="600" fill="white"
+                                  textAnchor="middle" style={{pointerEvents:'none'}}>{s2.zp_id}</text>}
+                                {isLast && wpx>56 && <text
+                                  x={x+Math.min(wpx/2,38)} y={y+bH/2+9}
+                                  fontSize="9" fill="rgba(255,255,255,0.75)"
+                                  textAnchor="middle" style={{pointerEvents:'none'}}>{s2.durH.toFixed(1)}h</text>}
+                                {!isLast && (()=>{
+                                  const ns=s2.segments[si+1]; if(!ns) return null;
+                                  const nx=xOf(ns.segStart), cy=y+bH/2;
+                                  return <line x1={x+wpx} y1={cy} x2={nx} y2={cy}
+                                    stroke={col} strokeWidth="1.5" strokeDasharray="3 3" opacity="0.5"/>;
+                                })()}
+                              </g>;
+                            });
+                          })}
+                          </g>
+                        </g>{/* end clipPath g */}
+
+                        {/* Tooltip overlay */}
+                        {tooltip && (
+                          <g style={{pointerEvents:'none'}}>
+                            <rect x={tooltip.x} y={tooltip.y} width="220" height="80" rx="6"
+                              fill={T.surface3} stroke={T.border2} strokeWidth="1"
+                              style={{filter:'drop-shadow(0 2px 8px rgba(0,0,0,0.4))'}}/>
+                            <text x={tooltip.x+10} y={tooltip.y+14} fontSize="11" fontWeight="700" fill={T.text}>
+                              {tooltip.s2.zp_id} · {tooltip.s2.workcenter}
+                            </text>
+                            {tooltip.s2.klient && <text x={tooltip.x+10} y={tooltip.y+27} fontSize="10" fill={T.text3}>
+                              {tooltip.s2.zs_id} · {tooltip.s2.klient}
+                            </text>}
+                            <text x={tooltip.x+10} y={tooltip.y+40} fontSize="10" fill={T.text2}>
+                              {tooltip.s2.product} · {tooltip.s2.volume} szt
+                            </text>
+                            <text x={tooltip.x+10} y={tooltip.y+53} fontSize="10" fill={T.text3}>
+                              {tooltip.s2.operation}
+                            </text>
+                            <text x={tooltip.x+10} y={tooltip.y+66} fontSize="10" fill={T.text3} fontFamily="monospace">
+                              {fmtDt(tooltip.s2.start_dt)} → {fmtDt(tooltip.s2.end_dt)} ({tooltip.s2.durH.toFixed(1)}h)
+                            </text>
+                          </g>
+                        )}
+
+                        {/* STAŁA lewa kolumna — renderuje się na wierzchu, nie przesuwa */}
+                        {/* Tło nagłówka */}
+                        <rect x="0" y="0" width={LABEL_W} height={TOP} fill={T.ganttBg}/>
+                        {/* Lane labels */}
+                        {allWC.map((w,wi) => {
+                          const ld = loads[w]||{util:0};
+                          const isBn = Math.abs(ld.util-maxUtil)<0.001 && ld.util>0.85;
+                          return <g key={`lbl-${w}`}>
+                            <rect x="0" y={TOP+wi*LANE_H} width={LABEL_W} height={LANE_H}
+                              fill={isBn?'rgba(248,113,113,0.10)':T.surface2}/>
+                            <text x="12" y={TOP+wi*LANE_H+LANE_H/2-7} fontSize="12" fontWeight="700"
+                              fill={isBn?T.bn:T.text}>{w}</text>
+                            <text x="12" y={TOP+wi*LANE_H+LANE_H/2+9} fontSize="10"
+                              fill={isBn?T.bn:T.text3}>{Math.round(ld.util*100)}%</text>
+                          </g>;
+                        })}
+                        {/* Separator linia prawa krawędź kolumny */}
+                        <line x1={LABEL_W} y1="0" x2={LABEL_W} y2="10000"
+                          stroke={T.border2} strokeWidth="1.5"/>
+                      </svg>
+                  }
+
+                  {/* Scrollbar poziomy */}
+                  {contentW > 200 && (
+                    <div style={{ position:'absolute', bottom:4, left:LABEL_W, right:8, height:6,
+                      background:'rgba(255,255,255,0.05)', borderRadius:3 }}>
+                      <div style={{
+                        position:'absolute', top:0, height:'100%', borderRadius:3,
+                        background:'rgba(255,255,255,0.18)',
+                        width: `${thumbPct*100}%`,
+                        left: `${thumbPos}%`,
+                        transition:'left 0.05s',
+                      }}/>
+                    </div>
+                  )}
+                </div>
+              </div>
+
+              {/* TOC Status Panel */}
+              {zpStatus && zpStatus.length > 0 && (
+                <div style={{ ...s.card, marginTop:12 }}>
+                  <div style={s.cardTitle}>Status ZP — TOC Buffer Management</div>
+                  <div style={{ overflowX:'auto' }}>
+                    <table style={{ width:'100%', borderCollapse:'collapse', fontSize:12 }}>
+                      <thead><tr>
+                        {['ZP / ZS','Produkt','Due date','Planowany koniec','Opóźnienie','Bufor %','Status'].map(h => (
+                          <th key={h} style={{ fontSize:10, fontWeight:600, letterSpacing:'.07em',
+                            textTransform:'uppercase', color:T.text3, padding:'0 8px 8px',
+                            textAlign:'left', borderBottom:`1px solid ${T.border}` }}>{h}</th>
+                        ))}
+                      </tr></thead>
+                      <tbody>
+                        {[...zpStatus].sort((a,b) => {
+                          const ord = {black:0,red:1,yellow:2,green:3};
+                          return (ord[a.toc.zone]??4) - (ord[b.toc.zone]??4);
+                        }).map((st, i) => {
+                          const col = globalLookups.zpColorMap[st.zp_id] || T.text3;
+                          const tc  = tocColor(st.toc.zone);
+                          return (
+                            <tr key={i} style={{ background: st.toc.zone==='black'||st.toc.zone==='red' ? 'rgba(248,113,113,0.04)' : 'transparent' }}>
+                              <td style={{ padding:'7px 8px', borderBottom:`1px solid ${T.border}` }}>
+                                <span style={{ display:'flex', flexDirection:'column', gap:2 }}>
+                                  <span style={{ display:'flex', alignItems:'center', gap:5 }}>
+                                    <Dot color={col} size={7}/><strong>{st.zp_id}</strong>
+                                  </span>
+                                  {st.zs_id && <span style={{ fontSize:10, color:T.text3, marginLeft:12 }}>
+                                    {st.zs_id}{st.pozycja ? `/poz.${st.pozycja}` : ''}
+                                  </span>}
+                                </span>
+                              </td>
+                              <td style={{ padding:'7px 8px', borderBottom:`1px solid ${T.border}`, color:T.text2 }}>{st.product}</td>
+                              <td style={{ padding:'7px 8px', borderBottom:`1px solid ${T.border}`, fontFamily:'monospace', color:T.text2 }}>{st.due_date}</td>
+                              <td style={{ padding:'7px 8px', borderBottom:`1px solid ${T.border}`, fontFamily:'monospace',
+                                color: st.delayH > 0 ? T.bn : T.ok, fontWeight: st.delayH>0?600:400 }}>
+                                {st.realEnd ? fmtDt(st.realEnd) : '—'}
+                              </td>
+                              <td style={{ padding:'7px 8px', borderBottom:`1px solid ${T.border}`, fontFamily:'monospace',
+                                color: st.delayH>0 ? T.bn : T.ok, fontWeight:600 }}>
+                                {st.delayDays > 0 ? `+${st.delayDays}d` : '✓ OK'}
+                              </td>
+                              <td style={{ padding:'7px 8px', borderBottom:`1px solid ${T.border}` }}>
+                                <div style={{ height:6, background:T.surface3, borderRadius:3, width:80, overflow:'hidden' }}>
+                                  <div style={{ height:'100%', width:`${Math.min(100,Math.round(st.toc.consumed*100))}%`,
+                                    background: tc.border, borderRadius:3, transition:'width .3s' }}/>
+                                </div>
+                                <span style={{ fontSize:10, color:T.text3 }}>{Math.round(st.toc.consumed*100)}%</span>
+                              </td>
+                              <td style={{ padding:'7px 8px', borderBottom:`1px solid ${T.border}` }}>
+                                <span style={{ display:'inline-flex', padding:'2px 8px', borderRadius:5,
+                                  fontSize:10, fontWeight:600, background:tc.bg, color:tc.text }}>
+                                  {st.toc.label}
+                                </span>
+                              </td>
+                            </tr>
+                          );
+                        })}
+                      </tbody>
+                    </table>
+                  </div>
+                </div>
+              )}
+
+              {/* Tabela pod-ZP — accordion */}
+              {subZP.length > 0 && (
+                <div style={{...s.card, marginTop:12}}>
+                  <div onClick={()=>setTableOpen(v=>!v)}
+                    style={{display:'flex',alignItems:'center',justifyContent:'space-between',cursor:'pointer',userSelect:'none'}}>
+                    <div style={s.cardTitle}>Plan operacji ({subZP.length})</div>
+                    <span style={{fontSize:12,color:T.text3,marginBottom:14}}>{tableOpen?'▲ Zwiń':'▶ Rozwiń'}</span>
+                  </div>
+                  {tableOpen && (
+                    <div style={{overflowX:'auto'}}>
+                      <table style={{width:'100%',borderCollapse:'collapse',fontSize:12}}>
+                        <thead><tr>
+                          {['Pod-ZP','ZP','Gniazdo','Operacja','Start','Koniec','Czas','Status'].map(h=>
+                            <th key={h} style={{fontSize:10,fontWeight:600,letterSpacing:'.07em',textTransform:'uppercase',
+                              color:T.text3,padding:'0 8px 8px',textAlign:'left',borderBottom:`1px solid ${T.border}`}}>{h}</th>
+                          )}
+                        </tr></thead>
+                        <tbody>
+                          {[...subZP].sort((a,b)=>a.sequence-b.sequence||a.zp_id.localeCompare(b.zp_id)).map((s2,i)=>{
+                            const col=globalLookups.zpColorMap[s2.zp_id]||T.text3;
+                            const dueDtForZP=allDues[dates.indexOf(s2.due_date)];
+                            const isOver=s2.end_dt&&dueDtForZP&&new Date(s2.end_dt)>dueDtForZP;
+                            const st=isOver?{bg:T.bnBg,color:T.bn,label:'OPÓŹNIONE'}:{bg:T.okBg,color:T.ok,label:'OK'};
+                            return <tr key={i} style={{background:isOver?'rgba(248,113,113,0.05)':'transparent'}}>
+                              <td style={{padding:'7px 8px',borderBottom:`1px solid ${T.border}`}}>
+                                <code style={{fontSize:11,color:T.accent,background:T.accentBg,padding:'1px 5px',borderRadius:4}}>{s2.sub_id}</code>
+                              </td>
+                              <td style={{padding:'7px 8px',borderBottom:`1px solid ${T.border}`}}>
+                                <span style={{display:'flex',alignItems:'center',gap:5}}><Dot color={col} size={7}/>{s2.zp_id}</span>
+                              </td>
+                              <td style={{padding:'7px 8px',borderBottom:`1px solid ${T.border}`,fontWeight:700,color:T.text}}>{s2.workcenter}</td>
+                              <td style={{padding:'7px 8px',borderBottom:`1px solid ${T.border}`,color:T.text2,maxWidth:160,overflow:'hidden',textOverflow:'ellipsis',whiteSpace:'nowrap'}}>{s2.operation}</td>
+                              <td style={{padding:'7px 8px',borderBottom:`1px solid ${T.border}`,fontFamily:'monospace',color:T.text2,whiteSpace:'nowrap'}}>{fmtDt(s2.start_dt)}</td>
+                              <td style={{padding:'7px 8px',borderBottom:`1px solid ${T.border}`,fontFamily:'monospace',color:isOver?T.bn:T.text2,fontWeight:isOver?600:400,whiteSpace:'nowrap'}}>{fmtDt(s2.end_dt)}</td>
+                              <td style={{padding:'7px 8px',borderBottom:`1px solid ${T.border}`,fontFamily:'monospace',color:T.text3}}>{s2.durH.toFixed(1)}h</td>
+                              <td style={{padding:'7px 8px',borderBottom:`1px solid ${T.border}`}}>
+                                <span style={{display:'inline-flex',padding:'2px 7px',borderRadius:5,fontSize:10,fontWeight:600,background:st.bg,color:st.color}}>{st.label}</span>
+                              </td>
+                            </tr>;
+                          })}
+                        </tbody>
+                      </table>
+                    </div>
+                  )}
+                </div>
+              )}
+            </div>
+          );
+        }
+
+
+
+        // ─── ZAKŁADKA: SANKEY / STRUKTURA PRZEPŁYWU (NOWOŚĆ) ────────────────────────
+        function SankeyTab({ routing, zp, globalLookups, wcSchedule }) {
+          const { useRef } = React;
+          const dates    = useMemo(() => [...new Set(zp.map(z => z.due_date))].sort(), [zp]);
+          const products = useMemo(() => [...new Set(routing.map(r => r.product))], [routing]);
+          const [date,       setDate]       = useState(dates[0] || "");
+          const [hoveredWC,  setHoveredWC]  = useState(null);
+          const [nodePos,    setNodePos]     = useState({});
+          const [view, setView] = useState({ scale: 1, tx: 0, ty: 0 });
+          const dragging  = useRef(null);   // { kind:'node'|'pan', wc?, ox, oy }
+          const svgRef    = useRef(null);
+
+          React.useEffect(() => { if (!date && dates.length) setDate(dates[0]); }, [dates]);
+
+          // ── BASE LAYOUT (auto, product-lane Y) ──────────────────────────────
+          const baseLayout = useMemo(() => {
+            if (!routing.length) return { positions: {}, SVG_W: 800, SVG_H: 400 };
+            const allWCs   = [...new Set(routing.map(r => r.workcenter))];
+            const numProds = products.length;
+            const PAD_X    = 90, PAD_Y = 80, COL_W = 190, LANE_H = 130;
+            const SVG_H    = PAD_Y * 2 + Math.max(numProds - 1, 0) * LANE_H;
+            const prodLaneY = {};
+            products.forEach((p, i) => {
+              prodLaneY[p] = numProds === 1 ? SVG_H / 2 : PAD_Y + i * LANE_H;
+            });
+            const wcMinSeq = {};
+            allWCs.forEach(wc => {
+              const seqs = routing.filter(r => r.workcenter === wc).map(r => r.sequence);
+              wcMinSeq[wc] = Math.min(...seqs);
+            });
+            const colKeys = [...new Set(Object.values(wcMinSeq))].sort((a, b) => a - b);
+            const SVG_W   = PAD_X * 2 + Math.max(colKeys.length - 1, 0) * COL_W;
+            const positions = {};
+            allWCs.forEach(wc => {
+              const users  = products.filter(p => routing.some(r => r.product === p && r.workcenter === wc));
+              const avgY   = users.reduce((s, p) => s + prodLaneY[p], 0) / (users.length || 1);
+              const colIdx = colKeys.indexOf(wcMinSeq[wc]);
+              const x      = PAD_X + colIdx * COL_W;
+              const op     = routing.find(r => r.workcenter === wc);
+              positions[wc] = { x, y: avgY, label: op ? op.operation.substring(0, 16) : wc };
+            });
+            return { positions, SVG_W, SVG_H };
+          }, [routing, products]);
+
+          // ── LOAD SAVED POSITIONS from localStorage ──────────────────────────
+          React.useEffect(() => {
+            if (!routing.length) return;
+            const key = "flowops_nodepos_" + [...new Set(routing.map(r => r.workcenter))].sort().join(",");
+            try {
+              const saved = JSON.parse(localStorage.getItem(key) || "{}");
+              if (Object.keys(saved).length) setNodePos(saved);
+            } catch(e) {}
+          }, [routing]);
+
+          // Merge base layout with drag overrides
+          const allPositions = useMemo(() => {
+            const merged = {};
+            Object.entries(baseLayout.positions).forEach(([wc, base]) => {
+              merged[wc] = nodePos[wc]
+                ? { ...base, x: nodePos[wc].x, y: nodePos[wc].y }
+                : { ...base };
+            });
+            return merged;
+          }, [baseLayout, nodePos]);
+
+          const SVG_W = baseLayout.SVG_W;
+          const SVG_H = baseLayout.SVG_H;
+
+          // ── FLOW DATA ────────────────────────────────────────────────────────
+          const flowData = useMemo(() => {
+            if (!date) return { connections: [], edgeTotals: {}, nodeVolumes: {}, loads: {} };
+            const zpForDate = zp.filter(z => z.due_date === date);
+            const loads     = computeLoads(globalLookups.routingByProduct, zpForDate, wcSchedule, date);
+            const nodeVolumes = {}, productConns = {};
+            zpForDate.forEach(order => {
+              const ops = globalLookups.routingByProduct[order.product] || [];
+              ops.forEach((op, idx) => {
+                nodeVolumes[op.workcenter] = (nodeVolumes[op.workcenter] || 0) + order.volume;
+                if (idx < ops.length - 1) {
+                  const next = ops[idx + 1];
+                  const key  = `${order.product}||${op.workcenter}->${next.workcenter}`;
+                  if (!productConns[key]) productConns[key] = { product: order.product, from: op.workcenter, to: next.workcenter, volume: 0 };
+                  productConns[key].volume += order.volume;
+                }
+              });
+            });
+            const edgeTotals = {};
+            Object.values(productConns).forEach(c => {
+              const k = `${c.from}->${c.to}`;
+              edgeTotals[k] = (edgeTotals[k] || 0) + c.volume;
+            });
+            return { connections: Object.values(productConns), edgeTotals, nodeVolumes, loads };
+          }, [zp.length, date]);
+
+          const maxVolume  = Math.max(...Object.values(flowData.edgeTotals), 1);
+          const maxNodeVol = Math.max(...Object.values(flowData.nodeVolumes), 1);
+          const maxUtil    = Object.values(flowData.loads).length
+            ? Math.max(...Object.values(flowData.loads).map(v => v.util)) : 0;
+
+          // ── EDGE PATH (cubic bezier, arc for skip edges) ─────────────────────
+          function edgePath(fromPos, toPos, prodIdx, totalOnEdge) {
+            const R   = 34;
+            const dx  = toPos.x - fromPos.x, dy = toPos.y - fromPos.y;
+            const dist = Math.sqrt(dx * dx + dy * dy) || 1;
+            const ux  = dx / dist, uy = dy / dist;
+            const x1  = fromPos.x + ux * R, y1 = fromPos.y + uy * R;
+            const x2  = toPos.x  - ux * R, y2 = toPos.y  - uy * R;
+            const spread = totalOnEdge > 1 ? 14 : 0;
+            const off    = totalOnEdge > 1 ? (prodIdx - (totalOnEdge - 1) / 2) * spread : 0;
+            const px = -uy * off, py = ux * off;
+            const arcLift = Math.abs(toPos.x - fromPos.x) > 250 ? -Math.abs(toPos.x - fromPos.x) * 0.25 : 0;
+            const mx = (x1 + x2) / 2 + px, my = (y1 + y2) / 2 + py + arcLift;
+            return {
+              d: `M${x1.toFixed(1)} ${y1.toFixed(1)} C${(x1+(mx-x1)*0.5).toFixed(1)} ${(y1+(my-y1)*0.5).toFixed(1)},${(x2+(mx-x2)*0.5).toFixed(1)} ${(y2+(my-y2)*0.5).toFixed(1)},${x2.toFixed(1)} ${y2.toFixed(1)}`,
+              mx, my,
+            };
+          }
+
+          const edgeProdCount = {};
+          flowData.connections.forEach(c => {
+            const k = `${c.from}->${c.to}`;
+            if (!edgeProdCount[k]) edgeProdCount[k] = [];
+            if (!edgeProdCount[k].includes(c.product)) edgeProdCount[k].push(c.product);
+          });
+
+          function nodeStroke(u) {
+            return u <= 0.85 ? T.ok : u <= 1.0 ? T.warn : T.bn;
+          }
+
+          // ── DRAG HANDLERS ────────────────────────────────────────────────────
+          function svgPoint(e) {
+            // Returns cursor position in SVG viewport pixels (before our g transform)
+            const svg = svgRef.current;
+            if (!svg) return { x: 0, y: 0 };
+            const rect = svg.getBoundingClientRect();
+            return { x: e.clientX - rect.left, y: e.clientY - rect.top };
+          }
+
+          // ── NODE DRAG ────────────────────────────────────────────────────
+          function onNodeMouseDown(e, wc) {
+            e.stopPropagation();
+            const { x, y } = svgPoint(e);
+            const cur = allPositions[wc];
+            dragging.current = { kind: "node", wc, ox: x - cur.x, oy: y - cur.y };
+          }
+
+          // ── PAN (drag on background) ──────────────────────────────────────
+          function onSvgBgMouseDown(e) {
+            if (e.target.tagName === "rect" && e.target.getAttribute("fill") === "transparent") {
+              dragging.current = { kind: "pan", ox: e.clientX - view.tx, oy: e.clientY - view.ty };
+            }
+          }
+
+          // ── WHEEL ZOOM (zoom toward cursor) ───────────────────────────────
+          function onWheel(e) {
+            e.preventDefault();
+            const svg = svgRef.current;
+            if (!svg) return;
+            const rect  = svg.getBoundingClientRect();
+            const mx    = e.clientX - rect.left;
+            const my    = e.clientY - rect.top;
+            const delta = e.deltaY < 0 ? 1.12 : 1 / 1.12;
+            setView(v => {
+              const ns = Math.min(3, Math.max(0.2, v.scale * delta));
+              // zoom toward cursor: adjust tx/ty so point under cursor stays fixed
+              return {
+                scale: +ns.toFixed(3),
+                tx: mx - (mx - v.tx) * (ns / v.scale),
+                ty: my - (my - v.ty) * (ns / v.scale),
+              };
+            });
+          }
+
+          // ── UNIFIED MOUSE MOVE ────────────────────────────────────────────
+          function onSvgMouseMove(e) {
+            if (!dragging.current) return;
+            if (dragging.current.kind === "pan") {
+              const nx = e.clientX - dragging.current.ox;
+              const ny = e.clientY - dragging.current.oy;
+              setView(v => ({ ...v, tx: nx, ty: ny }));
+            } else {
+              // node drag — coordinates must be in SVG space (before transform)
+              const { x, y } = svgPoint(e);
+              // convert screen point to graph coords (undo view transform)
+              const gx = (x - view.tx) / view.scale;
+              const gy = (y - view.ty) / view.scale;
+              const { wc, ox, oy } = dragging.current;
+              setNodePos(prev => ({ ...prev, [wc]: { x: gx - ox, y: gy - oy } }));
+            }
+          }
+
+          function onSvgMouseUp() {
+            if (!dragging.current) return;
+            if (dragging.current.kind === "node") {
+              const key = "flowops_nodepos_" + [...new Set(routing.map(r => r.workcenter))].sort().join(",");
+              setNodePos(prev => {
+                try { localStorage.setItem(key, JSON.stringify(prev)); } catch(e) {}
+                return prev;
+              });
+            }
+            dragging.current = null;
+          }
+
+          function resetLayout() {
+            const key = "flowops_nodepos_" + [...new Set(routing.map(r => r.workcenter))].sort().join(",");
+            try { localStorage.removeItem(key); } catch(e) {}
+            setNodePos({});
+          }
+
+          if (!dates.length) return <EmptyState icon="🌊" title="Brak danych" sub="Wgraj pliki CSV" />;
+
+          return (
+            <div>
+              {/* Controls row */}
+              <div style={{ display: "flex", alignItems: "center", gap: 12, marginBottom: 12, flexWrap: "wrap" }}>
+                {/* Przyciski dat — kolory wg statusu bottleneck */}
+              <DatePicker dates={dates} selected={date} onChange={setDate} />
+                <div style={{ marginLeft: "auto", display: "flex", gap: 6, alignItems: "center" }}>
+                  <button style={{ ...s.btn(false), fontSize: 13, padding: "4px 11px", fontWeight: 600 }}
+                    onClick={() => setView(v => ({ ...v, scale: Math.max(0.25, +(v.scale - 0.15).toFixed(2)) }))}>−</button>
+                  <span style={{ fontSize: 12, color: T.text2, minWidth: 38, textAlign: "center" }}>{Math.round(view.scale * 100)}%</span>
+                  <button style={{ ...s.btn(false), fontSize: 13, padding: "4px 11px", fontWeight: 600 }}
+                    onClick={() => setView(v => ({ ...v, scale: Math.min(3, +(v.scale + 0.15).toFixed(2)) }))}>+</button>
+                  <button style={{ ...s.btn(false), fontSize: 11, padding: "4px 10px" }}
+                    onClick={() => setView({ scale: 1, tx: 0, ty: 0 })}>⊡ Fit</button>
+                  <button style={{ ...s.btn(false), fontSize: 11, padding: "4px 10px" }} onClick={resetLayout}>↺ Reset</button>
+                </div>
+              </div>
+
+              {/* Legend */}
+              <div style={{ display: "flex", gap: 14, marginBottom: 12, flexWrap: "wrap", alignItems: "center" }}>
+                <div style={{ display: "flex", gap: 14, fontSize: 12, color: T.text2, background: T.surface, padding: "8px 14px", borderRadius: 8, border: `1px solid ${T.border}`, flexWrap: "wrap" }}>
+                  <span style={{ display:"flex", alignItems:"center", gap:5 }}><Dot color={T.ok}   size={7}/> OK ≤85%</span>
+                  <span style={{ display:"flex", alignItems:"center", gap:5 }}><Dot color={T.warn} size={7}/> Uwaga 86–100%</span>
+                  <span style={{ display:"flex", alignItems:"center", gap:5 }}><Dot color={T.bn}   size={7}/> BN &gt;100%</span>
+                  <span style={{ color: T.text3 }}>· Grubość = wolumen · Kolor = produkt · Przeciągnij węzeł</span>
+                </div>
+                <div style={{ display:"flex", gap:10, flexWrap:"wrap" }}>
+                  {products.map((p, i) => (
+                    <span key={p} style={{ display:"flex", alignItems:"center", gap:5, fontSize:11, color:T.text2 }}>
+                      <span style={{ width:22, height:3, borderRadius:2, background:PALETTE[i%PALETTE.length], display:"inline-block" }}/>
+                      {p}
+                    </span>
+                  ))}
+                </div>
+              </div>
+
+              <div style={{ ...s.card, padding: 0, overflow: "hidden" }}>
+                <div style={{ background: "#090b0e", borderRadius: 12, overflow: "hidden", height: Math.max(SVG_H + 40, 420) }}>
+                  <svg
+                    ref={svgRef}
+                    width="100%"
+                    height="100%"
+                    style={{ display: "block", cursor: dragging.current?.kind === "pan" ? "grabbing" : "default", userSelect: "none" }}
+                    onMouseMove={onSvgMouseMove}
+                    onMouseUp={onSvgMouseUp}
+                    onMouseLeave={onSvgMouseUp}
+                    onMouseDown={onSvgBgMouseDown}
+                    onWheel={onWheel}
+                  >
+                    {/* invisible bg for pan */}
+                    <rect x="0" y="0" width="100%" height="100%" fill="transparent"/>
+                    <g transform={`translate(${view.tx},${view.ty}) scale(${view.scale})`}>
+                    <defs>
+                      {products.map((p, i) => (
+                        <marker key={p} id={`arr-${i}`}
+                          viewBox="0 0 10 10" refX="8" refY="5"
+                          markerWidth="5" markerHeight="5" orient="auto-start-reverse">
+                          <path d="M1 1.5L8 5L1 8.5" fill="none"
+                            stroke={PALETTE[i % PALETTE.length]}
+                            strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"/>
+                        </marker>
+                      ))}
+                    </defs>
+
+                    {/* ── EDGES ── */}
+                    {flowData.connections.map(conn => {
+                      const fromPos = allPositions[conn.from];
+                      const toPos   = allPositions[conn.to];
+                      if (!fromPos || !toPos) return null;
+                      const prodIdx     = products.indexOf(conn.product);
+                      const col         = PALETTE[prodIdx % PALETTE.length];
+                      const edgeKey     = `${conn.from}->${conn.to}`;
+                      const prodsOnEdge = edgeProdCount[edgeKey] || [conn.product];
+                      const myIdx       = prodsOnEdge.indexOf(conn.product);
+                      const { d, mx, my } = edgePath(fromPos, toPos, myIdx, prodsOnEdge.length);
+                      const isHov = hoveredWC === conn.from || hoveredWC === conn.to;
+                      const thick = 1.5 + (flowData.edgeTotals[edgeKey] / maxVolume) * 12;
+                      return (
+                        <g key={`${conn.product}-${conn.from}-${conn.to}`}>
+                          {isHov && <path d={d} fill="none" stroke={col} strokeWidth={thick+6} opacity="0.12" strokeLinecap="round"/>}
+                          <path d={d} fill="none" stroke={col} strokeWidth={thick} strokeLinecap="round"
+                            opacity={hoveredWC && !isHov ? 0.1 : 0.55}
+                            markerEnd={`url(#arr-${prodIdx % PALETTE.length})`}/>
+                        </g>
+                      );
+                    })}
+
+                    {/* ── EDGE LABELS ── */}
+                    {Object.entries(flowData.edgeTotals).map(([key, vol]) => {
+                      const [from, to] = key.split("->").map(s => s.trim());
+                      const fp = allPositions[from], tp = allPositions[to];
+                      if (!fp || !tp) return null;
+                      const isHov = hoveredWC === from || hoveredWC === to;
+                      if (hoveredWC && !isHov) return null;
+                      const mx = (fp.x + tp.x) / 2, my = (fp.y + tp.y) / 2;
+                      const arcLift = Math.abs(tp.x - fp.x) > 250 ? -Math.abs(tp.x - fp.x) * 0.25 : 0;
+                      return (
+                        <g key={`lbl-${key}`}>
+                          <rect x={mx-24} y={my+arcLift-10} width="48" height="18" rx="5"
+                            fill="#090b0e" stroke={T.border2} strokeWidth="0.5"/>
+                          <text x={mx} y={my+arcLift+4} textAnchor="middle"
+                            fontSize="10" fontWeight="600" fill={T.text2} fontFamily="monospace">
+                            {vol} szt.
+                          </text>
+                        </g>
+                      );
+                    })}
+
+                    {/* ── NODES ── */}
+                    {Object.entries(allPositions).map(([wc, pos]) => {
+                      const volume = flowData.nodeVolumes[wc] || 0;
+                      if (volume === 0) return null;
+                      const wcData = flowData.loads[wc] || { util: 0 };
+                      const u      = wcData.util;
+                      const stroke = nodeStroke(u);
+                      const isBn   = Math.abs(u - maxUtil) < 0.001 && u > 0.85;
+                      const isHov  = hoveredWC === wc;
+                      const r      = 28 + (volume / maxNodeVol) * 10;
+                      const uPct   = Math.round(u * 100);
+                      const dimmed = hoveredWC && !isHov ? 0.25 : 1;
+                      return (
+                        <g key={wc}
+                          style={{ cursor: "grab", opacity: dimmed, transition: dragging.current ? "none" : "opacity 0.15s" }}
+                          onMouseDown={e => onNodeMouseDown(e, wc)}
+                          onMouseEnter={() => { if (!dragging.current) setHoveredWC(wc); }}
+                          onMouseLeave={() => { if (!dragging.current) setHoveredWC(null); }}
+                        >
+                          {isBn && <circle cx={pos.x} cy={pos.y} r={r+9}
+                            fill="none" stroke={T.crit} strokeWidth="1.5" strokeDasharray="4 3" opacity="0.7"/>}
+                          {isHov && <circle cx={pos.x} cy={pos.y} r={r+5}
+                            fill="none" stroke={stroke} strokeWidth="1" opacity="0.35"/>}
+                          <circle cx={pos.x} cy={pos.y} r={r}
+                            fill={isBn ? "rgba(127,29,29,0.4)" : "#13161b"}
+                            stroke={stroke} strokeWidth={isBn ? 2.5 : 1.5}/>
+                          <text x={pos.x} y={pos.y-10} textAnchor="middle"
+                            fontSize="13" fontWeight="700" fill={T.text} style={{pointerEvents:"none"}}>{wc}</text>
+                          <text x={pos.x} y={pos.y+4} textAnchor="middle"
+                            fontSize="9" fill={T.text3} style={{pointerEvents:"none"}}>
+                            {pos.label.length > 14 ? pos.label.substring(0,13)+"…" : pos.label}
+                          </text>
+                          <text x={pos.x} y={pos.y+17} textAnchor="middle"
+                            fontSize="10" fontWeight="700" fill={stroke}
+                            fontFamily="monospace" style={{pointerEvents:"none"}}>{uPct}%</text>
+                          <rect x={pos.x-32} y={pos.y+r+6} width="64" height="16"
+                            rx="4" fill="#0d0f12" stroke={T.border} strokeWidth="0.5"/>
+                          <text x={pos.x} y={pos.y+r+17} textAnchor="middle"
+                            fontSize="10" fontWeight="600" fill={T.text3}
+                            fontFamily="monospace" style={{pointerEvents:"none"}}>{volume} szt.</text>
+                        </g>
+                      );
+                    })}
+                    </g>
+                  </svg>
+                </div>
+              </div>
+            </div>
+          );
+        }
+
+
+        // ─── GŁÓWNY KOMPONENT APKI ───────────────────────────────────────────────────
+        // ─── ZAKŁADKA: GRAFIK ZASOBÓW ────────────────────────────────────────────────
+        // sched (wcSchedule) mieszka w App — GrafikTab tylko go wyświetla i edytuje
+        // Format sched: { "G-01": [pon,wt,sr,czw,pt,sob,nd] } — 7 elementów, idx 0=pon
+        function GrafikTab({ routing, zp, wcSchedule, onScheduleChange, subZP, slavePanX, slaveScaleIdx, slaveHourW, planStart }) {
+          const { useRef } = React;
+          const WCS = useMemo(() => [...new Set(routing.map(r => r.workcenter))].sort(), [routing]);
+          const DAYS_LABEL = ['Pon','Wt','Śr','Czw','Pt','Sob','Nd'];
+          const DAYS_FULL  = ['Poniedziałek','Wtorek','Środa','Czwartek','Piątek','Sobota','Niedziela'];
+
+          // Skale (identyczne jak Gantt)
+          const SCALES = [
+            { key:'4h',  dayW:160 },
+            { key:'8h',  dayW:112 },
+            { key:'1d',  dayW:64  },
+            { key:'3d',  dayW:32  },
+            { key:'1w',  dayW:18  },
+            { key:'2w',  dayW:9   },
+          ];
+          const [_scaleIdx, _setScaleIdx] = useState(2);
+          const [_panX,     _setPanX]     = useState(0);
+          const [isPan,    setIsPan]    = useState(false);
+          const containerRef = useRef(null);
+          const panRef       = useRef(null);
+
+          // Slave mode: używaj wartości z zewnątrz
+          const scaleIdx = slaveScaleIdx !== undefined ? slaveScaleIdx : _scaleIdx;
+          const panX     = slavePanX     !== undefined ? slavePanX     : _panX;
+          const setScaleIdx = slaveScaleIdx !== undefined ? () => {} : _setScaleIdx;
+          const setPanX     = slavePanX     !== undefined ? () => {} : _setPanX;
+
+          // W slave mode: DAY_W = HOUR_W * 24 (zsynchronizowany z Gantt)
+          const DAY_W = slaveHourW !== undefined ? slaveHourW * 24 : SCALES[scaleIdx].dayW;
+          const CYCLE = [0,4,8,12,16,20,24];
+
+          // Model godzin: { wc: { "2026-05-22": 16, ... } }
+          // onScheduleChange teraz przyjmuje ten format
+          // Backwards compat: stary format [pon..nd] → konwertujemy
+
+          // Zakres dat z subZP lub ZP (w slave mode zaczyna od axisStart Ganttu)
+          const dateRange = useMemo(() => {
+            let minDt = null, maxDt = null;
+            // minDt = planStart — zawsze zacznij od tej samej daty co Gantt
+            const ps = planStart || localDateStr(new Date());
+            minDt = new Date(ps + 'T00:00:00');
+            if (subZP && subZP.length) {
+              subZP.forEach(s => {
+                (s.segments||[]).forEach(seg => {
+                  if (seg.segEnd) { const d = new Date(seg.segEnd); if (!maxDt||d>maxDt) maxDt=d; }
+                });
+                if (s.due_date) { const d = new Date(s.due_date+'T23:59:59'); if (!maxDt||d>maxDt) maxDt=d; }
+              });
+            } else if (zp.length) {
+              zp.forEach(z => {
+                const d = new Date(z.due_date);
+                if (!minDt) minDt=d;
+                if (!maxDt||d>maxDt) maxDt=d;
+              });
+            }
+            if (!minDt||!maxDt) return [];
+            minDt = new Date(minDt); minDt.setHours(0,0,0,0);
+            maxDt = new Date(maxDt); maxDt.setHours(23,59,59,0);
+            const dates = [];
+            const cur = new Date(minDt);
+            while (cur <= maxDt) { dates.push(localDateStr(cur)); cur.setDate(cur.getDate()+1); }
+            return dates;
+          }, [subZP ? subZP.length : 0, zp.length, planStart, subZP && subZP[0] ? (subZP[0].segments && subZP[0].segments[0] ? subZP[0].segments[0].segStart : null) : null]);
+
+          // Domyślna dostępność dla daty
+          function defaultAvail(dateStr) {
+            const jsDay = new Date(dateStr+'T12:00:00').getDay();
+            return (jsDay===0||jsDay===6) ? 0 : 16;
+          }
+
+          // Pobierz godziny dla wc+date z nowego lub starego formatu
+          function getH(wc, dateStr) {
+            const s = wcSchedule[wc];
+            if (!s) return defaultAvail(dateStr);
+            // Nowy format: obiekt z datami
+            if (typeof s === 'object' && !Array.isArray(s)) {
+              return s[dateStr] !== undefined ? s[dateStr] : defaultAvail(dateStr);
+            }
+            // Stary format: tablica [pon..nd]
+            if (Array.isArray(s)) {
+              const jsDay = new Date(dateStr+'T12:00:00').getDay();
+              const idx = jsDay===0?6:jsDay-1;
+              return s[idx] ?? defaultAvail(dateStr);
+            }
+            return defaultAvail(dateStr);
+          }
+
+          function setH(wc, dateStr, h) {
+            const prev = wcSchedule[wc];
+            // Konwertuj stary format na nowy jeśli potrzeba
+            let newWC = {};
+            if (prev && !Array.isArray(prev) && typeof prev === 'object') {
+              newWC = { ...prev };
+            }
+            newWC[dateStr] = h;
+            onScheduleChange({ ...wcSchedule, [wc]: newWC });
+          }
+
+          function cycleH(wc, dateStr) {
+            const cur = getH(wc, dateStr);
+            const idx = CYCLE.indexOf(cur);
+            const next = CYCLE[(idx+1)%CYCLE.length];
+            setH(wc, dateStr, next);
+          }
+
+          // Rzeczywiste godziny pracy na gnieździe w danym dniu — z segmentów back-schedule
+          function needForDate(wc, dateStr) {
+            if (!subZP || !subZP.length) {
+              // Fallback: szacunek z ZP.due_date gdy brak back-schedule
+              return zp.filter(z => z.due_date===dateStr).reduce((sum,z) => {
+                const op = routing.find(r => r.product===z.product && r.workcenter===wc);
+                return sum + (op ? z.volume*op.ct_min/60 : 0);
+              }, 0);
+            }
+            // Sumuj godziny segmentów które przypadają na ten dzień i gniazdo
+            let total = 0;
+            subZP.forEach(s => {
+              if (s.workcenter !== wc) return;
+              (s.segments || []).forEach(seg => {
+                if (!seg.segStart) return;
+                const segDate = localDateStr(new Date(seg.segStart));
+                if (segDate === dateStr) total += seg.durH;
+              });
+            });
+            return total;
+          }
+
+          // Layout
+          const LABEL_W = 110;
+          const TOP_H   = 42;   // nagłówek dat
+          const ROW_H   = 50;   // panel: h/dzień per gniazdo (większy bo utilization)
+          const topH    = TOP_H + WCS.length * ROW_H;  // całkowita wysokość panelu
+          const GAP     = 0;   // brak separatora (jeden panel)
+          const LANE_H  = ROW_H;  // alias dla kompatybilności
+          const contentW = dateRange.length * DAY_W;
+
+          // Wheel handler
+          React.useEffect(() => {
+            const el = containerRef.current; if (!el) return;
+            function onWheel(e) {
+              e.preventDefault();
+              if (e.ctrlKey||e.metaKey) {
+                if (e.deltaY<0) setScaleIdx(v=>Math.max(0,v-1));
+                else            setScaleIdx(v=>Math.min(SCALES.length-1,v+1));
+              } else {
+                setPanX(v => Math.min(0, Math.max(-(contentW-200), v-e.deltaY*1.5)));
+              }
+            }
+            el.addEventListener('wheel', onWheel, {passive:false});
+            return () => el.removeEventListener('wheel', onWheel);
+          }, [contentW]);
+
+          function onBgMouseDown(e) {
+            if (e.target.getAttribute('data-bg')==='1') {
+              panRef.current = {startX:e.clientX, startPanX:panX};
+              setIsPan(true);
+            }
+          }
+          function onMouseMove(e) {
+            if (!panRef.current) return;
+            const dx = e.clientX - panRef.current.startX;
+            setPanX(Math.min(0, Math.max(-(contentW-200), panRef.current.startPanX+dx)));
+          }
+          function onMouseUp() { panRef.current=null; setIsPan(false); }
+
+          if (!WCS.length) return <EmptyState icon="📅" title="Brak danych" sub="Wgraj routing.csv" />;
+          if (!dateRange.length) return <EmptyState icon="📅" title="Brak zakresu dat" sub="Przelicz Gantt aby ustalić zakres" />;
+
+          const dueDates  = new Set(zp.map(z=>z.due_date));
+
+          // Kolor dostępności
+          function availColor(h) {
+            if (h===0)  return {bg:'rgba(0,0,0,0)',   text:T.text3};
+            if (h<=8)   return {bg:'rgba(52,211,153,0.15)',  text:T.ok};
+            if (h<=16)  return {bg:'rgba(77,148,255,0.15)',  text:T.accent};
+            return             {bg:'rgba(168,85,247,0.15)',  text:'#c084fc'};
+          }
+          // Kolor zapotrzebowania
+          function needColor(need, avail) {
+            if (need===0) return {bg:'rgba(255,255,255,0.02)', text:T.text3};
+            const r = avail>0 ? need/avail : 999;
+            if (r>1.3) return {bg:T.critBg, text:T.crit};
+            if (r>1.0) return {bg:T.bnBg,   text:T.bn};
+            if (r>0.85)return {bg:T.warnBg, text:T.warn};
+            return            {bg:T.okBg,   text:T.ok};
+          }
+
+          return (
+            <div>
+              {/* Controls — ukryte w slave mode */}
+              {slavePanX === undefined && <div style={{display:'flex',alignItems:'center',gap:8,marginBottom:12,flexWrap:'wrap'}}>
+                <span style={{fontSize:13,color:T.text2}}>
+                  <strong style={{color:T.text}}>
+                    {dateRange[0]?.slice(5)} – {dateRange[dateRange.length-1]?.slice(5)}
+                  </strong>
+                  &nbsp;·&nbsp; {dateRange.length} dni &nbsp;·&nbsp; {WCS.length} gniazd
+                </span>
+                <div style={{display:'flex',gap:2,background:T.surface2,borderRadius:8,padding:2,marginLeft:8}}>
+                  {SCALES.map((sc,i) => (
+                    <button key={sc.key} onClick={()=>setScaleIdx(i)}
+                      style={{padding:'4px 10px',fontSize:11,fontWeight:600,borderRadius:6,border:'none',
+                        background:i===scaleIdx?T.accent:'transparent',
+                        color:i===scaleIdx?'#fff':T.text3,cursor:'pointer'}}>
+                      {sc.key}
+                    </button>
+                  ))}
+                </div>
+                <div style={{display:'flex',gap:6,alignItems:'center',marginLeft:'auto'}}>
+                  <span style={{fontSize:10,color:T.text3}}>Ctrl+scroll=zoom · scroll=pan · klik=zmień h</span>
+                  <button onClick={()=>{setPanX(0);setScaleIdx(2);}}
+                    style={{...s.btn(false),fontSize:11,padding:'4px 10px'}}>⊡ Reset</button>
+                </div>
+              </div>}
+
+              {/* Legenda */}
+              <div style={{display:'flex',gap:12,fontSize:11,color:T.text3,marginBottom:8,flexWrap:'wrap',alignItems:'center'}}>
+                <span style={{color:T.text3}}>Kliknij komórkę aby zmienić godziny (cykl 0→4→8→…→24h)</span>
+                <span style={{marginLeft:8,display:'flex',gap:8,alignItems:'center'}}>
+                  <span style={{color:T.ok,fontWeight:500}}>■ OK ≤85%</span>
+                  <span style={{color:T.warn,fontWeight:500}}>■ Uwaga 85-100%</span>
+                  <span style={{color:T.crit,fontWeight:500}}>■ Wąskie gardło &gt;100%</span>
+                  <span style={{color:T.text3}}>■ Brak pracy</span>
+                </span>
+              </div>
+
+              <div style={{...s.card,padding:0,overflow:'hidden'}}>
+                <div ref={containerRef}
+                  style={{background:T.ganttBg,borderRadius:12,overflow:'hidden',
+                    height:`calc(100vh - 280px)`,minHeight:320,
+                    cursor:isPan?'grabbing':'default',userSelect:'none',position:'relative'}}
+                  onMouseDown={onBgMouseDown}
+                  onMouseMove={onMouseMove}
+                  onMouseUp={onMouseUp}
+                  onMouseLeave={onMouseUp}
+                >
+                  <svg width="100%" height="100%" style={{display:'block'}}>
+                    <defs>
+                      <clipPath id="gfClip">
+                        <rect x={LABEL_W} y="0" width="10000" height="10000"/>
+                      </clipPath>
+                    </defs>
+
+                    {/* Tło */}
+                    <rect x="0" y="0" width="100%" height="100%" fill={T.ganttBg} data-bg="1"/>
+
+                    {/* separator usunięty — jeden panel */}
+
+                    {/* ── SCROLLOWANA ZAWARTOŚĆ ── */}
+                    <g clipPath="url(#gfClip)">
+                      <g transform={`translate(${panX},0)`}>
+
+                        {/* Tła pasków */}
+                        {WCS.map((_,wi) => (
+                          <rect key={`tbg${wi}`} x={LABEL_W} y={TOP_H+wi*ROW_H} width={contentW+40} height={ROW_H}
+                            fill={wi%2===0?T.surface:T.surface2}/>
+                        ))}
+
+                        {/* Nagłówki dat (JEDEN — wspólny dla obu paneli) */}
+                        {dateRange.map((d,di) => {
+                          const x = LABEL_W + di*DAY_W;
+                          const dt = new Date(d+'T12:00:00');
+                          const jsDay = dt.getDay();
+                          const isWe = jsDay===0||jsDay===6;
+                          const isDue = dueDates.has(d);
+                          return (
+                            <g key={`hdr${d}`}>
+                              {/* Weekend overlay — oba panele */}
+                              {isWe && <rect x={x} y={TOP_H} width={DAY_W}
+                                height={WCS.length*ROW_H}
+                                fill="rgba(0,0,0,0.18)"/>}
+                              <line x1={x} y1={0} x2={x}
+                                y2={topH}
+                                stroke={T.border} strokeWidth="0.5"/>
+                              {/* Data */}
+                              <text x={x+DAY_W/2} y={TOP_H-18} textAnchor="middle"
+                                fontSize="10" fontWeight={isDue?700:400}
+                                fill={isDue?T.bn:isWe?T.text3:T.text2}>
+                                {String(dt.getDate()).padStart(2,'0')}.{String(dt.getMonth()+1).padStart(2,'0')}
+                              </text>
+                              {/* Dzień tygodnia */}
+                              <text x={x+DAY_W/2} y={TOP_H-6} textAnchor="middle"
+                                fontSize="9" fill={isWe?T.text3:T.text3}>
+                                {DAY_NAMES[jsDay]}
+                              </text>
+                              {/* Due marker */}
+                              {isDue && <rect x={x} y={0} width={DAY_W} height={4} rx="1"
+                                fill={T.bn} opacity="0.7"/>}
+                            </g>
+                          );
+                        })}
+
+                        {/* ── PANEL: dostępne h + utilization — klikalne ── */}
+                        {WCS.map((wc,wi) => (
+                          <g key={`top${wc}`}>
+                            {dateRange.map((d,di) => {
+                              const x     = LABEL_W + di*DAY_W;
+                              const h     = getH(wc, d);
+                              const need  = needForDate(wc, d);
+                              const ratio = h > 0 ? need / h : (need > 0 ? 999 : 0);
+                              const pad   = 3;
+                              // Kolor wg utilization (nie wg dostępnych h)
+                              let bg, textCol, borderCol;
+                              if (h === 0 && need === 0) {
+                                bg='rgba(0,0,0,0)'; textCol=T.text3; borderCol='transparent';
+                              } else if (need === 0) {
+                                bg='rgba(255,255,255,0.04)'; textCol=T.text3; borderCol='transparent';
+                              } else if (ratio > 1.0) {
+                                bg=T.critBg; textCol=T.crit; borderCol=T.crit;
+                              } else if (ratio > 0.85) {
+                                bg=T.warnBg; textCol=T.warn; borderCol=T.warn;
+                              } else if (ratio > 0) {
+                                bg=T.okBg; textCol=T.ok; borderCol=T.ok;
+                              } else {
+                                bg='rgba(255,255,255,0.04)'; textCol=T.text3; borderCol='transparent';
+                              }
+                              return (
+                                <g key={d} style={{cursor:'pointer'}} onClick={() => cycleH(wc, d)}>
+                                  <rect x={x+pad} y={TOP_H+wi*ROW_H+pad}
+                                    width={DAY_W-pad*2} height={ROW_H-pad*2}
+                                    rx="4" fill={bg}
+                                    stroke={borderCol} strokeWidth={ratio>0.85?1.5:0}/>
+                                  {/* Godziny */}
+                                  <text x={x+DAY_W/2} y={TOP_H+wi*ROW_H+ROW_H/2-4}
+                                    textAnchor="middle" fontSize={DAY_W>40?11:9}
+                                    fontWeight="600" fill={textCol} fontFamily="monospace"
+                                    style={{pointerEvents:'none'}}>
+                                    {h>0 ? h+'h' : '—'}
+                                  </text>
+                                  {/* Utilization % — tylko gdy jest praca */}
+                                  {need > 0 && DAY_W > 30 && (
+                                    <text x={x+DAY_W/2} y={TOP_H+wi*ROW_H+ROW_H/2+10}
+                                      textAnchor="middle" fontSize="9"
+                                      fill={textCol} fontFamily="monospace" opacity="0.8"
+                                      style={{pointerEvents:'none'}}>
+                                      {Math.round(ratio*100)}%
+                                    </text>
+                                  )}
+                                </g>
+                              );
+                            })}
+                          </g>
+                        ))}
+
+                        {/* dolny panel usunięty — utilization w górnym */}
+
+                        {/* Linie poziome */}
+                        {WCS.map((_,wi) => (
+                          <line key={`ln${wi}`} x1={LABEL_W} y1={TOP_H+(wi+1)*ROW_H}
+                            x2={LABEL_W+contentW+40} y2={TOP_H+(wi+1)*ROW_H}
+                            stroke={T.border} strokeWidth="0.5"/>
+                        ))}
+
+                      </g>
+                    </g>
+
+                    {/* ── STAŁA LEWA KOLUMNA ── */}
+                    {/* Tło */}
+                    <rect x="0" y="0" width={LABEL_W} height="10000" fill={T.ganttBg}/>
+                    {/* Nagłówek górny panel */}
+                    <rect x="0" y="0" width={LABEL_W} height={TOP_H} fill={T.surface2}/>
+                    <text x="12" y={TOP_H-12} fontSize="9" fontWeight="600"
+                      fill={T.text3} textTransform="uppercase">DOSTĘPNE H</text>
+                    {/* Górny panel labels */}
+                    {WCS.map((wc,wi) => {
+                      const totalAvail = dateRange.reduce((s,d)=>s+getH(wc,d),0);
+                      return (
+                        <g key={`ltop${wc}`}>
+                          <rect x="0" y={TOP_H+wi*ROW_H} width={LABEL_W} height={ROW_H}
+                            fill={T.surface2}/>
+                          <text x="12" y={TOP_H+wi*ROW_H+ROW_H/2-4} fontSize="12"
+                            fontWeight="700" fill={T.text}>{wc}</text>
+                          <text x="12" y={TOP_H+wi*ROW_H+ROW_H/2+10} fontSize="10"
+                            fill={T.text3}>{totalAvail}h</text>
+                        </g>
+                      );
+                    })}
+                    {/* Lewa kolumna */}
+                    {WCS.map((wc,wi) => {
+                      const totalNeed  = dateRange.reduce((s,d)=>s+needForDate(wc,d),0);
+                      const totalAvail = dateRange.reduce((s,d)=>s+getH(wc,d),0);
+                      const ratio = totalAvail>0 ? totalNeed/totalAvail : 0;
+                      const col = ratio>1?T.crit:ratio>0.85?T.warn:totalNeed>0?T.ok:T.text3;
+                      return (
+                        <g key={`lbl${wc}`}>
+                          <rect x="0" y={TOP_H+wi*ROW_H} width={LABEL_W} height={ROW_H}
+                            fill={T.surface2}/>
+                          <text x="12" y={TOP_H+wi*ROW_H+ROW_H/2-5} fontSize="12"
+                            fontWeight="700" fill={T.text}>{wc}</text>
+                          <text x="12" y={TOP_H+wi*ROW_H+ROW_H/2+10} fontSize="10"
+                            fill={col}>{Math.round(ratio*100)}%</text>
+                        </g>
+                      );
+                    })}
+                    {/* Separator pionowy */}
+                    <line x1={LABEL_W} y1="0" x2={LABEL_W} y2="10000"
+                      stroke={T.border2} strokeWidth="1.5"/>
+                  </svg>
+
+                  {/* Scrollbar */}
+                  {contentW > 200 && (
+                    <div style={{position:'absolute',bottom:4,left:LABEL_W,right:8,height:5,
+                      background:'rgba(255,255,255,0.05)',borderRadius:3}}>
+                      <div style={{position:'absolute',top:0,height:'100%',borderRadius:3,
+                        background:'rgba(255,255,255,0.2)',
+                        width:`${Math.min(100,((containerRef.current?.offsetWidth||900)-LABEL_W)/(contentW||1)*100)}%`,
+                        left:`${contentW>0?(-panX/contentW)*100:0}%`,
+                        transition:'left 0.05s'}}/>
+                    </div>
+                  )}
+                </div>
+              </div>
+            </div>
+          );
+        }
+
+
+
+        // ─── ZAKŁADKA: PLAN (Gantt + Grafik zasobów) ──────────────────────────────
+        function PlanTab({ routing, zp, globalLookups, wcSchedule, subZP, fwdZP, zpStatus,
+                             onRecalc, ganttDirty, onScheduleChange, planStart, onPlanStartChange }) {
+          const [sharedView, setSharedView] = React.useState({ panX:0, scaleIdx:2, hourW:28 });
+          const CARD = { ...s.card, marginBottom:12, padding:0, overflow:'hidden' };
+          const HDR  = { fontSize:11, fontWeight:700, color:T.text2, padding:'8px 14px 8px',
+            background:T.surface2, borderBottom:`1px solid ${T.border}`,
+            display:'flex', alignItems:'center', gap:8 };
+
+          return (
+            <div style={{ height:'calc(100vh - 130px)', overflowY:'auto', paddingBottom:16 }}>
+
+              {/* ── KARTA 1: GANTT ── */}
+              <div style={CARD}>
+                <div style={HDR}>
+                  <span>📊 Harmonogram (Gantt)</span>
+                </div>
+                <div style={{ height:'45vh', minHeight:280, overflow:'hidden' }}>
+                  <GanttTab
+                    routing={routing} zp={zp} globalLookups={globalLookups}
+                    wcSchedule={wcSchedule} subZP={subZP} fwdZP={fwdZP} zpStatus={zpStatus}
+                    onRecalc={onRecalc} ganttDirty={ganttDirty}
+                    planStart={planStart} onPlanStartChange={onPlanStartChange}
+                    onViewChange={v => setSharedView(v)}
+                  />
+                </div>
+              </div>
+
+              {/* ── KARTA 2: GRAFIK ZASOBÓW ── */}
+              <div style={CARD}>
+                <div style={HDR}>
+                  <span>📅 Grafik zasobów — dostępność vs zapotrzebowanie</span>
+                </div>
+                <div style={{ height:'38vh', minHeight:220, overflow:'hidden' }}>
+                  <GrafikTab
+                    routing={routing} zp={zp}
+                    wcSchedule={wcSchedule} onScheduleChange={onScheduleChange}
+                    subZP={fwdZP && fwdZP.length ? fwdZP : subZP}
+                    slavePanX={sharedView.panX}
+                    slaveScaleIdx={sharedView.scaleIdx}
+                    slaveHourW={sharedView.hourW}
+                    planStart={planStart}
+                  />
+                </div>
+              </div>
+
+              {/* ── KARTA 3: TOC STATUS ── */}
+              {zpStatus && zpStatus.length > 0 && (
+                <div style={{ ...s.card, marginBottom:12 }}>
+                  <div style={s.cardTitle}>📋 Status ZP — TOC Buffer Management</div>
+                  <div style={{ overflowX:'auto' }}>
+                    <table style={{ width:'100%', borderCollapse:'collapse', fontSize:12 }}>
+                      <thead><tr>
+                        {['ZS / Pozycja / Klient','ZP','Produkt','Due date','Koniec','Opóźnienie','Bottleneck','Bufor','Status'].map(h => (
+                          <th key={h} style={{ fontSize:10, fontWeight:600, letterSpacing:'.06em',
+                            textTransform:'uppercase', color:T.text3, padding:'0 8px 8px',
+                            textAlign:'left', borderBottom:`1px solid ${T.border}` }}>{h}</th>
+                        ))}
+                      </tr></thead>
+                      <tbody>
+                        {(() => {
+                          // Grupuj per ZS
+                          const byZS = {};
+                          zpStatus.forEach(st => {
+                            const key = st.zs_id || 'bez-ZS';
+                            if (!byZS[key]) byZS[key] = [];
+                            byZS[key].push(st);
+                          });
+                          // Sortuj ZS wg najgorszego statusu w grupie
+                          const ord = {black:0,red:1,yellow:2,green:3};
+                          const rows = [];
+                          Object.entries(byZS)
+                            .sort(([,a],[,b]) => {
+                              const wa = Math.min(...a.map(s=>ord[s.toc?.zone]??4));
+                              const wb = Math.min(...b.map(s=>ord[b[0].toc?.zone]??4));
+                              return wa-wb;
+                            })
+                            .forEach(([zsKey, stList]) => {
+                              // Nagłówek ZS
+                              const first = stList[0];
+                              const maxOrd = Math.min(...stList.map(s=>ord[s.toc?.zone]??4));
+                              const zsColor = maxOrd===0?T.bn:maxOrd===1?T.bn:maxOrd===2?T.warn:T.ok;
+                              rows.push(
+                                <tr key={`zs-${zsKey}`} style={{ background:T.surface2 }}>
+                                  <td colSpan={9} style={{ padding:'6px 8px', borderBottom:`1px solid ${T.border2}`,
+                                    borderTop:`2px solid ${T.border2}` }}>
+                                    <span style={{ fontWeight:700, color:zsColor, fontSize:12 }}>
+                                      {first.zs_id || '—'}
+                                    </span>
+                                    {first.klient && <span style={{ fontSize:11, color:T.text3, marginLeft:8 }}>
+                                      {first.klient}
+                                    </span>}
+                                    <span style={{ fontSize:10, color:T.text3, marginLeft:8 }}>
+                                      ({stList.length} ZP)
+                                    </span>
+                                  </td>
+                                </tr>
+                              );
+                              // Wiersze ZP posortowane wg opóźnienia
+                              [...stList].sort((a,b) => (ord[a.toc?.zone]??4)-(ord[b.toc?.zone]??4))
+                                .forEach((st,i) => {
+                                  const col = globalLookups.zpColorMap[st.zp_id]||T.text3;
+                                  const tc  = tocColor(st.toc?.zone||'green');
+                                  rows.push(
+                                    <tr key={`zp-${st.zp_id}`} style={{
+                                      background:['black','red'].includes(st.toc?.zone)?'rgba(248,113,113,0.03)':'transparent'
+                                    }}>
+                                      <td style={{ padding:'6px 8px 6px 20px', borderBottom:`1px solid ${T.border}`, color:T.text3, fontSize:10 }}>
+                                        poz.{st.pozycja}
+                                      </td>
+                                      <td style={{ padding:'6px 8px', borderBottom:`1px solid ${T.border}` }}>
+                                        <span style={{ display:'flex', alignItems:'center', gap:4 }}>
+                                          <Dot color={col} size={7}/>
+                                          <code style={{ fontSize:11, color:T.accent, background:T.accentBg,
+                                            padding:'1px 5px', borderRadius:4 }}>{st.zp_id}</code>
+                                        </span>
+                                      </td>
+                                      <td style={{ padding:'6px 8px', borderBottom:`1px solid ${T.border}`, color:T.text2, fontSize:11 }}>{st.product}</td>
+                                      <td style={{ padding:'6px 8px', borderBottom:`1px solid ${T.border}`, fontFamily:'monospace', fontSize:11, color:T.text2 }}>{st.due_date}</td>
+                                      <td style={{ padding:'6px 8px', borderBottom:`1px solid ${T.border}`, fontFamily:'monospace', fontSize:11,
+                                        color:st.delayH>0?T.bn:T.ok, fontWeight:st.delayH>0?600:400 }}>
+                                        {st.realEnd?fmtDt(st.realEnd):'—'}
+                                      </td>
+                                      <td style={{ padding:'6px 8px', borderBottom:`1px solid ${T.border}`, fontFamily:'monospace', fontSize:11,
+                                        color:st.delayH>0?T.bn:T.ok, fontWeight:600 }}>
+                                        {st.delayDays>0?`+${st.delayDays}d`:'✓ OK'}
+                                      </td>
+                                      <td style={{ padding:'6px 8px', borderBottom:`1px solid ${T.border}` }}>
+                                        {st.bottleneck && <span style={{ display:'inline-flex', alignItems:'center',
+                                          gap:4, padding:'2px 7px', borderRadius:4, fontSize:11, fontWeight:600,
+                                          background:T.bnBg, color:T.bn }}>
+                                          🔴 {st.bottleneck}
+                                        </span>}
+                                      </td>
+                                      <td style={{ padding:'6px 8px', borderBottom:`1px solid ${T.border}` }}>
+                                        <div style={{ height:5, background:T.surface3, borderRadius:3, width:70, marginBottom:2 }}>
+                                          <div style={{ height:'100%', borderRadius:3, background:tc.border,
+                                            width:`${Math.min(100,Math.max(0,Math.round((st.toc?.consumed||0)*100)))}%` }}/>
+                                        </div>
+                                        <span style={{ fontSize:10, color:T.text3 }}>{Math.round((st.toc?.consumed||0)*100)}%</span>
+                                      </td>
+                                      <td style={{ padding:'6px 8px', borderBottom:`1px solid ${T.border}` }}>
+                                        <span style={{ display:'inline-flex', padding:'2px 8px', borderRadius:5,
+                                          fontSize:10, fontWeight:600, background:tc.bg, color:tc.text }}>
+                                          {st.toc?.label||'—'}
+                                        </span>
+                                      </td>
+                                    </tr>
+                                  );
+                                });
+                            });
+                          return rows;
+                        })()}
+                      </tbody>
+                    </table>
+                  </div>
+                </div>
+              )}
+            </div>
+          );
+        }
+
+        const TABS = [
+          { id: "import",      label: "Import CSV" },
+          { id: "plan",        label: "📋 Plan" },
+          { id: "bottleneck",  label: "Bottleneck" },
+          { id: "routing",     label: "Routing" },
+          { id: "heatmap",     label: "Heatmapa" },
+          { id: "swimlane",    label: "Swimlane" },
+          { id: "sankey",      label: "Przepływ (Sankey)" },
+        ];
+
+        // Domyślny grafik: pon-pt 16h, sob-nd 0h
+        function initDefaultSchedule(wcs) {
+          const s = {};
+          wcs.forEach(wc => { s[wc] = [16,16,16,16,16,0,0]; }); // [pon,wt,sr,czw,pt,sob,nd]
+          return s;
+        }
+
+        function App() {
+          const [tab, setTab] = useState("import");
+          const [routing, setRouting] = useState([]);
+          const [zp, setZP] = useState([]);
+          const [wcSchedule, setWcSchedule] = useState({});
+          const [subZP,      setSubZP]      = useState([]);
+          const [fwdZP,      setFwdZP]      = useState([]);
+          const [zpStatus,   setZpStatus]   = useState([]);
+          const [ganttDirty, setGanttDirty] = useState(true);
+          const [planStart,  setPlanStart]  = useState('2026-05-22');
+
+          function updateSchedule(s) {
+            setWcSchedule(s);
+            setGanttDirty(true);
+          }
+
+          // Init wcSchedule gdy routing się załaduje — PO wszystkich useState
+          React.useEffect(() => {
+            if (routing.length > 0) {
+              const wcs = [...new Set(routing.map(r => r.workcenter))].sort();
+              setWcSchedule(prev => {
+                const missing = wcs.filter(w => !prev[w]);
+                if (missing.length === 0) return prev;
+                const next = { ...prev };
+                missing.forEach(w => { next[w] = [16,16,16,16,16,0,0]; });
+                return next;
+              });
+              setGanttDirty(true);
+            }
+          }, [routing.length]);
+
+
+          const globalLookups = useMemo(() => {
+            const routingByProduct = {};
+            routing.forEach(r => {
+              if (!routingByProduct[r.product]) routingByProduct[r.product] = [];
+              routingByProduct[r.product].push(r);
+            });
+            Object.keys(routingByProduct).forEach(p => {
+              routingByProduct[p].sort((a, b) => a.sequence - b.sequence);
+            });
+
+            const zpColorMap = {};
+            zp.forEach((z, index) => {
+              zpColorMap[z.zp_id] = PALETTE[index % PALETTE.length];
+            });
+            // Również mapuj subZP parent_zp → kolor
+            // (obsługiwane przez lookup parent_zp w blokach Ganttu)
+
+            const productIndexMap = {};
+            const uniqueProducts = [...new Set(routing.map(r => r.product))];
+            uniqueProducts.forEach((p, index) => {
+              productIndexMap[p] = index;
+            });
+
+            return { routingByProduct, zpColorMap, productIndexMap };
+          }, [routing, zp]);
+
+          // Auto-przelicz gdy ZP, routing lub grafik się zmienią
+          React.useEffect(() => {
+            const rl = globalLookups.routingByProduct;
+            if (zp.length > 0 && Object.keys(rl).length > 0 && Object.keys(wcSchedule).length > 0) {
+              recalcGantt();
+            }
+          }, [zp.length, routing.length, JSON.stringify(wcSchedule), planStart]);
+
+          function recalcGantt() {
+            const rl     = globalLookups.routingByProduct;
+            const sorted = [...zp].sort((a,b) => a.priority-b.priority || a.due_date.localeCompare(b.due_date));
+
+            // 1. Back-schedule (idealny plan)
+            const backResult = backSchedule(sorted, rl, wcSchedule);
+            setSubZP(backResult);
+
+            // 2. Forward-schedule od planStart z kolejką
+            const planStartDt = new Date(planStart + 'T00:00:00');
+            const fwdResult   = forwardSchedule(sorted, rl, wcSchedule, planStartDt);
+            setFwdZP(fwdResult);
+
+            // 3. TOC buffer per ZP
+            const statuses = sorted.map(zpItem => {
+              // backStart = najwcześniejszy start z back-schedule dla tego ZP
+              const backOps = backResult.filter(s => s.parent_zp === zpItem.zp_id || s.zp_id === zpItem.zp_id);
+              const backStart = backOps.length
+                ? new Date(Math.min(...backOps.map(s => s.start_dt ? new Date(s.start_dt).getTime() : Infinity)))
+                : planStartDt;
+              const dueDate   = new Date(zpItem.due_date + 'T23:59:59');
+              const fwdOps    = fwdResult.filter(s => s.parent_zp === zpItem.zp_id || s.zp_id === zpItem.zp_id);
+              // Ostatnia operacja = max sequence (nie ostatni w tablicy po sortowaniu)
+              const lastFwdOp = fwdOps.length
+                ? fwdOps.reduce((best, op) => op.sequence > best.sequence ? op : best, fwdOps[0])
+                : null;
+              const realEnd   = lastFwdOp ? lastFwdOp.end_dt : planStartDt;
+              const delayH    = Math.max(0, (new Date(realEnd) - dueDate) / 3600000);
+              const delayDays = +(delayH / 16).toFixed(1);
+              const toc       = tocBuffer(backStart, planStartDt, dueDate, new Date(realEnd));
+              // Bottleneck = gniazdo z najdłuższą operacją forward-scheduled dla tego ZP
+            const fwdForZP = fwdResult.filter(s => s.parent_zp === zpItem.zp_id || s.zp_id === zpItem.zp_id);
+            const bottleneck = fwdForZP.length
+              ? fwdForZP.reduce((b, op) => op.durH > b.durH ? op : b, fwdForZP[0])
+              : null;
+            return {
+                zp_id:      zpItem.zp_id,
+                zs_id:      zpItem.zs_id || '',
+                pozycja:    zpItem.pozycja || '',
+                product:    zpItem.product,
+                due_date:   zpItem.due_date,
+                priority:   zpItem.priority,
+                klient:     zpItem.klient || '',
+                bottleneck: bottleneck ? bottleneck.workcenter : null,
+                backStart, realEnd, delayH, delayDays, toc,
+              };
+            });
+            setZpStatus(statuses);
+            setGanttDirty(false);
+          }
+
+          // Auto-przelicz gdy ZP lub grafik zmienią się
+          const handleLoad = useCallback((text, type) => {
+            if (type === "demo") {
+              const r  = parseRouting(DEMO_ROUTING);
+              const zs = parseZS(DEMO_ZS);
+              const z  = zsToZP(zs);
+              setRouting(r);
+              setZP(z);
+              setGanttDirty(true);
+              setTab("plan");
+              return;
+            }
+            if (type === "routing") {
+              const r = parseRouting(text);
+              setRouting(r);
+              if (r.length && zp.length) setTab("plan");
+            } else if (type === "zs") {
+              const zsList = parseZS(text);
+              const zpFromZS = zsToZP(zsList);
+              setZP(zpFromZS);
+              if (routing.length && zpFromZS.length) setTab("plan");
+            } else {
+              // zp.csv — konwertuj ID do nowego formatu jeśli brakuje zs_id
+              const z = parseZP(text).map((zpItem, i) => {
+                if (!zpItem.zs_id) {
+                  // Generuj pseudo-ZS ID z numeru ZP
+                  const num = zpItem.zp_id.replace(/[^0-9]/g,'').padStart(3,'0') || String(i+1).padStart(3,'0');
+                  return { ...zpItem, zs_id: `ZS-${num}`, pozycja: 1,
+                    zp_id: `ZP-${num}/01/01` };
+                }
+                return zpItem;
+              });
+              setZP(z);
+              if (routing.length && z.length) setTab("plan");
+            }
+          }, [routing.length, zp.length]);
+
+          function exportLoad() {
+            const dates = [...new Set(zp.map(z => z.due_date))].sort();
+            const rows = [["gniazdo","due_date","load_h","cap_h","utilization_pct"]];
+            dates.forEach(d => {
+              const zpForDate = zp.filter(z => z.due_date === d);
+              const loads = computeLoads(globalLookups.routingByProduct, zpForDate);
+              Object.entries(loads).forEach(([wc, v]) => {
+                rows.push([wc, d, v.load.toFixed(2), v.cap.toFixed(1), Math.round(v.util * 100)]);
+              });
+            });
+            dlCSV(rows, "raport_obciazenia.csv");
+          }
+
+          const hasData = routing.length > 0 && zp.length > 0;
+
+          return (
+            <div style={{ minHeight:"100vh", background:T.bg, color:T.text, fontFamily:"'DM Sans',system-ui,sans-serif" }}>
+              {/* NAVBAR */}
+              <nav style={{ background: T.surface, borderBottom: `1px solid ${T.border}`, padding: "0 24px", display: "flex", alignItems: "center", height: 52, position: "sticky", top: 0, zIndex: 100 }}>
+                <span style={{ fontSize: 14, fontWeight: 700, marginRight: 32, color: T.text }}>FlowOps</span>
+
+                {TABS.map(t => (
+                  <button key={t.id} onClick={() => setTab(t.id)} style={{
+                    height: 52, padding: "0 16px", fontSize: 13, fontWeight: 500,
+                    border: "none", background: "none", cursor: "pointer",
+                    color: tab === t.id ? T.text : T.text3,
+                    borderBottom: `2px solid ${tab === t.id ? T.accent : "transparent"}`,
+                  }}>{t.label}</button>
+                ))}
+
+                {hasData && (
+                  <button style={{ marginLeft:"auto", ...s.btn(false), fontSize:11 }} onClick={exportLoad}>
+                    ↓ Eksportuj raport
+                  </button>
+                )}
+              </nav>
+
+              {/* KONTENER GŁÓWNY */}
+              <main style={{ maxWidth: 1160, margin: "0 auto", padding: "28px 24px" }}>
+                {tab === "import"     && <ImportTab routing={routing} zp={zp} onLoad={handleLoad} />}
+                {tab === "plan"       && <PlanTab routing={routing} zp={zp} globalLookups={globalLookups} wcSchedule={wcSchedule} subZP={subZP} fwdZP={fwdZP} zpStatus={zpStatus} ganttDirty={ganttDirty} onRecalc={() => recalcGantt()} onScheduleChange={updateSchedule} planStart={planStart} onPlanStartChange={setPlanStart} />}
+                {tab === "bottleneck" && <BottleneckTab routing={routing} zp={zp} globalLookups={globalLookups} wcSchedule={wcSchedule} subZP={subZP} />}
+                {tab === "routing"    && <RoutingTab routing={routing} zp={zp} globalLookups={globalLookups} />}
+                {tab === "heatmap"    && <HeatmapTab routing={routing} zp={zp} globalLookups={globalLookups} wcSchedule={wcSchedule} />}
+                {tab === "swimlane"   && <SwimlaneTab routing={routing} zp={zp} globalLookups={globalLookups} wcSchedule={wcSchedule} />}
+                {tab === "sankey"     && <SankeyTab routing={routing} zp={zp} globalLookups={globalLookups} wcSchedule={wcSchedule} />}
+              </main>
+            </div>
+          );
+        }
+
+        const reactRoot = ReactDOM.createRoot(document.getElementById('root'));
+        reactRoot.render(<App />);
+    </script>
+</body>
+</html>
