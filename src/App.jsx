@@ -17,9 +17,11 @@ import { HeatmapTab }   from './components/tabs/HeatmapTab.jsx';
 import { SwimlaneTab }  from './components/tabs/SwimlaneTab.jsx';
 import { SankeyTab }    from './components/tabs/SankeyTab.jsx';
 import { AnalysisTab }  from './components/tabs/AnalysisTab.jsx';
+import { DashboardTab } from './components/tabs/DashboardTab.jsx';
 import './App.css';
 
 const TABS = [
+  { id: 'dashboard',  label: '🏠 Dashboard' },
   { id: 'import',     label: 'Import CSV' },
   { id: 'plan',       label: '📋 Plan' },
   { id: 'bottleneck', label: 'Bottleneck' },
@@ -31,7 +33,7 @@ const TABS = [
 ];
 
 export default function App() {
-  const [tab, setTab]           = useState('import');
+  const [tab, setTab]           = useState('dashboard');
   const [routing, setRouting]   = useState([]);
   const [zp, setZP]             = useState([]);
   const [wcSchedule, setWcSchedule] = useState({});
@@ -137,6 +139,12 @@ export default function App() {
         backStart, realEnd, delayH, delayDays, toc,
       };
     });
+    statuses.forEach(z => console.log(
+      z.zp_id, z.due_date,
+      'realEnd:', new Date(z.realEnd).toISOString().slice(0,16),
+      'toc:', z.toc?.zone || z.toc,
+      'delayH:', z.delayH.toFixed(1)
+    ));
     setZpStatus(statuses);
     setGanttDirty(false);
   }
@@ -187,7 +195,7 @@ export default function App() {
       setRouting(r);
       setZP(z);
       setGanttDirty(true);
-      setTab('plan');
+      setTab('dashboard');
       return;
     }
     if (type === 'routing') {
@@ -256,6 +264,7 @@ export default function App() {
       </nav>
 
       <main className="flowops-main">
+        {tab === 'dashboard'  && <DashboardTab routing={routing} zp={zp} zpStatus={zpStatus} wcSchedule={wcSchedule} historyData={historyData} globalLookups={globalLookups} onTabChange={setTab} />}
         {tab === 'import'     && <ImportTab routing={routing} zp={zp} historyData={historyData} onLoad={handleLoad} />}
         {tab === 'plan'       && <PlanTab routing={routing} zp={zp} globalLookups={globalLookups} wcSchedule={wcSchedule} subZP={subZP} fwdZP={fwdZP} zpStatus={zpStatus} ganttDirty={ganttDirty} onRecalc={() => recalcGantt()} onScheduleChange={updateSchedule} planStart={planStart} onPlanStartChange={setPlanStart} />}
         {tab === 'bottleneck' && <BottleneckTab routing={routing} zp={zp} globalLookups={globalLookups} wcSchedule={wcSchedule} subZP={subZP} />}

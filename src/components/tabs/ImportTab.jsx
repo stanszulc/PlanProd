@@ -2,6 +2,71 @@ import { useState } from 'react';
 import { T, s } from '../../constants/theme.js';
 import { DEMO_HISTORY } from '../../constants/demoData.js';
 
+function dlCSV(content, filename) {
+  const a = document.createElement('a');
+  a.href = 'data:text/csv;charset=utf-8,' + encodeURIComponent(content);
+  a.download = filename;
+  a.click();
+}
+
+const SAMPLE_CSVS = {
+  routing: {
+    filename: 'routing_przyklad.csv',
+    content: `product,operation,workcenter,ct_min,sequence,capacity_h,predecessors
+P-KOD-100-100,Wycinanie laserowe podstawy,G-01,3.0,1,8,
+P-KOD-100-100,Gięcie profili podstawy,G-02,8.0,2,8,1
+P-KOD-100-100,Spawanie narożników korpusu,G-03,6.0,3,8,
+P-KOD-100-100,Izolacja PIR i montaż poliwęglanu,G-04,12.0,4,8,3
+P-KOD-100-100,Montaż siłownika i testy KJ,G-05,15.0,5,8,2|4
+P-SKR-ROZ-02,Wycinanie obudowy skrzynki,G-01,1.0,1,8,
+P-SKR-ROZ-02,Gięcie skrzynki,G-02,2.0,2,8,
+P-SKR-ROZ-02,Zgrzewanie liniowe korpusu,G-03,2.0,3,8,
+P-SKR-ROZ-02,Wyklejanie matą kauczukową,G-04,5.0,4,8,
+P-SKR-ROZ-02,Montaż króćców i przepustnicy,G-05,4.0,5,8,`,
+  },
+  zs: {
+    filename: 'zs_przyklad.csv',
+    content: `zs_id,pozycja,klient,product,volume,due_date,priority
+ZS-001,1,Klima-Tech Sp. z o.o.,P-KOD-100-100,30,2026-05-25,1
+ZS-001,2,Klima-Tech Sp. z o.o.,P-KOD-100-100,20,2026-05-26,1
+ZS-002,1,VentPro S.A.,P-SKR-ROZ-02,50,2026-05-25,2
+ZS-002,2,VentPro S.A.,P-SKR-ROZ-02,40,2026-05-26,2`,
+  },
+  history: {
+    filename: 'history_przyklad.csv',
+    content: `zp_id,product,workcenter,operation,start_ts,end_ts,volume,reason_code
+ZP-001,P-KOD-100-100,G-01,Wycinanie laserowe podstawy,2026-05-01 07:00,2026-05-01 07:45,30,
+ZP-001,P-KOD-100-100,G-02,Gięcie profili podstawy,2026-05-01 08:10,2026-05-01 09:30,30,
+ZP-001,P-KOD-100-100,G-03,Spawanie narożników korpusu,2026-05-01 10:05,2026-05-01 11:50,30,AWARIA
+ZP-001,P-KOD-100-100,G-04,Izolacja PIR i montaż poliwęglanu,2026-05-01 12:00,2026-05-01 14:00,30,
+ZP-001,P-KOD-100-100,G-05,Montaż siłownika i testy KJ,2026-05-01 14:30,2026-05-01 16:30,30,
+ZP-002,P-SKR-ROZ-02,G-01,Wycinanie obudowy skrzynki,2026-05-02 07:00,2026-05-02 07:20,50,
+ZP-002,P-SKR-ROZ-02,G-02,Gięcie skrzynki,2026-05-02 08:00,2026-05-02 08:40,50,PRZEZBROJENIE
+ZP-002,P-SKR-ROZ-02,G-03,Zgrzewanie liniowe korpusu,2026-05-02 09:15,2026-05-02 10:00,50,
+ZP-002,P-SKR-ROZ-02,G-04,Wyklejanie matą kauczukową,2026-05-02 10:30,2026-05-02 12:00,50,BRAK_MATERIALU
+ZP-002,P-SKR-ROZ-02,G-05,Montaż króćców i przepustnicy,2026-05-02 12:30,2026-05-02 13:30,50,`,
+  },
+  schedule_hist: {
+    filename: 'schedule_hist_przyklad.csv',
+    content: `workcenter,date,planned_h,shift
+G-01,2026-05-01,8,1
+G-02,2026-05-01,8,1
+G-03,2026-05-01,16,2
+G-04,2026-05-01,8,1
+G-05,2026-05-01,8,1
+G-01,2026-05-02,8,1
+G-02,2026-05-02,16,2
+G-03,2026-05-02,0,0
+G-04,2026-05-02,8,1
+G-05,2026-05-02,8,1
+G-01,2026-05-03,0,0
+G-02,2026-05-03,0,0
+G-03,2026-05-03,0,0
+G-04,2026-05-03,0,0
+G-05,2026-05-03,0,0`,
+  },
+};
+
 export function ImportTab({ routing, zp, historyData, onLoad }) {
   const [rLoaded,  setRLoaded]  = useState(routing.length > 0);
   const [zsLoaded, setZsLoaded] = useState(false);
@@ -90,16 +155,27 @@ export function ImportTab({ routing, zp, historyData, onLoad }) {
         </div>
       )}
 
-      {/* Przykłady */}
-      <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: 16, marginBottom: 24 }}>
+      {/* Przykłady + pobieranie */}
+      <div style={{ fontSize: 10, fontWeight: 600, letterSpacing: '0.1em', textTransform: 'uppercase', color: T.text3, marginBottom: 12 }}>
+        Przykładowe pliki CSV
+      </div>
+      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4,1fr)', gap: 12, marginBottom: 24 }}>
         {[
-          { title: 'Przykład routing.csv', content: `product,operation,workcenter,ct_min,sequence,capacity_h\nP-KOD,Wycinanie,G-01,3,1,8\nP-KOD,Gięcie,G-02,8,2,8\nP-KOD,Spawanie,G-03,6,3,8` },
-          { title: 'Przykład zs.csv',      content: `zs_id,pozycja,klient,product,volume,due_date,priority\nZS-001,1,Kowalski,P-KOD,30,2026-05-25,1\nZS-001,2,Kowalski,P-KOD,20,2026-05-26,1` },
-          { title: 'Przykład history.csv', content: `zp_id,product,workcenter,operation,start_ts,end_ts,reason_code\nZP-001,P-KOD,G-01,Wycinanie,2026-05-01 07:00,2026-05-01 07:45,\nZP-001,P-KOD,G-03,Spawanie,2026-05-01 09:10,2026-05-01 11:30,AWARIA` },
-        ].map(ex => (
-          <div key={ex.title} style={s.card}>
-            <div style={s.cardTitle}>{ex.title}</div>
-            <pre style={{ fontFamily: "'JetBrains Mono', monospace", fontSize: 10, color: T.text2, lineHeight: 1.8, overflowX: 'auto', margin: 0 }}>{ex.content}</pre>
+          { key: 'routing',       label: 'routing.csv',       icon: '🗂️', desc: 'Marszruty technologiczne · operacje · czasy cyklu' },
+          { key: 'zs',            label: 'zs.csv',            icon: '🧾', desc: 'Zamówienia sprzedaży · klienci · terminy' },
+          { key: 'history',       label: 'history.csv',       icon: '📊', desc: 'Historia operacji · timestampy · reason codes · wolumen' },
+          { key: 'schedule_hist', label: 'schedule_hist.csv', icon: '📅', desc: 'Harmonogram pracy gniazd · RBH planned · zmiany' },
+        ].map(({ key, label, icon, desc }) => (
+          <div key={key} style={{ ...s.card, display: 'flex', flexDirection: 'column', gap: 10 }}>
+            <div style={{ fontSize: 22 }}>{icon}</div>
+            <div style={{ fontSize: 12, fontWeight: 600, color: T.text }}>{label}</div>
+            <div style={{ fontSize: 11, color: T.text3, lineHeight: 1.5, flex: 1 }}>{desc}</div>
+            <button
+              type="button"
+              style={{ ...s.btn(false), fontSize: 11, width: '100%', textAlign: 'center' }}
+              onClick={() => dlCSV(SAMPLE_CSVS[key].content, SAMPLE_CSVS[key].filename)}>
+              ↓ Pobierz przykład
+            </button>
           </div>
         ))}
       </div>
