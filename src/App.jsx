@@ -1,4 +1,4 @@
-import { useState, useCallback, useMemo, useEffect } from 'react';
+import React, { useState, useCallback, useMemo, useEffect } from 'react';
 import { s, PALETTE } from './constants/theme.js';
 import { DEMO_ROUTING, DEMO_ZS } from './constants/demoData.js';
 import {
@@ -22,18 +22,101 @@ import { DashboardTab }   from './components/tabs/DashboardTab.jsx';
 import { RealizacjaTab } from './components/tabs/RealizacjaTab.jsx';
 import './App.css';
 
-const TABS = [
-  { id: 'dashboard',  label: '🏠 Dashboard' },
-  { id: 'import',     label: 'Import CSV' },
-  { id: 'plan',       label: '📋 Plan' },
-  { id: 'bottleneck', label: 'Bottleneck' },
-  { id: 'routing',    label: 'Routing' },
-  { id: 'heatmap',    label: 'Heatmapa' },
-  { id: 'swimlane',   label: 'Swimlane' },
-  { id: 'sankey',     label: 'Przepływ (Sankey)' },
-  { id: 'realizacja', label: '🏭 Realizacja' },
-  { id: 'analysis',   label: '📊 Analiza Procesu' },
+const MENU = [
+  { id: 'dashboard', label: '🏠 Dashboard' },
+  { label: '📋 Planowanie', items: [
+    { id: 'plan',       label: 'Harmonogram' },
+    { id: 'bottleneck', label: 'Wąskie gardła' },
+    { id: 'heatmap',    label: 'Heatmapa obciążeń' },
+    { id: 'swimlane',   label: 'Swimlane' },
+    { id: 'sankey',     label: 'Przepływ (Sankey)' },
+  ]},
+  { label: '🏭 Realizacja', items: [
+    { id: 'realizacja', label: 'Lista ZP' },
+  ]},
+  { label: '📊 Analityka', items: [
+    { id: 'analysis',   label: 'Analiza Procesu' },
+  ]},
+  { label: '⚙️', items: [
+    { id: 'import',  label: 'Import / Eksport' },
+    { id: 'routing', label: 'Routing' },
+  ]},
 ];
+
+
+// ─── NAWIGACJA Z DROPDOWNAMI ─────────────────────────────────────────────────
+
+function NavMenu({ menu, active, onSelect, indicators = {} }) {
+  const [open, setOpen] = React.useState(null);
+
+  // Sprawdź czy dany group zawiera aktywny tab
+  function groupActive(item) {
+    if (item.id) return active === item.id;
+    return item.items?.some(i => i.id === active);
+  }
+
+  return (
+    <div style={{ display: 'flex', alignItems: 'center', gap: 2 }}>
+      {menu.map((item, idx) => {
+        if (item.id) {
+          // Pojedyncza zakładka (Dashboard)
+          return (
+            <button key={item.id} type="button"
+              className={`flowops-nav-tab${active === item.id ? ' active' : ''}`}
+              onClick={() => { onSelect(item.id); setOpen(null); }}>
+              {item.label}
+            </button>
+          );
+        }
+        // Dropdown
+        const isOpen = open === idx;
+        const isActive = groupActive(item);
+        return (
+          <div key={idx} style={{ position: 'relative' }}
+            onMouseLeave={() => setOpen(null)}>
+            <button type="button"
+              className={`flowops-nav-tab${isActive ? ' active' : ''}`}
+              onMouseEnter={() => setOpen(idx)}
+              onClick={() => setOpen(isOpen ? null : idx)}
+              style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
+              {item.label}
+              <span style={{ fontSize: 9, opacity: 0.6 }}>▾</span>
+              {item.items?.some(i => indicators[i.id]) && (
+                <span style={{ fontSize: 8, color: '#34d399' }}>●</span>
+              )}
+            </button>
+            {isOpen && (
+              <div style={{
+                position: 'absolute', top: '100%', left: 0, zIndex: 100,
+                background: '#10141a', border: '1px solid rgba(255,255,255,0.1)',
+                borderRadius: 8, padding: '4px 0', minWidth: 160,
+                boxShadow: '0 8px 24px rgba(0,0,0,0.4)',
+              }}>
+                {item.items.map(sub => (
+                  <button key={sub.id} type="button"
+                    onClick={() => { onSelect(sub.id); setOpen(null); }}
+                    style={{
+                      display: 'flex', alignItems: 'center', justifyContent: 'space-between',
+                      width: '100%', padding: '8px 14px', fontSize: 12,
+                      background: active === sub.id ? 'rgba(77,148,255,0.15)' : 'transparent',
+                      color: active === sub.id ? '#4d94ff' : '#a8b0c0',
+                      border: 'none', cursor: 'pointer', textAlign: 'left',
+                      borderLeft: active === sub.id ? '2px solid #4d94ff' : '2px solid transparent',
+                    }}
+                    onMouseEnter={e => { if (active !== sub.id) e.currentTarget.style.background = 'rgba(255,255,255,0.05)'; }}
+                    onMouseLeave={e => { if (active !== sub.id) e.currentTarget.style.background = 'transparent'; }}>
+                    {sub.label}
+                    {indicators[sub.id] && <span style={{ fontSize: 8, color: '#34d399' }}>●</span>}
+                  </button>
+                ))}
+              </div>
+            )}
+          </div>
+        );
+      })}
+    </div>
+  );
+}
 
 export default function App() {
   const [tab, setTab]           = useState('dashboard');
@@ -252,19 +335,8 @@ export default function App() {
       <nav className="flowops-nav">
         <span className="flowops-nav-brand">FlowOps</span>
 
-        {TABS.map(t => (
-          <button
-            key={t.id}
-            type="button"
-            className={`flowops-nav-tab${tab === t.id ? ' active' : ''}`}
-            onClick={() => setTab(t.id)}
-          >
-            {t.label}
-            {t.id === 'analysis' && historyData.length > 0 && (
-              <span style={{ marginLeft: 5, fontSize: 10, color: '#34d399' }}>●</span>
-            )}
-          </button>
-        ))}
+        <NavMenu menu={MENU} active={tab} onSelect={setTab}
+          indicators={{ analysis: historyData.length > 0, realizacja: zpStatusData.length > 0 }} />
 
         {hasData && (
           <button type="button" className="flowops-export-btn" style={{ ...s.btn(false), fontSize: 11 }} onClick={exportLoad}>

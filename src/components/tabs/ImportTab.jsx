@@ -1,6 +1,6 @@
 import { useState } from 'react';
 import { T, s } from '../../constants/theme.js';
-import { DEMO_HISTORY } from '../../constants/demoData.js';
+import { DEMO_ZP_STATUS } from '../../constants/demoData.js';
 
 function dlCSV(content, filename) {
   const a = document.createElement('a');
@@ -32,20 +32,6 @@ ZS-001,2,Klima-Tech Sp. z o.o.,P-KOD-100-100,20,2026-05-26,1
 ZS-002,1,VentPro S.A.,P-SKR-ROZ-02,50,2026-05-25,2
 ZS-002,2,VentPro S.A.,P-SKR-ROZ-02,40,2026-05-26,2`,
   },
-  history: {
-    filename: 'history_przyklad.csv',
-    content: `zp_id,product,workcenter,operation,start_ts,end_ts,volume,reason_code
-ZP-001,P-KOD-100-100,G-01,Wycinanie laserowe podstawy,2026-05-01 07:00,2026-05-01 07:45,30,
-ZP-001,P-KOD-100-100,G-02,Gięcie profili podstawy,2026-05-01 08:10,2026-05-01 09:30,30,
-ZP-001,P-KOD-100-100,G-03,Spawanie narożników korpusu,2026-05-01 10:05,2026-05-01 11:50,30,AWARIA
-ZP-001,P-KOD-100-100,G-04,Izolacja PIR i montaż poliwęglanu,2026-05-01 12:00,2026-05-01 14:00,30,
-ZP-001,P-KOD-100-100,G-05,Montaż siłownika i testy KJ,2026-05-01 14:30,2026-05-01 16:30,30,
-ZP-002,P-SKR-ROZ-02,G-01,Wycinanie obudowy skrzynki,2026-05-02 07:00,2026-05-02 07:20,50,
-ZP-002,P-SKR-ROZ-02,G-02,Gięcie skrzynki,2026-05-02 08:00,2026-05-02 08:40,50,PRZEZBROJENIE
-ZP-002,P-SKR-ROZ-02,G-03,Zgrzewanie liniowe korpusu,2026-05-02 09:15,2026-05-02 10:00,50,
-ZP-002,P-SKR-ROZ-02,G-04,Wyklejanie matą kauczukową,2026-05-02 10:30,2026-05-02 12:00,50,BRAK_MATERIALU
-ZP-002,P-SKR-ROZ-02,G-05,Montaż króćców i przepustnicy,2026-05-02 12:30,2026-05-02 13:30,50,`,
-  },
   zp_status: {
     filename: 'zp_status_przyklad.csv',
     content: `zp_id,parent_zp,zs_id,pozycja,klient,product,operation,workcenter,sequence,volume_plan,volume_actual,status,need_date,planned_start,planned_end,actual_start,actual_end,priority,reason_code
@@ -53,31 +39,11 @@ ZP-001/01/01,ZP-001/01,ZS-001,1,Kowalski,P-KOD,Wycinanie,G-01,1,30,30,CNF,2026-0
 ZP-001/01/02,ZP-001/01,ZS-001,1,Kowalski,P-KOD,Gięcie,G-02,2,30,30,WIP,2026-05-25,2026-05-20 09:00,2026-05-20 13:00,2026-05-20 09:10,,1,
 ZP-001/01/03,ZP-001/01,ZS-001,1,Kowalski,P-KOD,Spawanie,G-03,3,30,0,PLAN,2026-05-25,2026-05-21 07:00,2026-05-21 10:00,,,1,`,
   },
-  schedule_hist: {
-    filename: 'schedule_hist_przyklad.csv',
-    content: `workcenter,date,planned_h,shift
-G-01,2026-05-01,8,1
-G-02,2026-05-01,8,1
-G-03,2026-05-01,16,2
-G-04,2026-05-01,8,1
-G-05,2026-05-01,8,1
-G-01,2026-05-02,8,1
-G-02,2026-05-02,16,2
-G-03,2026-05-02,0,0
-G-04,2026-05-02,8,1
-G-05,2026-05-02,8,1
-G-01,2026-05-03,0,0
-G-02,2026-05-03,0,0
-G-03,2026-05-03,0,0
-G-04,2026-05-03,0,0
-G-05,2026-05-03,0,0`,
-  },
 };
 
-export function ImportTab({ routing, zp, historyData, zpStatusData, onLoad, onExportZpStatus }) {
+export function ImportTab({ routing, zp, zpStatusData, onLoad, onExportZpStatus }) {
   const [rLoaded,  setRLoaded]  = useState(routing.length > 0);
   const [zsLoaded, setZsLoaded] = useState(false);
-  const [hLoaded,  setHLoaded]  = useState(historyData.length > 0);
   const [zpLoaded, setZpLoaded] = useState(zpStatusData?.length > 0);
   const [rejectLog, setRejectLog] = useState([]);
 
@@ -85,15 +51,10 @@ export function ImportTab({ routing, zp, historyData, zpStatusData, onLoad, onEx
     const reader = new FileReader();
     reader.onload = e => {
       const result = onLoad(e.target.result, type);
-      if (type === 'zs')      setZsLoaded(true);
-      if (type === 'routing') setRLoaded(true);
+      if (type === 'routing')   setRLoaded(true);
+      if (type === 'zs')        setZsLoaded(true);
       if (type === 'zp_status') {
         setZpLoaded(true);
-        if (result?.rejected?.length) setRejectLog(result.rejected);
-        else setRejectLog([]);
-      }
-      if (type === 'history') {
-        setHLoaded(true);
         if (result?.rejected?.length) setRejectLog(result.rejected);
         else setRejectLog([]);
       }
@@ -105,7 +66,7 @@ export function ImportTab({ routing, zp, historyData, zpStatusData, onLoad, onEx
     <div
       style={{
         border: `1.5px dashed ${loaded ? T.ok : T.border2}`,
-        borderRadius: 12, padding: 28, textAlign: 'center',
+        borderRadius: 12, padding: 24, textAlign: 'center',
         background: loaded ? 'rgba(34,197,94,0.05)' : T.surface,
         cursor: 'pointer', transition: 'all 0.2s',
       }}
@@ -113,13 +74,13 @@ export function ImportTab({ routing, zp, historyData, zpStatusData, onLoad, onEx
       onDragOver={e => e.preventDefault()}
       onDrop={e => { e.preventDefault(); const f = e.dataTransfer.files[0]; if (f) readFile(f, type); }}
     >
-      <div style={{ fontSize: 30, marginBottom: 10 }}>{icon}</div>
-      <div style={{ fontSize: 14, fontWeight: 600, color: T.text, marginBottom: 4 }}>{label}</div>
-      <div style={{ fontSize: 12, color: T.text2, marginBottom: 12 }}>{desc}</div>
+      <div style={{ fontSize: 28, marginBottom: 8 }}>{icon}</div>
+      <div style={{ fontSize: 13, fontWeight: 600, color: T.text, marginBottom: 4 }}>{label}</div>
+      <div style={{ fontSize: 11, color: T.text2, marginBottom: 10, lineHeight: 1.5 }}>{desc}</div>
       {loaded
         ? <div style={{ fontSize: 12, color: T.ok, fontWeight: 600 }}>✓ Załadowano</div>
-        : <div style={{ display: 'flex', gap: 6, justifyContent: 'center', flexWrap: 'wrap' }}>
-            {cols.map(c => <span key={c.n} style={{ ...s.tag(c.req ? T.accent : T.text3) }}>{c.n}</span>)}
+        : <div style={{ display: 'flex', gap: 5, justifyContent: 'center', flexWrap: 'wrap' }}>
+            {cols.map(c => <span key={c.n} style={{ ...s.tag(c.req ? T.accent : T.text3), fontSize: 10 }}>{c.n}</span>)}
           </div>
       }
       <input id={`file_${type}`} type="file" accept=".csv" style={{ display: 'none' }}
@@ -127,119 +88,123 @@ export function ImportTab({ routing, zp, historyData, zpStatusData, onLoad, onEx
     </div>
   );
 
+  const hasPlanData = routing.length > 0 && zp.length > 0;
+
   return (
-    <div>
-      {/* Pliki planistyczne */}
-      <div style={{ fontSize: 10, fontWeight: 600, letterSpacing: '0.1em', textTransform: 'uppercase', color: T.text3, marginBottom: 12 }}>
-        Dane planistyczne
-      </div>
-      <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 20, marginBottom: 24 }}>
-        <DropBox type="routing" loaded={rLoaded || routing.length > 0} label="routing.csv" icon="🗂️"
-          desc="Definicja operacji per produkt · predecessors: numery seq poprzedników (np. 2|4) dla równoległego WIP"
-          cols={[{n:'product',req:true},{n:'operation',req:true},{n:'workcenter',req:true},{n:'ct_min',req:true},{n:'sequence',req:true},{n:'capacity_h',req:false}]} />
-        <DropBox type="zs" loaded={zsLoaded} label="zs.csv" icon="🧾"
-          desc="Zamówienia sprzedaży z pozycjami"
-          cols={[{n:'zs_id',req:true},{n:'pozycja',req:true},{n:'klient',req:false},{n:'product',req:true},{n:'volume',req:true},{n:'due_date',req:true},{n:'priority',req:false}]} />
-      </div>
+    <div style={{ display: 'flex', flexDirection: 'column', gap: 28 }}>
 
-      {/* Dane realizacji */}
-      <div style={{ fontSize: 10, fontWeight: 600, letterSpacing: '0.1em', textTransform: 'uppercase', color: T.text3, marginBottom: 12 }}>
-        Dane realizacji (opcjonalne)
-      </div>
-      <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 16, marginBottom: 16 }}>
-        <DropBox type="zp_status" loaded={zpLoaded || zpStatusData?.length > 0} label="zp_status.csv" icon="🏭"
-          desc="Status realizacji ZP z ERP/hali — podstawa Dashboardu i ZS Trackera"
-          cols={[{n:'zp_id',req:true},{n:'parent_zp',req:true},{n:'zs_id',req:true},{n:'status',req:true},{n:'need_date',req:true},{n:'actual_start',req:false},{n:'actual_end',req:false},{n:'volume_actual',req:false}]} />
-        <div style={{ ...s.card, display: 'flex', flexDirection: 'column', gap: 10, justifyContent: 'center', alignItems: 'center' }}>
-          <div style={{ fontSize: 22 }}>📤</div>
-          <div style={{ fontSize: 12, fontWeight: 600, color: T.text, textAlign: 'center' }}>Eksportuj szablon ZP</div>
-          <div style={{ fontSize: 11, color: T.text3, textAlign: 'center', lineHeight: 1.5 }}>
-            Generuje zp_status.csv z datami z APS.<br/>Uzupełnij w ERP i wgraj z powrotem.
-          </div>
-          <button
-            type="button"
-            style={{ ...s.btn(false), fontSize: 11, width: '100%', textAlign: 'center',
-              opacity: (routing.length > 0 && zp.length > 0) ? 1 : 0.4,
-              cursor: (routing.length > 0 && zp.length > 0) ? 'pointer' : 'not-allowed' }}
-            disabled={!(routing.length > 0 && zp.length > 0)}
-            onClick={onExportZpStatus}>
-            ↓ Eksportuj ZP → CSV
-          </button>
-          {!(routing.length > 0 && zp.length > 0) && (
-            <div style={{ fontSize: 10, color: T.text3 }}>Wczytaj routing + zs najpierw</div>
-          )}
+      {/* ── 1. WGRAJ PLIKI ─────────────────────────────────────────────────── */}
+      <section>
+        <SectionHeader icon="📥" label="Wgraj pliki" />
+        <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: 16 }}>
+          <DropBox type="routing" loaded={rLoaded || routing.length > 0}
+            label="routing.csv" icon="🗂️"
+            desc="Marszruty technologiczne — operacje, gniazda, czasy cyklu"
+            cols={[{n:'product',req:true},{n:'operation',req:true},{n:'workcenter',req:true},{n:'ct_min',req:true},{n:'sequence',req:true},{n:'capacity_h',req:false}]} />
+          <DropBox type="zs" loaded={zsLoaded}
+            label="zs.csv" icon="🧾"
+            desc="Zamówienia sprzedaży — klienci, produkty, ilości, terminy"
+            cols={[{n:'zs_id',req:true},{n:'pozycja',req:true},{n:'klient',req:false},{n:'product',req:true},{n:'volume',req:true},{n:'due_date',req:true},{n:'priority',req:false}]} />
+          <DropBox type="zp_status" loaded={zpLoaded || zpStatusData?.length > 0}
+            label="zp_status.csv" icon="🏭"
+            desc="Status realizacji ZP z ERP — daty, ilości, statusy operacji"
+            cols={[{n:'zp_id',req:true},{n:'parent_zp',req:true},{n:'status',req:true},{n:'need_date',req:true},{n:'actual_start',req:false},{n:'actual_end',req:false},{n:'volume_actual',req:false}]} />
         </div>
-      </div>
 
-      {/* Plik historyczny (legacy) */}
-      <div style={{ fontSize: 10, fontWeight: 600, letterSpacing: '0.1em', textTransform: 'uppercase', color: T.text3, marginBottom: 12 }}>
-        Dane historyczne — analiza procesu (opcjonalne)
-      </div>
-      <div style={{ marginBottom: 24 }}>
-        <DropBox type="history" loaded={hLoaded || historyData.length > 0} label="history.csv" icon="📊"
-          desc="Rzeczywiste czasy operacji per gniazdo — podstawa modułu Analiza Procesu (box plot, heatmapa, Pareto)"
-          cols={[{n:'zp_id',req:true},{n:'product',req:true},{n:'workcenter',req:true},{n:'operation',req:true},{n:'start_ts',req:true},{n:'end_ts',req:true},{n:'reason_code',req:false}]} />
-      </div>
-
-      {/* Log odrzuconych */}
-      {rejectLog.length > 0 && (
-        <div style={{ background: 'rgba(248,113,113,0.07)', border: `1px solid ${T.bn}`, borderRadius: 10, padding: '12px 16px', marginBottom: 20 }}>
-          <div style={{ fontSize: 12, fontWeight: 600, color: T.bn, marginBottom: 8 }}>
-            ⚠ Odrzucono {rejectLog.length} rekordów historycznych
+        {/* Log odrzuconych */}
+        {rejectLog.length > 0 && (
+          <div style={{ background: 'rgba(248,113,113,0.07)', border: `1px solid ${T.bn}`, borderRadius: 10, padding: '12px 16px', marginTop: 14 }}>
+            <div style={{ fontSize: 12, fontWeight: 600, color: T.bn, marginBottom: 8 }}>
+              ⚠ Odrzucono {rejectLog.length} rekordów
+            </div>
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 3, maxHeight: 100, overflowY: 'auto' }}>
+              {rejectLog.map((r, i) => (
+                <div key={i} style={{ fontSize: 11, color: T.text2 }}>
+                  Linia {r.line}: {r.data.zp_id || '?'} — {r.reason}
+                </div>
+              ))}
+            </div>
           </div>
-          <div style={{ display: 'flex', flexDirection: 'column', gap: 3, maxHeight: 120, overflowY: 'auto' }}>
-            {rejectLog.map((r, i) => (
-              <div key={i} style={{ fontSize: 11, color: T.text2 }}>
-                Linia {r.line}: {r.data.zp_id || '?'} / {r.data.workcenter || '?'} — {r.reason}
-              </div>
-            ))}
-          </div>
-        </div>
-      )}
+        )}
+      </section>
 
-      {/* Przykłady + pobieranie */}
-      <div style={{ fontSize: 10, fontWeight: 600, letterSpacing: '0.1em', textTransform: 'uppercase', color: T.text3, marginBottom: 12 }}>
-        Przykładowe pliki CSV
-      </div>
-      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4,1fr)', gap: 12, marginBottom: 24 }}>
-        {[
-          { key: 'routing',       label: 'routing.csv',       icon: '🗂️', desc: 'Marszruty technologiczne · operacje · czasy cyklu' },
-          { key: 'zs',            label: 'zs.csv',            icon: '🧾', desc: 'Zamówienia sprzedaży · klienci · terminy' },
-          { key: 'history',       label: 'history.csv',       icon: '📊', desc: 'Historia operacji · timestampy · reason codes · wolumen' },
-          { key: 'schedule_hist', label: 'schedule_hist.csv', icon: '📅', desc: 'Harmonogram pracy gniazd · RBH planned · zmiany' },
-          { key: 'zp_status',     label: 'zp_status.csv',      icon: '🏭', desc: 'Status realizacji ZP · actual dates · volume_actual · reason_code' },
-        ].map(({ key, label, icon, desc }) => (
-          <div key={key} style={{ ...s.card, display: 'flex', flexDirection: 'column', gap: 10 }}>
-            <div style={{ fontSize: 22 }}>{icon}</div>
-            <div style={{ fontSize: 12, fontWeight: 600, color: T.text }}>{label}</div>
-            <div style={{ fontSize: 11, color: T.text3, lineHeight: 1.5, flex: 1 }}>{desc}</div>
+      {/* ── 2. EKSPORTUJ ───────────────────────────────────────────────────── */}
+      <section>
+        <SectionHeader icon="📤" label="Eksportuj" />
+        <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 16 }}>
+
+          {/* Demo */}
+          <div style={{ ...s.card, display: 'flex', flexDirection: 'column', gap: 10, alignItems: 'flex-start' }}>
+            <div style={{ fontSize: 22 }}>🎮</div>
+            <div style={{ fontSize: 13, fontWeight: 600, color: T.text }}>Demo data</div>
+            <div style={{ fontSize: 11, color: T.text3, lineHeight: 1.5 }}>
+              Załaduj przykładowe routing + zs — gotowe dane do testowania wszystkich widoków.
+            </div>
             <button
-              type="button"
-              style={{ ...s.btn(false), fontSize: 11, width: '100%', textAlign: 'center' }}
-              onClick={() => dlCSV(SAMPLE_CSVS[key].content, SAMPLE_CSVS[key].filename)}>
-              ↓ Pobierz przykład
+              style={{ ...s.btn(true), fontSize: 12, marginTop: 'auto' }}
+              onClick={() => { onLoad(null, 'demo'); onLoad(DEMO_ZP_STATUS, 'zp_status'); setZpLoaded(true); }}>
+              ▶ Załaduj demo
             </button>
           </div>
-        ))}
-      </div>
 
-      {/* Przyciski demo */}
-      <div style={{ display: 'flex', gap: 12, justifyContent: 'center', flexWrap: 'wrap' }}>
-        <button
-          style={{ padding: '12px 32px', fontSize: 13, fontWeight: 600, borderRadius: 10, border: 'none', background: T.accent, color: '#fff', cursor: 'pointer' }}
-          onClick={() => onLoad(null, 'demo')}>
-          Załaduj demo (routing + zs)
-        </button>
-        <button
-          style={{ padding: '12px 32px', fontSize: 13, fontWeight: 600, borderRadius: 10, border: `1px solid ${T.border2}`, background: T.surface2, color: T.text, cursor: 'pointer' }}
-          onClick={() => {
-            const result = onLoad(DEMO_HISTORY, 'history');
-            setHLoaded(true);
-            if (result?.rejected?.length) setRejectLog(result.rejected);
-          }}>
-+ Załaduj demo history
-        </button>
-      </div>
+          {/* Eksport ZP */}
+          <div style={{ ...s.card, display: 'flex', flexDirection: 'column', gap: 10, alignItems: 'flex-start' }}>
+            <div style={{ fontSize: 22 }}>📤</div>
+            <div style={{ fontSize: 13, fontWeight: 600, color: T.text }}>Eksportuj ZP → zp_status.csv</div>
+            <div style={{ fontSize: 11, color: T.text3, lineHeight: 1.5 }}>
+              Generuje szablon z datami z APS (status PLAN). Uzupełnij w ERP: actual_start, actual_end, volume_actual, status — i wgraj z powrotem.
+            </div>
+            <button
+              style={{ ...s.btn(hasPlanData), fontSize: 12, marginTop: 'auto',
+                opacity: hasPlanData ? 1 : 0.4,
+                cursor: hasPlanData ? 'pointer' : 'not-allowed' }}
+              disabled={!hasPlanData}
+              onClick={onExportZpStatus}>
+              ↓ Eksportuj ZP → CSV
+            </button>
+            {!hasPlanData && (
+              <div style={{ fontSize: 10, color: T.text3 }}>Wczytaj routing + zs najpierw</div>
+            )}
+          </div>
+        </div>
+      </section>
+
+      {/* ── 3. POBIERZ PRZYKŁADY ───────────────────────────────────────────── */}
+      <section>
+        <SectionHeader icon="📋" label="Pobierz przykłady CSV" />
+        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3,1fr)', gap: 12 }}>
+          {[
+            { key: 'routing',   label: 'routing.csv',   icon: '🗂️', desc: 'Marszruty technologiczne' },
+            { key: 'zs',        label: 'zs.csv',        icon: '🧾', desc: 'Zamówienia sprzedaży' },
+            { key: 'zp_status', label: 'zp_status.csv', icon: '🏭', desc: 'Status realizacji ZP' },
+          ].map(({ key, label, icon, desc }) => (
+            <div key={key} style={{ ...s.card, display: 'flex', alignItems: 'center', gap: 12 }}>
+              <span style={{ fontSize: 22, flexShrink: 0 }}>{icon}</span>
+              <div style={{ flex: 1, minWidth: 0 }}>
+                <div style={{ fontSize: 12, fontWeight: 600, color: T.text }}>{label}</div>
+                <div style={{ fontSize: 11, color: T.text3 }}>{desc}</div>
+              </div>
+              <button
+                type="button"
+                style={{ ...s.btn(false), fontSize: 11, flexShrink: 0 }}
+                onClick={() => dlCSV(SAMPLE_CSVS[key].content, SAMPLE_CSVS[key].filename)}>
+                ↓ Pobierz
+              </button>
+            </div>
+          ))}
+        </div>
+      </section>
+
+    </div>
+  );
+}
+
+function SectionHeader({ icon, label }) {
+  return (
+    <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 14 }}>
+      <span style={{ fontSize: 16 }}>{icon}</span>
+      <span style={{ fontSize: 11, fontWeight: 700, letterSpacing: '0.1em', textTransform: 'uppercase', color: T.text2 }}>{label}</span>
+      <div style={{ flex: 1, height: 1, background: T.border, marginLeft: 4 }} />
     </div>
   );
 }
