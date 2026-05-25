@@ -8,6 +8,7 @@ import {
 import {
   parseHistory, sanitizeHistoryData, enrichWithStandards,
   calcWaitTimes, calcCapacityLoss,
+  parseZpStatus, calcZpHeaderStatus, exportZpStatusCsv,
 } from './utils/analysisUtils.js';
 import { ImportTab }    from './components/tabs/ImportTab.jsx';
 import { PlanTab }      from './components/tabs/PlanTab.jsx';
@@ -17,7 +18,8 @@ import { HeatmapTab }   from './components/tabs/HeatmapTab.jsx';
 import { SwimlaneTab }  from './components/tabs/SwimlaneTab.jsx';
 import { SankeyTab }    from './components/tabs/SankeyTab.jsx';
 import { AnalysisTab }  from './components/tabs/AnalysisTab.jsx';
-import { DashboardTab } from './components/tabs/DashboardTab.jsx';
+import { DashboardTab }   from './components/tabs/DashboardTab.jsx';
+import { RealizacjaTab } from './components/tabs/RealizacjaTab.jsx';
 import './App.css';
 
 const TABS = [
@@ -29,6 +31,7 @@ const TABS = [
   { id: 'heatmap',    label: 'Heatmapa' },
   { id: 'swimlane',   label: 'Swimlane' },
   { id: 'sankey',     label: 'Przepływ (Sankey)' },
+  { id: 'realizacja', label: '🏭 Realizacja' },
   { id: 'analysis',   label: '📊 Analiza Procesu' },
 ];
 
@@ -47,6 +50,10 @@ export default function App() {
   const [historyData, setHistoryData] = useState([]);
   // rawHistory = po enrich+waits, bez capacity loss — przeliczamy reaktywnie
   const [rawHistory, setRawHistory] = useState([]);
+
+  // ── dane realizacji ───────────────────────────────────────────────────────
+  const [zpStatusData, setZpStatusData]     = useState([]);
+  const [zpStatusHeaders, setZpStatusHeaders] = useState([]);
 
   function updateSchedule(s) {
     setWcSchedule(s);
@@ -139,12 +146,6 @@ export default function App() {
         backStart, realEnd, delayH, delayDays, toc,
       };
     });
-    statuses.forEach(z => console.log(
-      z.zp_id, z.due_date,
-      'realEnd:', new Date(z.realEnd).toISOString().slice(0,16),
-      'toc:', z.toc?.zone || z.toc,
-      'delayH:', z.delayH.toFixed(1)
-    ));
     setZpStatus(statuses);
     setGanttDirty(false);
   }
@@ -209,6 +210,11 @@ export default function App() {
       if (routing.length && zpFromZS.length) setTab('plan');
     } else if (type === 'history') {
       return processHistory(text);
+    } else if (type === 'zp_status') {
+      const { records, rejected } = parseZpStatus(text);
+      setZpStatusData(records);
+      setZpStatusHeaders(calcZpHeaderStatus(records));
+      return { rejected };
     } else {
       const z = parseZP(text).map((zpItem, i) => {
         if (!zpItem.zs_id) {
@@ -221,6 +227,10 @@ export default function App() {
       if (routing.length && z.length) setTab('plan');
     }
   }, [routing, zp, wcLoadMap]);
+
+  function handleExportZpStatus() {
+    exportZpStatusCsv(zp, fwdZP, routing);
+  }
 
   function exportLoad() {
     const dates = [...new Set(zp.map(z => z.due_date))].sort();
@@ -264,15 +274,16 @@ export default function App() {
       </nav>
 
       <main className="flowops-main">
-        {tab === 'dashboard'  && <DashboardTab routing={routing} zp={zp} zpStatus={zpStatus} wcSchedule={wcSchedule} historyData={historyData} globalLookups={globalLookups} onTabChange={setTab} />}
-        {tab === 'import'     && <ImportTab routing={routing} zp={zp} historyData={historyData} onLoad={handleLoad} />}
+        {tab === 'dashboard'  && <DashboardTab routing={routing} zp={zp} zpStatus={zpStatus} wcSchedule={wcSchedule} historyData={historyData} zpStatusHeaders={zpStatusHeaders} globalLookups={globalLookups} onTabChange={setTab} />}
+        {tab === 'import'     && <ImportTab routing={routing} zp={zp} historyData={historyData} zpStatusData={zpStatusData} onLoad={handleLoad} onExportZpStatus={handleExportZpStatus} />}
         {tab === 'plan'       && <PlanTab routing={routing} zp={zp} globalLookups={globalLookups} wcSchedule={wcSchedule} subZP={subZP} fwdZP={fwdZP} zpStatus={zpStatus} ganttDirty={ganttDirty} onRecalc={() => recalcGantt()} onScheduleChange={updateSchedule} planStart={planStart} onPlanStartChange={setPlanStart} />}
         {tab === 'bottleneck' && <BottleneckTab routing={routing} zp={zp} globalLookups={globalLookups} wcSchedule={wcSchedule} subZP={subZP} />}
         {tab === 'routing'    && <RoutingTab routing={routing} zp={zp} globalLookups={globalLookups} />}
         {tab === 'heatmap'    && <HeatmapTab routing={routing} zp={zp} globalLookups={globalLookups} wcSchedule={wcSchedule} />}
         {tab === 'swimlane'   && <SwimlaneTab routing={routing} zp={zp} globalLookups={globalLookups} wcSchedule={wcSchedule} />}
         {tab === 'sankey'     && <SankeyTab routing={routing} zp={zp} globalLookups={globalLookups} wcSchedule={wcSchedule} />}
-        {tab === 'analysis'   && <AnalysisTab historyData={historyData} routing={routing} wcSchedule={wcSchedule} />}
+        {tab === 'realizacja' && <RealizacjaTab zpStatusData={zpStatusData} />}
+        {tab === 'analysis'   && <AnalysisTab historyData={historyData} routing={routing} wcSchedule={wcSchedule} zpStatusData={zpStatusData} zpStatusHeaders={zpStatusHeaders} />}
       </main>
     </div>
   );

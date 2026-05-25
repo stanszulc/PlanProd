@@ -246,6 +246,205 @@ export function calcReasonPareto(records, filterWc = null) {
   });
 }
 
+
+// ─── PARSER ZP_STATUS ────────────────────────────────────────────────────────
+
+export function parseZpStatus(text) {
+  const clean = text.replace(/^﻿/, '');
+  const lines = clean.trim().split('\n').map(l => l.trim()).filter(Boolean);
+  if (lines.length < 2) return { records: [], rejected: [] };
+  const sep = lines[0].includes(';') ? ';' : ',';
+  const headers = safeSplitCSV(lines[0], sep).map(h => h.toLowerCase());
+
+  const records = [];
+  const rejected = [];
+
+  lines.slice(1).forEach((line, idx) => {
+    const vals = safeSplitCSV(line, sep);
+    const r = {};
+    headers.forEach((h, i) => { r[h] = (vals[i] || '').trim(); });
+
+    const raw = {
+      zp_id:          r.zp_id || '',
+      parent_zp:      r.parent_zp || r.zp_id?.split('/').slice(0,2).join('/') || '',
+      zs_id:          r.zs_id || '',
+      pozycja:        parseInt(r.pozycja || 1),
+      klient:         r.klient || r.client || '',
+      product:        r.product || '',
+      operation:      r.operation || r.op || '',
+      workcenter:     (r.workcenter || r.wc || '').toUpperCase(),
+      sequence:       parseInt(r.sequence || r.seq || 1),
+      volume_plan:    Math.max(0, parseFloat(r.volume_plan || r.volume || 0)),
+      volume_actual:  Math.max(0, parseFloat(r.volume_actual || 0)),
+      status:         (r.status || 'PLAN').toUpperCase(),
+      need_date:      r.need_date || r.due_date || '',
+      planned_start:  r.planned_start || '',
+      planned_end:    r.planned_end || '',
+      actual_start:   r.actual_start || '',
+      actual_end:     r.actual_end || '',
+      priority:       parseInt(r.priority || r.prio || 1),
+      reason_code:    r.reason_code || r.reason || '',
+    };
+
+    const err = validateZpStatus(raw);
+    if (err) {
+      rejected.push({ line: idx + 2, data: raw, reason: err });
+    } else {
+      // Parsuj daty
+      const toDate = s => s ? new Date(s) : null;
+      records.push({
+        ...raw,
+        planned_start: toDate(raw.planned_start),
+        planned_end:   toDate(raw.planned_end),
+        actual_start:  toDate(raw.actual_start),
+        actual_end:    toDate(raw.actual_end),
+        reason_code:   raw.reason_code || null,
+      });
+    }
+  });
+
+  return { records, rejected };
+}
+
+function validateZpStatus(r) {
+  if (!r.zp_id)      return 'brak zp_id';
+  if (!r.product)    return 'brak product';
+  if (!r.workcenter) return 'brak workcenter';
+  if (!r.need_date)  return 'brak need_date';
+  if (!['PLAN','WIP','CNF','CNC'].includes(r.status))
+    return `nieznany status: ${r.status}`;
+  return null;
+}
+
+// ─── AGREGATY ZP_STATUS ──────────────────────────────────────────────────────
+// Wylicz status na poziomie parent_zp (ZP header) z operacji
+
+export function calcZpHeaderStatus(records) {
+  const byParent = {};
+  records.forEach(r => {
+    if (!byParent[r.parent_zp]) byParent[r.parent_zp] = [];
+    byParent[r.parent_zp].push(r);
+  });
+
+  return Object.entries(byParent).map(([parent_zp, ops]) => {
+    const first = ops[0];
+    const totalOps   = ops.length;
+    const cnfOps     = ops.filter(o => o.status === 'CNF').length;
+    const wipOps     = ops.filter(o => o.status === 'WIP').length;
+    const cncOps     = ops.filter(o => o.status === 'CNC').length;
+    const anyStarted = ops.some(o => o.actual_start);
+    const lastActual = ops
+      .filter(o => o.actual_end)
+      .reduce((best, o) => (!best || o.actual_end > best) ? o.actual_end : best, null);
+
+    // Status headera
+    let status = 'PLAN';
+    if (cncOps === totalOps)         status = 'CNC';
+    else if (cnfOps === totalOps)    status = 'CNF';
+    else if (cnfOps > 0 || wipOps > 0 || anyStarted) status = 'WIP';
+
+    // Postęp %
+    const progress_pct = Math.round((cnfOps / totalOps) * 100);
+
+    // OTD — porównaj actual_end ostatniej operacji z need_date
+    const need = first.need_date ? new Date(first.need_date + 'T23:59:59') : null;
+    const isLate = need && lastActual && lastActual > need;
+    const isAtRisk = need && status !== 'CNF' && new Date() > need;
+
+    // volume_actual = min przez wszystkie etapy (tyle sztuk przeszło cały routing)
+    const volume_actual = Math.min(...ops.map(o => o.volume_actual));
+
+    return {
+      parent_zp,
+      zs_id:       first.zs_id,
+      pozycja:     first.pozycja,
+      klient:      first.klient,
+      product:     first.product,
+      need_date:   first.need_date,
+      priority:    first.priority,
+      status,
+      progress_pct,
+      total_ops:   totalOps,
+      cnf_ops:     cnfOps,
+      volume_plan: first.volume_plan,
+      volume_actual,
+      last_actual_end: lastActual,
+      is_late:     isLate || false,
+      is_at_risk:  isAtRisk || false,
+      ops,
+    };
+  });
+}
+
+// ─── EKSPORT ZP_STATUS CSV ────────────────────────────────────────────────────
+// Generuje szablon zp_status.csv z danych planistycznych (fwdZP + zp)
+
+export function exportZpStatusCsv(zp, fwdZP, routing) {
+  // Lookup routing per product
+  const routingByProduct = {};
+  routing.forEach(r => {
+    if (!routingByProduct[r.product]) routingByProduct[r.product] = [];
+    routingByProduct[r.product].push(r);
+  });
+  Object.values(routingByProduct).forEach(ops =>
+    ops.sort((a, b) => a.sequence - b.sequence)
+  );
+
+  const rows = [[
+    'zp_id','parent_zp','zs_id','pozycja','klient','product',
+    'operation','workcenter','sequence',
+    'volume_plan','volume_actual','status',
+    'need_date','planned_start','planned_end',
+    'actual_start','actual_end','priority','reason_code'
+  ]];
+
+  zp.forEach(zpItem => {
+    const ops = routingByProduct[zpItem.product] || [];
+    ops.forEach((op, idx) => {
+      // Znajdź pasującą operację w fwdZP
+      const fwd = fwdZP.find(f =>
+        (f.parent_zp === zpItem.zp_id || f.zp_id?.startsWith(zpItem.zp_id)) &&
+        f.workcenter === op.workcenter &&
+        f.sequence === op.sequence
+      );
+
+      const zpOpId = `${zpItem.zp_id}/${String(idx+1).padStart(2,'0')}`;
+      const fmtDt = dt => dt ? new Date(dt).toISOString().slice(0,16).replace('T',' ') : '';
+
+      rows.push([
+        zpOpId,
+        zpItem.zp_id,
+        zpItem.zs_id || '',
+        zpItem.pozycja || 1,
+        zpItem.klient || '',
+        zpItem.product,
+        op.operation,
+        op.workcenter,
+        op.sequence,
+        zpItem.volume,
+        0,
+        'PLAN',
+        zpItem.due_date,
+        fwd ? fmtDt(fwd.start_dt) : '',
+        fwd ? fmtDt(fwd.end_dt)   : '',
+        '',
+        '',
+        zpItem.priority || 1,
+        '',
+      ]);
+    });
+  });
+
+  const csv = rows.map(r =>
+    r.map(v => String(v).includes(',') ? `"${v}"` : v).join(',')
+  ).join('\n');
+
+  const a = document.createElement('a');
+  a.href = 'data:text/csv;charset=utf-8,' + encodeURIComponent(csv);
+  a.download = 'zp_status.csv';
+  a.click();
+}
+
 // ─── POMOCNICZE ──────────────────────────────────────────────────────────────
 
 export function hasReasonCodes(records) {

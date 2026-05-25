@@ -46,6 +46,13 @@ ZP-002,P-SKR-ROZ-02,G-03,Zgrzewanie liniowe korpusu,2026-05-02 09:15,2026-05-02 
 ZP-002,P-SKR-ROZ-02,G-04,Wyklejanie matą kauczukową,2026-05-02 10:30,2026-05-02 12:00,50,BRAK_MATERIALU
 ZP-002,P-SKR-ROZ-02,G-05,Montaż króćców i przepustnicy,2026-05-02 12:30,2026-05-02 13:30,50,`,
   },
+  zp_status: {
+    filename: 'zp_status_przyklad.csv',
+    content: `zp_id,parent_zp,zs_id,pozycja,klient,product,operation,workcenter,sequence,volume_plan,volume_actual,status,need_date,planned_start,planned_end,actual_start,actual_end,priority,reason_code
+ZP-001/01/01,ZP-001/01,ZS-001,1,Kowalski,P-KOD,Wycinanie,G-01,1,30,30,CNF,2026-05-25,2026-05-20 07:00,2026-05-20 08:30,2026-05-20 07:00,2026-05-20 08:35,1,
+ZP-001/01/02,ZP-001/01,ZS-001,1,Kowalski,P-KOD,Gięcie,G-02,2,30,30,WIP,2026-05-25,2026-05-20 09:00,2026-05-20 13:00,2026-05-20 09:10,,1,
+ZP-001/01/03,ZP-001/01,ZS-001,1,Kowalski,P-KOD,Spawanie,G-03,3,30,0,PLAN,2026-05-25,2026-05-21 07:00,2026-05-21 10:00,,,1,`,
+  },
   schedule_hist: {
     filename: 'schedule_hist_przyklad.csv',
     content: `workcenter,date,planned_h,shift
@@ -67,10 +74,11 @@ G-05,2026-05-03,0,0`,
   },
 };
 
-export function ImportTab({ routing, zp, historyData, onLoad }) {
+export function ImportTab({ routing, zp, historyData, zpStatusData, onLoad, onExportZpStatus }) {
   const [rLoaded,  setRLoaded]  = useState(routing.length > 0);
   const [zsLoaded, setZsLoaded] = useState(false);
   const [hLoaded,  setHLoaded]  = useState(historyData.length > 0);
+  const [zpLoaded, setZpLoaded] = useState(zpStatusData?.length > 0);
   const [rejectLog, setRejectLog] = useState([]);
 
   function readFile(file, type) {
@@ -79,6 +87,11 @@ export function ImportTab({ routing, zp, historyData, onLoad }) {
       const result = onLoad(e.target.result, type);
       if (type === 'zs')      setZsLoaded(true);
       if (type === 'routing') setRLoaded(true);
+      if (type === 'zp_status') {
+        setZpLoaded(true);
+        if (result?.rejected?.length) setRejectLog(result.rejected);
+        else setRejectLog([]);
+      }
       if (type === 'history') {
         setHLoaded(true);
         if (result?.rejected?.length) setRejectLog(result.rejected);
@@ -129,13 +142,42 @@ export function ImportTab({ routing, zp, historyData, onLoad }) {
           cols={[{n:'zs_id',req:true},{n:'pozycja',req:true},{n:'klient',req:false},{n:'product',req:true},{n:'volume',req:true},{n:'due_date',req:true},{n:'priority',req:false}]} />
       </div>
 
-      {/* Plik historyczny */}
+      {/* Dane realizacji */}
       <div style={{ fontSize: 10, fontWeight: 600, letterSpacing: '0.1em', textTransform: 'uppercase', color: T.text3, marginBottom: 12 }}>
-        Dane historyczne (opcjonalne)
+        Dane realizacji (opcjonalne)
+      </div>
+      <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 16, marginBottom: 16 }}>
+        <DropBox type="zp_status" loaded={zpLoaded || zpStatusData?.length > 0} label="zp_status.csv" icon="🏭"
+          desc="Status realizacji ZP z ERP/hali — podstawa Dashboardu i ZS Trackera"
+          cols={[{n:'zp_id',req:true},{n:'parent_zp',req:true},{n:'zs_id',req:true},{n:'status',req:true},{n:'need_date',req:true},{n:'actual_start',req:false},{n:'actual_end',req:false},{n:'volume_actual',req:false}]} />
+        <div style={{ ...s.card, display: 'flex', flexDirection: 'column', gap: 10, justifyContent: 'center', alignItems: 'center' }}>
+          <div style={{ fontSize: 22 }}>📤</div>
+          <div style={{ fontSize: 12, fontWeight: 600, color: T.text, textAlign: 'center' }}>Eksportuj szablon ZP</div>
+          <div style={{ fontSize: 11, color: T.text3, textAlign: 'center', lineHeight: 1.5 }}>
+            Generuje zp_status.csv z datami z APS.<br/>Uzupełnij w ERP i wgraj z powrotem.
+          </div>
+          <button
+            type="button"
+            style={{ ...s.btn(false), fontSize: 11, width: '100%', textAlign: 'center',
+              opacity: (routing.length > 0 && zp.length > 0) ? 1 : 0.4,
+              cursor: (routing.length > 0 && zp.length > 0) ? 'pointer' : 'not-allowed' }}
+            disabled={!(routing.length > 0 && zp.length > 0)}
+            onClick={onExportZpStatus}>
+            ↓ Eksportuj ZP → CSV
+          </button>
+          {!(routing.length > 0 && zp.length > 0) && (
+            <div style={{ fontSize: 10, color: T.text3 }}>Wczytaj routing + zs najpierw</div>
+          )}
+        </div>
+      </div>
+
+      {/* Plik historyczny (legacy) */}
+      <div style={{ fontSize: 10, fontWeight: 600, letterSpacing: '0.1em', textTransform: 'uppercase', color: T.text3, marginBottom: 12 }}>
+        Dane historyczne — analiza procesu (opcjonalne)
       </div>
       <div style={{ marginBottom: 24 }}>
         <DropBox type="history" loaded={hLoaded || historyData.length > 0} label="history.csv" icon="📊"
-          desc="Rzeczywiste czasy realizacji operacji z MES/ERP — podstawa modułu Analiza Procesu"
+          desc="Rzeczywiste czasy operacji per gniazdo — podstawa modułu Analiza Procesu (box plot, heatmapa, Pareto)"
           cols={[{n:'zp_id',req:true},{n:'product',req:true},{n:'workcenter',req:true},{n:'operation',req:true},{n:'start_ts',req:true},{n:'end_ts',req:true},{n:'reason_code',req:false}]} />
       </div>
 
@@ -165,6 +207,7 @@ export function ImportTab({ routing, zp, historyData, onLoad }) {
           { key: 'zs',            label: 'zs.csv',            icon: '🧾', desc: 'Zamówienia sprzedaży · klienci · terminy' },
           { key: 'history',       label: 'history.csv',       icon: '📊', desc: 'Historia operacji · timestampy · reason codes · wolumen' },
           { key: 'schedule_hist', label: 'schedule_hist.csv', icon: '📅', desc: 'Harmonogram pracy gniazd · RBH planned · zmiany' },
+          { key: 'zp_status',     label: 'zp_status.csv',      icon: '🏭', desc: 'Status realizacji ZP · actual dates · volume_actual · reason_code' },
         ].map(({ key, label, icon, desc }) => (
           <div key={key} style={{ ...s.card, display: 'flex', flexDirection: 'column', gap: 10 }}>
             <div style={{ fontSize: 22 }}>{icon}</div>
@@ -194,7 +237,7 @@ export function ImportTab({ routing, zp, historyData, onLoad }) {
             setHLoaded(true);
             if (result?.rejected?.length) setRejectLog(result.rejected);
           }}>
-          + Załaduj demo history
++ Załaduj demo history
         </button>
       </div>
     </div>
