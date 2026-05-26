@@ -2,43 +2,40 @@ import { useMemo } from 'react';
 import { T, s, tocColor, uStatus } from '../../constants/theme.js';
 import { computeLoads } from '../../utils/scheduler.js';
 
-// toc może być obiektem {zone,...} lub stringiem
 function tocZone(toc) {
   if (!toc) return 'green';
   if (typeof toc === 'string') return toc;
   return toc.zone || 'green';
 }
 
-export function DashboardTab({ routing, zp, zpStatus, wcSchedule, historyData, globalLookups, onTabChange }) {
+export function DashboardTab({ routing, zp, zpStatus, wcSchedule, historyData, globalLookups, onTabChange, hybridMode }) {
 
   // ── KPI ────────────────────────────────────────────────────────────────────
   const kpi = useMemo(() => {
     if (!zpStatus.length) return null;
-
-    const zsSet    = new Set(zpStatus.map(z => z.zs_id).filter(Boolean));
-    const onTime   = zpStatus.filter(z => tocZone(z.toc) !== 'black').length;
-    const otd      = zpStatus.length ? Math.round((onTime / zpStatus.length) * 100) : 0;
-    const delayed  = zpStatus.filter(z => tocZone(z.toc) === 'black');
+    const zsSet     = new Set(zpStatus.map(z => z.zs_id).filter(Boolean));
+    const onTime    = zpStatus.filter(z => tocZone(z.toc) !== 'black').length;
+    const otd       = zpStatus.length ? Math.round((onTime / zpStatus.length) * 100) : 0;
+    const delayed   = zpStatus.filter(z => tocZone(z.toc) === 'black');
     const delayedZS = new Set(delayed.map(z => z.zs_id).filter(Boolean));
-
     return {
-      zsCount:    zsSet.size,
-      zpCount:    zpStatus.length,
+      zsCount:   zsSet.size,
+      zpCount:   zpStatus.length,
       otd,
       onTime,
-      delayedZP:  delayed.length,
-      delayedZS:  delayedZS.size,
+      delayedZP: delayed.length,
+      delayedZS: delayedZS.size,
     };
   }, [zpStatus]);
 
   // ── Utilization per gniazdo ────────────────────────────────────────────────
   const wcLoads = useMemo(() => {
     if (!zp.length || !routing.length) return [];
-    const dates = [...new Set(zp.map(z => z.due_date))];
+    const dates    = [...new Set(zp.map(z => z.due_date))];
     const allLoads = {};
     dates.forEach(d => {
       const zpForDate = zp.filter(z => z.due_date === d);
-      const loads = computeLoads(globalLookups.routingByProduct, zpForDate);
+      const loads     = computeLoads(globalLookups.routingByProduct, zpForDate);
       Object.entries(loads).forEach(([wc, v]) => {
         if (!allLoads[wc]) allLoads[wc] = [];
         allLoads[wc].push(v.util * 100);
@@ -56,7 +53,7 @@ export function DashboardTab({ routing, zp, zpStatus, wcSchedule, historyData, g
   // ── Alerty TOC ─────────────────────────────────────────────────────────────
   const alerts = useMemo(() => {
     return [...zpStatus]
-      .filter(z => ['black','red','yellow'].includes(tocZone(z.toc)))
+      .filter(z => ['black', 'red', 'yellow'].includes(tocZone(z.toc)))
       .sort((a, b) => {
         const order = { black: 0, red: 1, yellow: 2, green: 3 };
         return (order[tocZone(a.toc)] ?? 9) - (order[tocZone(b.toc)] ?? 9);
@@ -66,15 +63,14 @@ export function DashboardTab({ routing, zp, zpStatus, wcSchedule, historyData, g
   // ── Historia ostatnie 7 dni ────────────────────────────────────────────────
   const historyStats = useMemo(() => {
     if (!historyData.length) return null;
-    const now  = new Date();
-    const ago7 = new Date(now - 7 * 24 * 3600 * 1000);
+    const now    = new Date();
+    const ago7   = new Date(now - 7 * 24 * 3600 * 1000);
     const recent = historyData.filter(r => new Date(r.start_ts) >= ago7);
     if (!recent.length) return null;
 
-    // Per dzień
     const byDay = {};
     recent.forEach(r => {
-      const d = new Date(r.start_ts);
+      const d   = new Date(r.start_ts);
       const key = d.getFullYear() + '-' + String(d.getMonth()+1).padStart(2,'0') + '-' + String(d.getDate()).padStart(2,'0');
       if (!byDay[key]) byDay[key] = { ops: 0, devSum: 0, devCount: 0 };
       byDay[key].ops++;
@@ -86,15 +82,15 @@ export function DashboardTab({ routing, zp, zpStatus, wcSchedule, historyData, g
       .slice(-7)
       .map(([date, v]) => ({
         date,
-        ops: v.ops,
+        ops:    v.ops,
         avgDev: v.devCount ? +(v.devSum / v.devCount).toFixed(1) : null,
       }));
 
     const totalOps  = recent.length;
     const avgDevAll = recent.filter(r => r.deviation_pct != null).length
       ? +(recent.filter(r => r.deviation_pct != null)
-          .reduce((s, r) => s + r.deviation_pct, 0) /
-         recent.filter(r => r.deviation_pct != null).length).toFixed(1)
+            .reduce((s, r) => s + r.deviation_pct, 0) /
+           recent.filter(r => r.deviation_pct != null).length).toFixed(1)
       : null;
 
     return { days, totalOps, avgDevAll };
@@ -130,7 +126,7 @@ export function DashboardTab({ routing, zp, zpStatus, wcSchedule, historyData, g
           onClick={() => onTabChange('plan')}
         />
         <KpiCard
-          label="OTD"
+          label={hybridMode ? 'OTD (actual) 🔬' : 'OTD (prognoza)'}
           value={kpi ? `${kpi.otd}%` : '—'}
           sub={`${kpi?.onTime ?? 0} z ${kpi?.zpCount ?? 0} ZP na czas`}
           color={kpi?.otd >= 80 ? T.ok : kpi?.otd >= 60 ? T.warn : T.bn}
@@ -150,7 +146,7 @@ export function DashboardTab({ routing, zp, zpStatus, wcSchedule, historyData, g
           sub={`${kpi?.delayedZP ?? 0} ZP po terminie`}
           color={kpi?.delayedZS > 0 ? T.bn : T.ok}
           icon="⚠️"
-          onClick={() => onTabChange('plan')}
+          onClick={() => onTabChange('late_zs')}
         />
       </div>
 
@@ -170,19 +166,18 @@ export function DashboardTab({ routing, zp, zpStatus, wcSchedule, historyData, g
           </div>
         ) : (
           <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
-            {/* Nagłówek */}
             <div style={{ display: 'grid', gridTemplateColumns: '90px 1fr 1fr 100px 90px 80px', gap: 8, padding: '4px 8px' }}>
               {['Strefa', 'ZP', 'ZS / Klient', 'Termin', 'Opóźnienie', 'Bottleneck'].map(h => (
                 <span key={h} style={{ fontSize: 10, fontWeight: 600, textTransform: 'uppercase', letterSpacing: '0.07em', color: T.text3 }}>{h}</span>
               ))}
             </div>
             {alerts.map(z => {
-              const tc = tocColor(tocZone(z.toc));
+              const tc       = tocColor(tocZone(z.toc));
               const delayTxt = z.delayDays > 0 ? `+${z.delayDays}d` : z.toc === 'black' ? 'po term.' : '—';
               return (
                 <div key={z.zp_id}
                   style={{ display: 'grid', gridTemplateColumns: '90px 1fr 1fr 100px 90px 80px', gap: 8, padding: '8px', borderRadius: 8, background: tc.bg, border: `1px solid ${tc.border}`, alignItems: 'center', cursor: 'pointer' }}
-                  onClick={() => onTabChange('plan')}>
+                  onClick={() => onTabChange('late_zs')}>
                   <span style={{ ...s.badge(tc), fontSize: 10, justifyContent: 'center' }}>
                     {tocZone(z.toc) === 'black' ? '⚫ CZARNY' : tocZone(z.toc) === 'red' ? '🔴 CZERWONY' : '🟡 ŻÓŁTY'}
                   </span>
@@ -254,13 +249,11 @@ export function DashboardTab({ routing, zp, zpStatus, wcSchedule, historyData, g
               </div>
             </div>
 
-            {/* Mini wykres słupkowy ops per dzień */}
             <div style={{ marginBottom: 14 }}>
               <div style={{ fontSize: 10, color: T.text3, marginBottom: 6 }}>Liczba operacji per dzień</div>
               <OpsBarChart days={historyStats.days} />
             </div>
 
-            {/* Avg deviation */}
             {historyStats.avgDevAll != null && (
               <div style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '10px 12px', background: T.surface2, borderRadius: 8 }}>
                 <div style={{ fontSize: 22, fontWeight: 700, color: historyStats.avgDevAll > 20 ? T.bn : historyStats.avgDevAll > 10 ? T.warn : T.ok }}>
@@ -286,10 +279,8 @@ function KpiCard({ label, value, sub, color, icon, onClick }) {
   return (
     <div
       style={{
-        background: T.surface,
-        border: `1px solid ${T.border}`,
-        borderRadius: 12,
-        padding: '16px 18px',
+        background: T.surface, border: `1px solid ${T.border}`,
+        borderRadius: 12, padding: '16px 18px',
         cursor: onClick ? 'pointer' : 'default',
         transition: 'border-color 0.15s',
         borderLeft: `3px solid ${color}`,
@@ -323,7 +314,7 @@ function OpsBarChart({ days }) {
         const x     = PAD.l + i * barW + barW * 0.15;
         const y     = PAD.t + innerH - bH;
         const color = d.avgDev != null && d.avgDev > 20 ? T.bn : d.avgDev != null && d.avgDev > 10 ? T.warn : T.accent;
-        const label = d.date.slice(5); // MM-DD
+        const label = d.date.slice(5);
         return (
           <g key={d.date}>
             <rect x={x} y={y} width={barW * 0.7} height={Math.max(bH, 2)}

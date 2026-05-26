@@ -4,6 +4,7 @@ import { DEMO_ROUTING, DEMO_ZS } from './constants/demoData.js';
 import {
   parseRouting, parseZP, parseZS, zsToZP,
   backSchedule, forwardSchedule, tocBuffer, computeLoads, dlCSV,
+  calcHybridZpStatus,
 } from './utils/scheduler.js';
 import {
   enrichWithStandards, calcWaitTimes, calcCapacityLoss,
@@ -125,7 +126,8 @@ export default function App() {
   const [fwdZP, setFwdZP]           = useState([]);
   const [zpStatus, setZpStatus]     = useState([]);
   const [ganttDirty, setGanttDirty] = useState(true);
-  const [planStart, setPlanStart]   = useState('2026-05-22');
+  const [planStart, setPlanStart]   = useState(new Date().toISOString().slice(0,10));
+  const [hybridMode, setHybridMode] = useState(false);
 
   // ── dane analityczne (reaktywnie z zpStatusData) ──────────────────────────
   const [historyData, setHistoryData] = useState([]);
@@ -230,7 +232,16 @@ export default function App() {
     setGanttDirty(false);
   }
 
-  // ── wcLoadMap: avg utilization % per gniazdo ──────────────────────────────
+  // ── activeZpStatus — plan lub hybryda zależnie od trybu ──────────────────
+  const activeZpStatus = useMemo(() => {
+    if (!hybridMode || !zpStatusData.length) return zpStatus;
+    try {
+      return calcHybridZpStatus(zpStatus, zpStatusData, globalLookups.routingByProduct, wcSchedule, planStart);
+    } catch (err) {
+      console.warn('hybridMode fallback:', err);
+      return zpStatus;
+    }
+  }, [hybridMode, zpStatus, zpStatusData, globalLookups, wcSchedule, planStart]);
   const wcLoadMap = useMemo(() => {
     const map = {};
     if (!zp.length || !routing.length) return map;
@@ -326,6 +337,17 @@ export default function App() {
         <NavMenu menu={MENU} active={tab} onSelect={setTab}
           indicators={{ analysis: historyData.length > 0, realizacja: zpStatusData.length > 0, late_zs: zpStatus.some(z => (z.toc?.zone ?? z.toc) === 'black') }} />
 
+        {hybridMode && (
+          <div style={{
+            display: 'flex', alignItems: 'center', gap: 5,
+            padding: '3px 10px', borderRadius: 8,
+            background: 'rgba(77,148,255,0.12)', border: '1px solid rgba(77,148,255,0.3)',
+            fontSize: 11, color: '#4d94ff', fontWeight: 600,
+          }}>
+            🔬 <span>BETA: Tryb realizacja</span>
+          </div>
+        )}
+
         {hasData && (
           <button type="button" className="flowops-export-btn"
             style={{ ...s.btn(false), fontSize: 11 }} onClick={exportLoad}>
@@ -335,16 +357,16 @@ export default function App() {
       </nav>
 
       <main className="flowops-main">
-        {tab === 'dashboard'  && <DashboardTab routing={routing} zp={zp} zpStatus={zpStatus} wcSchedule={wcSchedule} historyData={historyData} zpStatusHeaders={zpStatusHeaders} globalLookups={globalLookups} onTabChange={setTab} />}
-        {tab === 'import'     && <ImportTab routing={routing} zp={zp} historyData={historyData} zpStatusData={zpStatusData} onLoad={handleLoad} onExportZpStatus={handleExportZpStatus} />}
-        {tab === 'plan'       && <PlanTab routing={routing} zp={zp} globalLookups={globalLookups} wcSchedule={wcSchedule} subZP={subZP} fwdZP={fwdZP} zpStatus={zpStatus} ganttDirty={ganttDirty} onRecalc={() => recalcGantt()} onScheduleChange={updateSchedule} planStart={planStart} onPlanStartChange={setPlanStart} />}
+        {tab === 'dashboard'  && <DashboardTab routing={routing} zp={zp} zpStatus={activeZpStatus} wcSchedule={wcSchedule} historyData={historyData} zpStatusHeaders={zpStatusHeaders} globalLookups={globalLookups} onTabChange={setTab} hybridMode={hybridMode} />}
+        {tab === 'import'     && <ImportTab routing={routing} zp={zp} historyData={historyData} zpStatusData={zpStatusData} onLoad={handleLoad} onExportZpStatus={handleExportZpStatus} hybridMode={hybridMode} onHybridModeChange={setHybridMode} />}
+        {tab === 'plan'       && <PlanTab routing={routing} zp={zp} globalLookups={globalLookups} wcSchedule={wcSchedule} subZP={subZP} fwdZP={fwdZP} zpStatus={activeZpStatus} ganttDirty={ganttDirty} onRecalc={() => recalcGantt()} onScheduleChange={updateSchedule} planStart={planStart} onPlanStartChange={setPlanStart} />}
         {tab === 'bottleneck' && <BottleneckTab routing={routing} zp={zp} globalLookups={globalLookups} wcSchedule={wcSchedule} subZP={subZP} />}
         {tab === 'routing'    && <RoutingTab routing={routing} zp={zp} globalLookups={globalLookups} />}
         {tab === 'heatmap'    && <HeatmapTab routing={routing} zp={zp} globalLookups={globalLookups} wcSchedule={wcSchedule} />}
         {tab === 'swimlane'   && <SwimlaneTab routing={routing} zp={zp} globalLookups={globalLookups} wcSchedule={wcSchedule} />}
         {tab === 'sankey'     && <SankeyTab routing={routing} zp={zp} globalLookups={globalLookups} wcSchedule={wcSchedule} />}
         {tab === 'realizacja' && <RealizacjaTab zpStatusData={zpStatusData} />}
-        {tab === 'late_zs'   && <LateZSTab zpStatus={zpStatus} />}
+        {tab === 'late_zs'   && <LateZSTab zpStatus={activeZpStatus} />}
         {tab === 'analysis'   && <AnalysisTab historyData={historyData} routing={routing} wcSchedule={wcSchedule} zpStatusData={zpStatusData} zpStatusHeaders={zpStatusHeaders} />}
       </main>
     </div>

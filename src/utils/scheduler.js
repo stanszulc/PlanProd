@@ -490,3 +490,86 @@ export function dlCSV(rows, filename) {
   a.click();
 }
 
+
+// ─── HYBRID SCHEDULE (BETA) ───────────────────────────────────────────────────
+// WIP-initialized rescheduling — używa actual_end z CNF, liczy pozostały czas
+// dla WIP, forward schedule dla PLAN.
+// Nie modyfikuje istniejących funkcji — bezpieczny fallback gdy hybridMode=false.
+
+export function calcHybridRealEnd(parentZpId, zpStatusData, routingByProduct, wcSchedule, planStart) {
+  // Pobierz wszystkie operacje dla tego parent_zp, posortowane po sequence
+  const ops = zpStatusData
+    .filter(r => r.parent_zp === parentZpId)
+    .sort((a, b) => a.sequence - b.sequence);
+
+  if (!ops.length) return null;
+
+  const product = ops[0].product;
+  const routing = (routingByProduct[product] || []).sort((a, b) => a.sequence - b.sequence);
+
+  // Znajdź anchor — koniec ostatniej CNF operacji
+  const cnfOps  = ops.filter(o => o.status === 'CNF' && o.actual_end);
+  const lastCNF = cnfOps.length
+    ? cnfOps.reduce((best, o) => o.actual_end > best.actual_end ? o : best, cnfOps[0])
+    : null;
+
+  // Znajdź operację WIP (actual_start ale brak actual_end)
+  const wipOp = ops.find(o => o.status === 'WIP' && o.actual_start && !o.actual_end);
+
+  // Kursor startowy:
+  // 1. WIP → actual_start + remaining time
+  // 2. ostatnia CNF → jej actual_end
+  // 3. brak → planStart
+  let cursor = new Date(planStart);
+
+  if (wipOp) {
+    const routeOp  = routing.find(r => r.sequence === wipOp.sequence);
+    const totalMin = routeOp ? routeOp.ct_min * wipOp.volume_plan : 0;
+    const doneMin  = wipOp.volume_actual > 0 && wipOp.volume_plan > 0
+      ? totalMin * (wipOp.volume_actual / wipOp.volume_plan)
+      : 0;
+    const remainMin = Math.max(0, totalMin - doneMin);
+    cursor = new Date(wipOp.actual_start.getTime() + remainMin * 60000);
+  } else if (lastCNF) {
+    cursor = new Date(lastCNF.actual_end);
+  }
+
+  // Pozostałe operacje PLAN — forward schedule od kursora
+  const planOps = ops.filter(o => o.status === 'PLAN');
+  if (!planOps.length) return cursor; // wszystko CNF/WIP — cursor = realEnd
+
+  const occupancy = {};
+  let lastEnd = cursor;
+
+  planOps.forEach(op => {
+    const routeOp = routing.find(r => r.sequence === op.sequence);
+    if (!routeOp) return;
+    const durH = op.volume_plan * routeOp.ct_min / 60;
+    const { endDt } = forwardScheduleOp(lastEnd, durH, op.workcenter, wcSchedule, occupancy);
+    lastEnd = endDt;
+  });
+
+  return lastEnd;
+}
+
+// Przelicz zpStatus z hybrydowym realEnd dla wszystkich ZP
+export function calcHybridZpStatus(zpStatus, zpStatusData, routingByProduct, wcSchedule, planStart) {
+  if (!zpStatusData.length) return zpStatus; // fallback — brak danych realizacji
+
+  return zpStatus.map(z => {
+    try {
+      const hybridEnd = calcHybridRealEnd(z.zp_id, zpStatusData, routingByProduct, wcSchedule, planStart);
+      if (!hybridEnd) return z; // fallback per ZP
+
+      const dueDate   = new Date(z.due_date + 'T23:59:59');
+      const delayH    = Math.max(0, (hybridEnd - dueDate) / 3600000);
+      const delayDays = +(delayH / 16).toFixed(1);
+      const toc       = tocBuffer(z.backStart, new Date(planStart), dueDate, hybridEnd);
+
+      return { ...z, realEnd: hybridEnd, delayH, delayDays, toc, hybridMode: true };
+    } catch (err) {
+      console.warn(`hybridSchedule fallback dla ${z.zp_id}:`, err);
+      return z; // fallback do planu
+    }
+  });
+}

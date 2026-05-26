@@ -41,10 +41,10 @@ ZP-001/01/03,ZP-001/01,ZS-001,1,Kowalski,P-KOD,Spawanie,G-03,3,30,0,PLAN,2026-05
   },
 };
 
-export function ImportTab({ routing, zp, zpStatusData, onLoad, onExportZpStatus }) {
-  const [rLoaded,  setRLoaded]  = useState(routing.length > 0);
-  const [zsLoaded, setZsLoaded] = useState(false);
-  const [zpLoaded, setZpLoaded] = useState(zpStatusData?.length > 0);
+export function ImportTab({ routing, zp, zpStatusData, onLoad, onExportZpStatus, hybridMode, onHybridModeChange }) {
+  const [rLoaded,   setRLoaded]   = useState(routing.length > 0);
+  const [zsLoaded,  setZsLoaded]  = useState(false);
+  const [zpLoaded,  setZpLoaded]  = useState(zpStatusData?.length > 0);
   const [rejectLog, setRejectLog] = useState([]);
 
   function readFile(file, type) {
@@ -88,7 +88,8 @@ export function ImportTab({ routing, zp, zpStatusData, onLoad, onExportZpStatus 
     </div>
   );
 
-  const hasPlanData = routing.length > 0 && zp.length > 0;
+  const hasPlanData   = routing.length > 0 && zp.length > 0;
+  const hasStatusData = zpStatusData?.length > 0;
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: 28 }}>
@@ -105,7 +106,7 @@ export function ImportTab({ routing, zp, zpStatusData, onLoad, onExportZpStatus 
             label="zs.csv" icon="🧾"
             desc="Zamówienia sprzedaży — klienci, produkty, ilości, terminy"
             cols={[{n:'zs_id',req:true},{n:'pozycja',req:true},{n:'klient',req:false},{n:'product',req:true},{n:'volume',req:true},{n:'due_date',req:true},{n:'priority',req:false}]} />
-          <DropBox type="zp_status" loaded={zpLoaded || zpStatusData?.length > 0}
+          <DropBox type="zp_status" loaded={zpLoaded || hasStatusData}
             label="zp_status.csv" icon="🏭"
             desc="Status realizacji ZP z ERP — daty, ilości, statusy operacji"
             cols={[{n:'zp_id',req:true},{n:'parent_zp',req:true},{n:'status',req:true},{n:'need_date',req:true},{n:'actual_start',req:false},{n:'actual_end',req:false},{n:'volume_actual',req:false}]} />
@@ -192,6 +193,74 @@ export function ImportTab({ routing, zp, zpStatusData, onLoad, onExportZpStatus 
               </button>
             </div>
           ))}
+        </div>
+      </section>
+
+      {/* ── 4. FUNKCJE EKSPERYMENTALNE ─────────────────────────────────────── */}
+      <section>
+        <SectionHeader icon="⚗️" label="Funkcje eksperymentalne" />
+        <div style={{
+          border: `1.5px solid ${hybridMode ? T.accent : T.border2}`,
+          borderRadius: 12, padding: 20,
+          background: hybridMode ? 'rgba(77,148,255,0.05)' : T.surface,
+          transition: 'all 0.2s',
+        }}>
+          <div style={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', gap: 16 }}>
+            <div style={{ flex: 1 }}>
+              <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 8 }}>
+                <span style={{ fontSize: 16 }}>🔬</span>
+                <span style={{ fontSize: 13, fontWeight: 700, color: T.text }}>
+                  Tryb REALIZACJA — WIP-initialized scheduling
+                </span>
+                <span style={{
+                  fontSize: 9, fontWeight: 700, letterSpacing: '0.1em',
+                  background: 'rgba(251,191,36,0.15)', color: '#fbbf24',
+                  border: '1px solid #fbbf24', borderRadius: 4, padding: '2px 6px',
+                }}>BETA</span>
+              </div>
+              <div style={{ fontSize: 11, color: T.text3, lineHeight: 1.7, marginBottom: 10 }}>
+                <strong style={{ color: T.text2 }}>Gdy włączony:</strong> opóźnienia liczone z rzeczywistych danych —
+                CNF operacje z <code style={{ color: T.accent }}>actual_end</code>,
+                WIP z pozostałego czasu, PLAN z forward schedule.<br />
+                <strong style={{ color: T.text2 }}>Gdy wyłączony:</strong> klasyczny forward schedule (tylko plan).<br />
+                <span style={{ color: T.warn }}>⚠ Wymaga wgranego zp_status.csv z wypełnionymi actual_start/actual_end.</span>
+              </div>
+              {!hasStatusData && hybridMode && (
+                <div style={{ fontSize: 11, color: T.bn, marginBottom: 6 }}>
+                  ✗ Brak zp_status.csv — tryb REALIZACJA nie ma danych, używany jest plan.
+                </div>
+              )}
+              {hasStatusData && hybridMode && (
+                <div style={{ fontSize: 11, color: T.ok }}>
+                  ✓ zp_status załadowany — tryb REALIZACJA aktywny.
+                </div>
+              )}
+            </div>
+
+            {/* Toggle */}
+            <div style={{ flexShrink: 0, display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 6 }}>
+              <div
+                onClick={() => onHybridModeChange(!hybridMode)}
+                style={{
+                  width: 48, height: 26, borderRadius: 13, cursor: 'pointer',
+                  background: hybridMode ? T.accent : T.surface3,
+                  border: `1px solid ${hybridMode ? T.accent : T.border2}`,
+                  position: 'relative', transition: 'all 0.2s',
+                }}>
+                <div style={{
+                  position: 'absolute', top: 3,
+                  left: hybridMode ? 24 : 3,
+                  width: 18, height: 18, borderRadius: '50%',
+                  background: '#fff',
+                  transition: 'left 0.2s',
+                  boxShadow: '0 1px 3px rgba(0,0,0,0.3)',
+                }} />
+              </div>
+              <span style={{ fontSize: 10, color: hybridMode ? T.accent : T.text3, fontWeight: 600 }}>
+                {hybridMode ? 'WŁĄCZONY' : 'WYŁĄCZONY'}
+              </span>
+            </div>
+          </div>
         </div>
       </section>
 
