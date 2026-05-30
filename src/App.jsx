@@ -1,5 +1,5 @@
 import React, { useState, useCallback, useMemo, useEffect } from 'react';
-import { s, PALETTE } from './constants/theme.js';
+import { s, T, PALETTE } from './constants/theme.js';
 import { DEMO_ROUTING, DEMO_ZS } from './constants/demoData.js';
 import {
   parseRouting, parseZP, parseZS, zsToZP,
@@ -37,7 +37,7 @@ const MENU = [
     { id: 'routing',    label: 'Routing' },
   ]},
   { label: '🏭 Realizacja', items: [
-    { id: 'realizacja', label: 'Lista ZP'     },
+    { id: 'realizacja', label: 'Raport OTIF'  },
     { id: 'buffer',     label: 'Bufor TOC'    },
     { id: 'buffer_zs',  label: 'Bufor ZS'     },
     { id: 'late_zs',    label: 'Spóźnione ZS' },
@@ -136,6 +136,20 @@ export default function App() {
   const [historyData, setHistoryData]         = useState([]);
   const [zpStatusData, setZpStatusData]       = useState([]);
   const [zpStatusHeaders, setZpStatusHeaders] = useState([]);
+  const [dateFrom, setDateFrom] = useState('');
+  const [dateTo,   setDateTo]   = useState('');
+
+  // ZP przefiltrowane wg zakresu dat — używane w Heatmap, Bottleneck, Swimlane, Sankey
+  const filteredZP = useMemo(() => {
+    if (!dateFrom && !dateTo) return zp;
+    return zp.filter(z =>
+      (!dateFrom || z.due_date >= dateFrom) &&
+      (!dateTo   || z.due_date <= dateTo)
+    );
+  }, [zp, dateFrom, dateTo]);
+
+  // unikalne due_dates z ZP — do quick buttons
+  const allDueDates = useMemo(() => [...new Set(zp.map(z => z.due_date))].sort(), [zp]);
 
   function updateSchedule(s) {
     setWcSchedule(s);
@@ -353,10 +367,55 @@ export default function App() {
         )}
 
         {hasData && (
-          <button type="button" className="flowops-export-btn"
-            style={{ ...s.btn(false), fontSize: 11 }} onClick={exportLoad}>
-            ↓ Eksportuj raport
-          </button>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginLeft: 'auto' }}>
+            {/* Date range picker */}
+            <div style={{ display: 'flex', alignItems: 'center', gap: 5, padding: '3px 10px', borderRadius: 8, border: `1px solid ${T.border2}`, background: T.surface2 }}>
+              <span style={{ fontSize: 11, color: T.text3 }}>od</span>
+              <input
+                type="date" value={dateFrom}
+                onChange={e => setDateFrom(e.target.value)}
+                style={{ fontSize: 11, background: 'transparent', border: 'none', color: T.text2, outline: 'none', width: 110, cursor: 'pointer' }}
+              />
+              <span style={{ fontSize: 11, color: T.text3 }}>do</span>
+              <input
+                type="date" value={dateTo}
+                onChange={e => setDateTo(e.target.value)}
+                style={{ fontSize: 11, background: 'transparent', border: 'none', color: T.text2, outline: 'none', width: 110, cursor: 'pointer' }}
+              />
+              {/* Quick buttons — +1d/+3d/+7d = pierwsze N terminów z danych */}
+              {[
+                { label: '+1d', n: 1 },
+                { label: '+3d', n: 3 },
+                { label: '+7d', n: 7 },
+              ].map(({ label, n }) => {
+                const from = allDueDates[0] || '';
+                const to   = allDueDates[Math.min(n - 1, allDueDates.length - 1)] || from;
+                const active = dateFrom === from && dateTo === to;
+                return (
+                  <button key={label} type="button"
+                    onClick={() => { setDateFrom(from); setDateTo(to); }}
+                    style={{ ...s.btnSm(active), fontSize: 10, padding: '2px 7px' }}>
+                    {label}
+                  </button>
+                );
+              })}
+              <button type="button"
+                onClick={() => { setDateFrom(''); setDateTo(''); }}
+                style={{ ...s.btnSm(!dateFrom && !dateTo), fontSize: 10, padding: '2px 7px' }}>
+                wszystkie
+              </button>
+
+            </div>
+            {(dateFrom || dateTo) && (
+              <span style={{ fontSize: 10, color: T.accent }}>
+                ● {filteredZP.length}/{zp.length} ZP
+              </span>
+            )}
+            <button type="button" className="flowops-export-btn"
+              style={{ ...s.btn(false), fontSize: 11 }} onClick={exportLoad}>
+              ↓ Eksportuj raport
+            </button>
+          </div>
         )}
       </nav>
 
@@ -364,11 +423,11 @@ export default function App() {
         {tab === 'dashboard'  && <DashboardTab routing={routing} zp={zp} zpStatus={activeZpStatus} wcSchedule={wcSchedule} historyData={historyData} zpStatusHeaders={zpStatusHeaders} globalLookups={globalLookups} onTabChange={setTab} hybridMode={hybridMode} />}
         {tab === 'import'     && <ImportTab routing={routing} zp={zp} historyData={historyData} zpStatusData={zpStatusData} onLoad={handleLoad} onExportZpStatus={handleExportZpStatus} hybridMode={hybridMode} onHybridModeChange={setHybridMode} />}
         {tab === 'plan'       && <PlanTab routing={routing} zp={zp} globalLookups={globalLookups} wcSchedule={wcSchedule} subZP={subZP} fwdZP={fwdZP} zpStatus={activeZpStatus} ganttDirty={ganttDirty} onRecalc={() => recalcGantt()} onScheduleChange={updateSchedule} planStart={planStart} onPlanStartChange={setPlanStart} />}
-        {tab === 'bottleneck' && <BottleneckTab routing={routing} zp={zp} globalLookups={globalLookups} wcSchedule={wcSchedule} subZP={subZP} />}
+        {tab === 'bottleneck' && <BottleneckTab routing={routing} zp={filteredZP} globalLookups={globalLookups} wcSchedule={wcSchedule} subZP={subZP} />}
         {tab === 'routing'    && <RoutingTab routing={routing} zp={zp} globalLookups={globalLookups} />}
-        {tab === 'heatmap'    && <HeatmapTab routing={routing} zp={zp} globalLookups={globalLookups} wcSchedule={wcSchedule} />}
-        {tab === 'swimlane'   && <SwimlaneTab routing={routing} zp={zp} globalLookups={globalLookups} wcSchedule={wcSchedule} />}
-        {tab === 'sankey'     && <SankeyTab routing={routing} zp={zp} globalLookups={globalLookups} wcSchedule={wcSchedule} />}
+        {tab === 'heatmap'    && <HeatmapTab routing={routing} zp={filteredZP} globalLookups={globalLookups} wcSchedule={wcSchedule} />}
+        {tab === 'swimlane'   && <SwimlaneTab routing={routing} zp={filteredZP} globalLookups={globalLookups} wcSchedule={wcSchedule} />}
+        {tab === 'sankey'     && <SankeyTab routing={routing} zp={filteredZP} globalLookups={globalLookups} wcSchedule={wcSchedule} />}
         {tab === 'realizacja' && <RealizacjaTab zpStatusData={zpStatusData} />}
         {tab === 'buffer'     && <BufferTab zpStatusData={zpStatusData} />}
         {tab === 'buffer_zs'  && <BufferZSTab zpStatusData={zpStatusData} />}

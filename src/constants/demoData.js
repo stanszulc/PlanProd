@@ -45,7 +45,8 @@ ZS-004,2,HVAC Południe,P-KRA-MAS-03,150,2026-05-26,4
 ZS-001,3,Klima-Tech Sp. z o.o.,P-KOD-100-100,40,2026-05-27,1
 ZS-002,3,VentPro S.A.,P-TLU-KUL-01,20,2026-05-27,2
 ZS-003,3,AirSystem Kraków,P-SKR-ROZ-02,40,2026-05-27,3
-ZS-004,3,HVAC Południe,P-KRA-MAS-03,80,2026-05-27,4`;
+ZS-004,3,HVAC Południe,P-KRA-MAS-03,80,2026-05-27,4
+ZS-011,1,Klima-Tech Sp. z o.o.,P-KOD-100-100,30,2026-05-28,1`;
 
 export const DEMO_HISTORY = `zp_id,product,workcenter,operation,start_ts,end_ts,reason_code,volume
 ZP-H01,P-KOD-100-100,G-01,"Wycinanie laserowe podstawy",2026-05-01 07:00,2026-05-01 07:03,,10
