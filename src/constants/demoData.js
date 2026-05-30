@@ -46,6 +46,7 @@ ZS-001,3,Klima-Tech Sp. z o.o.,P-KOD-100-100,40,2026-05-27,1
 ZS-002,3,VentPro S.A.,P-TLU-KUL-01,20,2026-05-27,2
 ZS-003,3,AirSystem Kraków,P-SKR-ROZ-02,40,2026-05-27,3
 ZS-004,3,HVAC Południe,P-KRA-MAS-03,80,2026-05-27,4`;
+
 export const DEMO_HISTORY = `zp_id,product,workcenter,operation,start_ts,end_ts,reason_code,volume
 ZP-H01,P-KOD-100-100,G-01,"Wycinanie laserowe podstawy",2026-05-01 07:00,2026-05-01 07:03,,10
 ZP-H01,P-KOD-100-100,G-02,"Gięcie profili podstawy",2026-05-01 07:10,2026-05-01 07:30,PRZEZBROJENIE,10
@@ -104,6 +105,7 @@ ZP-H12,P-KRA-MAS-03,G-01,"Wycinanie ramki i lameli",2026-05-15 09:00,2026-05-15 
 ZP-H12,P-KRA-MAS-03,G-02,"Gięcie ramki i profilowanie",2026-05-15 09:03,2026-05-15 09:09,PRZEZBROJENIE,60
 ZP-H12,P-KRA-MAS-03,G-04,"Montaż uszczelki i sprężynek",2026-05-15 09:36,2026-05-15 09:46,,60
 ZP-H12,P-KRA-MAS-03,G-05,"Składanie żaluzji i nitowanie",2026-05-15 10:48,2026-05-15 12:00,KONTROLA_KJ,60`;
+
 export const DEMO_ZP_STATUS = `zp_id,parent_zp,zs_id,pozycja,klient,product,operation,workcenter,sequence,volume_plan,volume_actual,status,need_date,planned_start,planned_end,actual_start,actual_end,priority,reason_code
 ZP-001/01/01,ZP-001/01,ZS-001,1,Klima-Tech Sp. z o.o.,P-KOD-100-100,"Wycinanie laserowe podstawy",G-01,1,30,30,CNF,2026-05-25,2026-05-22 07:00,2026-05-22 08:30,2026-05-22 06:57,2026-05-22 08:18,1,
 ZP-001/01/02,ZP-001/01,ZS-001,1,Klima-Tech Sp. z o.o.,P-KOD-100-100,"Gięcie profili podstawy",G-02,2,30,30,CNF,2026-05-25,2026-05-22 09:25,2026-05-22 13:25,2026-05-22 09:23,2026-05-22 14:09,1,
@@ -161,4 +163,19 @@ ZP-003/03/05,ZP-003/03,ZS-003,3,AirSystem Kraków,P-SKR-ROZ-02,"Montaż króćc�
 ZP-004/03/01,ZP-004/03,ZS-004,3,HVAC Południe,P-KRA-MAS-03,"Wycinanie ramki i lameli",G-01,1,80,0,PLAN,2026-05-27,2026-05-23 05:00,2026-05-23 05:32,,,4,
 ZP-004/03/02,ZP-004/03,ZS-004,3,HVAC Południe,P-KRA-MAS-03,"Gięcie ramki i profilowanie",G-02,2,80,0,PLAN,2026-05-27,2026-05-23 05:53,2026-05-23 06:41,,,4,
 ZP-004/03/03,ZP-004/03,ZS-004,3,HVAC Południe,P-KRA-MAS-03,"Montaż uszczelki i sprężynek",G-04,3,80,0,PLAN,2026-05-27,2026-05-23 07:36,2026-05-23 09:36,,,4,
-ZP-004/03/04,ZP-004/03,ZS-004,3,HVAC Południe,P-KRA-MAS-03,"Składanie żaluzji i nitowanie",G-05,4,80,0,PLAN,2026-05-27,2026-05-23 10:10,2026-05-23 14:10,,,4,`;
+ZP-004/03/04,ZP-004/03,ZS-004,3,HVAC Południe,P-KRA-MAS-03,"Składanie żaluzji i nitowanie",G-05,4,80,0,PLAN,2026-05-27,2026-05-23 10:10,2026-05-23 14:10,,,4,
+ZP-005/01/01,ZP-005/01,ZS-005,1,ThermoAir Wrocław,P-KOD-100-100,"Wycinanie laserowe podstawy",G-01,1,35,35,CNF,2026-05-28,2026-05-22 06:00,2026-05-22 07:45,2026-05-22 05:58,2026-05-22 07:51,1,
+ZP-005/01/02,ZP-005/01,ZS-005,1,ThermoAir Wrocław,P-KOD-100-100,"Gięcie profili podstawy",G-02,2,35,35,CNF,2026-05-28,2026-05-22 08:30,2026-05-22 12:30,2026-05-22 08:44,2026-05-22 13:10,1,PRZEZBROJENIE
+ZP-005/01/03,ZP-005/01,ZS-005,1,ThermoAir Wrocław,P-KOD-100-100,"Spawanie narożników korpusu",G-03,3,35,35,CNF,2026-05-28,2026-05-22 13:40,2026-05-22 16:40,2026-05-22 14:05,2026-05-22 17:45,1,AWARIA
+ZP-005/01/04,ZP-005/01,ZS-005,1,ThermoAir Wrocław,P-KOD-100-100,"Izolacja PIR i montaż poliwęglanu",G-04,4,35,20,WIP,2026-05-28,2026-05-23 06:00,2026-05-23 14:00,2026-05-23 06:40,,1,BRAK_MATERIALU
+ZP-005/01/05,ZP-005/01,ZS-005,1,ThermoAir Wrocław,P-KOD-100-100,"Montaż siłownika i testy KJ",G-05,5,35,0,PLAN,2026-05-28,2026-05-23 15:00,2026-05-23 22:45,,,1,
+ZP-006/01/01,ZP-006/01,ZS-006,1,ProVent Gdańsk,P-TLU-KUL-01,"Wycinanie paneli obudowy",G-01,1,18,18,CNF,2026-05-29,2026-05-22 08:00,2026-05-22 09:30,2026-05-22 07:55,2026-05-22 09:44,2,
+ZP-006/01/02,ZP-006/01,ZS-006,1,ProVent Gdańsk,P-TLU-KUL-01,"Gięcie obudowy zewnętrznej",G-02,2,18,18,CNF,2026-05-29,2026-05-22 10:10,2026-05-22 11:22,2026-05-22 10:22,2026-05-22 11:35,2,
+ZP-006/01/03,ZP-006/01,ZS-006,1,ProVent Gdańsk,P-TLU-KUL-01,"Spawanie i zgrzewanie obudowy",G-03,3,18,10,WIP,2026-05-29,2026-05-22 12:05,2026-05-22 16:35,2026-05-22 12:30,,2,KONTROLA_KJ
+ZP-006/01/04,ZP-006/01,ZS-006,1,ProVent Gdańsk,P-TLU-KUL-01,"Napełnianie kulis wełną",G-04,4,18,0,PLAN,2026-05-29,2026-05-22 17:10,2026-05-23 03:30,,,2,
+ZP-006/01/05,ZP-006/01,ZS-006,1,ProVent Gdańsk,P-TLU-KUL-01,"Montaż końcowy i nitowanie",G-05,5,18,0,PLAN,2026-05-29,2026-05-23 04:05,2026-05-23 07:05,,,2,
+ZP-007/01/01,ZP-007/01,ZS-007,1,KlimaSystem Łódź,P-SKR-ROZ-02,"Wycinanie obudowy skrzynki",G-01,1,45,45,CNF,2026-05-30,2026-05-23 06:00,2026-05-23 06:45,2026-05-23 06:02,2026-05-23 06:51,3,
+ZP-007/01/02,ZP-007/01,ZS-007,1,KlimaSystem Łódź,P-SKR-ROZ-02,"Gięcie skrzynki",G-02,2,45,45,CNF,2026-05-30,2026-05-23 07:20,2026-05-23 08:50,2026-05-23 07:35,2026-05-23 09:05,3,
+ZP-007/01/03,ZP-007/01,ZS-007,1,KlimaSystem Łódź,P-SKR-ROZ-02,"Zgrzewanie liniowe korpusu",G-03,3,45,45,CNF,2026-05-30,2026-05-23 09:30,2026-05-23 11:00,2026-05-23 09:28,2026-05-23 11:22,3,INNE
+ZP-007/01/04,ZP-007/01,ZS-007,1,KlimaSystem Łódź,P-SKR-ROZ-02,"Wyklejanie matą kauczukową",G-04,4,45,30,WIP,2026-05-30,2026-05-23 11:45,2026-05-23 15:30,2026-05-23 12:10,,3,
+ZP-007/01/05,ZP-007/01,ZS-007,1,KlimaSystem Łódź,P-SKR-ROZ-02,"Montaż króćców i przepustnicy",G-05,5,45,0,PLAN,2026-05-30,2026-05-23 16:10,2026-05-23 19:10,,,3,`;

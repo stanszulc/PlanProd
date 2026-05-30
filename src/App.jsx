@@ -21,7 +21,9 @@ import { SankeyTab }     from './components/tabs/SankeyTab.jsx';
 import { AnalysisTab }   from './components/tabs/AnalysisTab.jsx';
 import { DashboardTab }  from './components/tabs/DashboardTab.jsx';
 import { RealizacjaTab } from './components/tabs/RealizacjaTab.jsx';
-import { LateZSTab }    from './components/tabs/LateZSTab.jsx';
+import { LateZSTab }     from './components/tabs/LateZSTab.jsx';
+import { BufferTab }     from './components/tabs/BufferTab.jsx';
+import { BufferZSTab }   from './components/tabs/BufferZSTab.jsx';
 import './App.css';
 
 const MENU = [
@@ -32,17 +34,19 @@ const MENU = [
     { id: 'heatmap',    label: 'Heatmapa obciążeń' },
     { id: 'swimlane',   label: 'Swimlane' },
     { id: 'sankey',     label: 'Przepływ (Sankey)' },
+    { id: 'routing',    label: 'Routing' },
   ]},
   { label: '🏭 Realizacja', items: [
-    { id: 'realizacja', label: 'Lista ZP' },
+    { id: 'realizacja', label: 'Lista ZP'     },
+    { id: 'buffer',     label: 'Bufor TOC'    },
+    { id: 'buffer_zs',  label: 'Bufor ZS'     },
     { id: 'late_zs',    label: 'Spóźnione ZS' },
   ]},
   { label: '📊 Analityka', items: [
     { id: 'analysis', label: 'Analiza Procesu' },
   ]},
   { label: '⚙️', items: [
-    { id: 'import',  label: 'Import / Eksport' },
-    { id: 'routing', label: 'Routing' },
+    { id: 'import', label: 'Import / Eksport' },
   ]},
 ];
 
@@ -126,13 +130,10 @@ export default function App() {
   const [fwdZP, setFwdZP]           = useState([]);
   const [zpStatus, setZpStatus]     = useState([]);
   const [ganttDirty, setGanttDirty] = useState(true);
-  const [planStart, setPlanStart]   = useState(new Date().toISOString().slice(0,10));
+  const [planStart, setPlanStart]   = useState('2026-05-22');
   const [hybridMode, setHybridMode] = useState(false);
 
-  // ── dane analityczne (reaktywnie z zpStatusData) ──────────────────────────
-  const [historyData, setHistoryData] = useState([]);
-
-  // ── dane realizacji ───────────────────────────────────────────────────────
+  const [historyData, setHistoryData]         = useState([]);
   const [zpStatusData, setZpStatusData]       = useState([]);
   const [zpStatusHeaders, setZpStatusHeaders] = useState([]);
 
@@ -141,7 +142,6 @@ export default function App() {
     setGanttDirty(true);
   }
 
-  // Inicjuj wcSchedule gdy pojawi się nowy routing
   useEffect(() => {
     if (routing.length > 0) {
       const wcs = [...new Set(routing.map(r => r.workcenter))].sort();
@@ -208,11 +208,11 @@ export default function App() {
       const lastFwdOp = fwdOps.length
         ? fwdOps.reduce((best, op) => op.sequence > best.sequence ? op : best, fwdOps[0])
         : null;
-      const realEnd  = lastFwdOp ? lastFwdOp.end_dt : planStartDt;
-      const delayH   = Math.max(0, (new Date(realEnd) - dueDate) / 3600000);
+      const realEnd   = lastFwdOp ? lastFwdOp.end_dt : planStartDt;
+      const delayH    = Math.max(0, (new Date(realEnd) - dueDate) / 3600000);
       const delayDays = +(delayH / 16).toFixed(1);
-      const toc = tocBuffer(backStart, planStartDt, dueDate, new Date(realEnd));
-      const fwdForZP   = fwdResult.filter(s => s.parent_zp === zpItem.zp_id || s.zp_id === zpItem.zp_id);
+      const toc       = tocBuffer(backStart, planStartDt, dueDate, new Date(realEnd));
+      const fwdForZP  = fwdResult.filter(s => s.parent_zp === zpItem.zp_id || s.zp_id === zpItem.zp_id);
       const bottleneck = fwdForZP.length
         ? fwdForZP.reduce((b, op) => op.durH > b.durH ? op : b, fwdForZP[0])
         : null;
@@ -232,7 +232,6 @@ export default function App() {
     setGanttDirty(false);
   }
 
-  // ── activeZpStatus — plan lub hybryda zależnie od trybu ──────────────────
   const activeZpStatus = useMemo(() => {
     if (!hybridMode || !zpStatusData.length) return zpStatus;
     try {
@@ -242,6 +241,7 @@ export default function App() {
       return zpStatus;
     }
   }, [hybridMode, zpStatus, zpStatusData, globalLookups, wcSchedule, planStart]);
+
   const wcLoadMap = useMemo(() => {
     const map = {};
     if (!zp.length || !routing.length) return map;
@@ -261,8 +261,6 @@ export default function App() {
     return map;
   }, [zp, routing, globalLookups]);
 
-  // ── Reaktywne przeliczanie historyData z zpStatusData ─────────────────────
-  // Zastępuje processHistory + rawHistory — jedno źródło prawdy
   useEffect(() => {
     if (zpStatusData.length) {
       const withWaits = zpStatusToHistoryFormat(zpStatusData, routing);
@@ -335,7 +333,13 @@ export default function App() {
         <span className="flowops-nav-brand">FlowOps</span>
 
         <NavMenu menu={MENU} active={tab} onSelect={setTab}
-          indicators={{ analysis: historyData.length > 0, realizacja: zpStatusData.length > 0, late_zs: zpStatus.some(z => (z.toc?.zone ?? z.toc) === 'black') }} />
+          indicators={{
+            analysis:   historyData.length > 0,
+            realizacja: zpStatusData.length > 0,
+            buffer:     zpStatusData.length > 0,
+            buffer_zs:  zpStatusData.length > 0,
+            late_zs:    zpStatus.some(z => (z.toc?.zone ?? z.toc) === 'black'),
+          }} />
 
         {hybridMode && (
           <div style={{
@@ -366,7 +370,9 @@ export default function App() {
         {tab === 'swimlane'   && <SwimlaneTab routing={routing} zp={zp} globalLookups={globalLookups} wcSchedule={wcSchedule} />}
         {tab === 'sankey'     && <SankeyTab routing={routing} zp={zp} globalLookups={globalLookups} wcSchedule={wcSchedule} />}
         {tab === 'realizacja' && <RealizacjaTab zpStatusData={zpStatusData} />}
-        {tab === 'late_zs'   && <LateZSTab zpStatus={activeZpStatus} />}
+        {tab === 'buffer'     && <BufferTab zpStatusData={zpStatusData} />}
+        {tab === 'buffer_zs'  && <BufferZSTab zpStatusData={zpStatusData} />}
+        {tab === 'late_zs'    && <LateZSTab zpStatus={activeZpStatus} />}
         {tab === 'analysis'   && <AnalysisTab historyData={historyData} routing={routing} wcSchedule={wcSchedule} zpStatusData={zpStatusData} zpStatusHeaders={zpStatusHeaders} />}
       </main>
     </div>
