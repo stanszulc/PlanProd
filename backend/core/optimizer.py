@@ -1,27 +1,22 @@
 """
 PlanProd — optimizer.py
-OR-Tools CP-SAT solver — finite capacity job shop scheduling
-Dane: demoData.js (ZP-001..007, routing 4 produkty, 5 centrów roboczych)
+OR-Tools CP-SAT job shop scheduling + symulacja grafików
 
-Cel: minimalizacja makespan (najwcześniejsze zakończenie wszystkich ZP)
-Ograniczenia:
-  - precedence: operacja N startuje po zakończeniu N-1 (lub N-2 przy parallel |)
-  - capacity: każde centrum robocze przetwarza max 1 ZP w danym czasie
-  - horizon: max 7 dni roboczych (2520 minut)
+Podejście: czas operacji przeliczany z minut roboczych na minuty
+kalendarzowe (z uwzględnieniem przerw nocnych). Solver operuje
+na minutach kalendarzowych — brak konfliktów INFEASIBLE.
 
 Uruchomienie:
   python optimizer.py
-
-Docelowo: core/optimizer.py w PlanProd-backend (FastAPI)
 """
 
 from ortools.sat.python import cp_model
 from datetime import datetime, timedelta
-import io
-import csv
+import io, csv
+from itertools import product as iterproduct
 
 # ---------------------------------------------------------------------------
-# 1. DANE DEMO (przepisane z demoData.js)
+# 1. DANE DEMO
 # ---------------------------------------------------------------------------
 
 ROUTING_CSV = """product,operation,workcenter,ct_min,sequence,predecessors
@@ -59,31 +54,25 @@ ZP-010,P-KRA-MAS-03,80,2026-05-27,4
 ZP-011,P-SKR-ROZ-02,40,2026-05-27,3
 ZP-012,P-TLU-KUL-01,20,2026-05-27,2"""
 
-WORKCENTER_CAPACITY_H = 8  # godzin/dzień
-
+ALL_WCS      = ['G-01', 'G-02', 'G-03', 'G-04', 'G-05']
+BASE_H       = 8
+HORIZON_DAYS = 30
+START_DT     = datetime(2026, 5, 22, 7, 0)
 
 # ---------------------------------------------------------------------------
 # 2. PARSER
 # ---------------------------------------------------------------------------
 
 def parse_routing(csv_text):
-    """Zwraca dict: product -> list of {seq, operation, workcenter, ct_min, predecessors}"""
     routing = {}
-    reader = csv.DictReader(io.StringIO(csv_text.strip()))
-    for row in reader:
+    for row in csv.DictReader(io.StringIO(csv_text.strip())):
         p = row['product']
-        if p not in routing:
-            routing[p] = []
-        preds = []
-        if row['predecessors'].strip():
-            for pred in row['predecessors'].strip().split('|'):
-                preds.append(int(pred.strip()))
-        routing[p].append({
-            'seq':        int(row['sequence']),
-            'operation':  row['operation'],
-            'workcenter': row['workcenter'],
-            'ct_min':     float(row['ct_min']),
-            'predecessors': preds,
+        routing.setdefault(p, []).append({
+            'seq':          int(row['sequence']),
+            'operation':    row['operation'],
+            'workcenter':   row['workcenter'],
+            'ct_min':       float(row['ct_min']),
+            'predecessors': [int(x) for x in row['predecessors'].strip().split('|') if x.strip()],
         })
     for p in routing:
         routing[p].sort(key=lambda x: x['seq'])
@@ -91,10 +80,8 @@ def parse_routing(csv_text):
 
 
 def parse_zp(csv_text):
-    """Zwraca listę ZP z przeliczonym czasem trwania operacji (ct_min * volume)"""
     zps = []
-    reader = csv.DictReader(io.StringIO(csv_text.strip()))
-    for row in reader:
+    for row in csv.DictReader(io.StringIO(csv_text.strip())):
         zps.append({
             'zp_id':    row['zp_id'],
             'product':  row['product'],
@@ -104,217 +91,222 @@ def parse_zp(csv_text):
         })
     return zps
 
+# ---------------------------------------------------------------------------
+# 3. KALKULATOR KALENDARZA
+#    Przelicza minuty robocze → minuty kalendarzowe
+#    Operacje trwają tyle samo roboczo, ale w kalendarzu są dłuższe
+#    bo solver widzi ciągły czas od 0
+# ---------------------------------------------------------------------------
+
+def work_to_cal(work_min, cap_h):
+    """
+    Przelicza minuty robocze na minuty kalendarzowe.
+    Np. przy 8h: 490 min roboczych = 1 dzień (480) + 10 min
+                 → 24h*60 + 10 = 1450 min kalendarzowych
+    """
+    if cap_h >= 24:
+        return work_min
+    day_work = cap_h * 60
+    days     = work_min // day_work
+    rem      = work_min % day_work
+    return days * 24 * 60 + rem
+
+
+def due_to_cal(due_dt, cap_h):
+    """Przelicza datę terminu na minuty kalendarzowe od START_DT."""
+    cal_days = (due_dt - START_DT).days
+    return cal_days * 24 * 60 + cap_h * 60  # koniec ostatniego dnia roboczego
+
+
+def cal_to_dt(cal_min):
+    """Przelicza minuty kalendarzowe na datetime."""
+    return START_DT + timedelta(minutes=cal_min)
 
 # ---------------------------------------------------------------------------
-# 3. BUDOWANIE MODELU CP-SAT
+# 4. SOLVER
 # ---------------------------------------------------------------------------
 
-def build_schedule(zps, routing, horizon_days=30):
+def solve(zps, routing, wc_hours, time_limit=10.0):
     """
-    Job Shop Scheduling z OR-Tools CP-SAT.
-
-    Każde ZP = job, każda operacja = task.
-    Zmienne: start_var, end_var, interval_var per (zp, operacja).
-    Ograniczenia:
-      - precedence między operacjami tego samego ZP
-      - no-overlap na każdym centrum roboczym (finite capacity)
-    Cel: minimalizacja makespan (max end_var wszystkich tasków).
+    Uruchamia CP-SAT z podanym grafikiem.
+    Czasy operacji są przeliczone na minuty kalendarzowe.
+    Zwraca (makespan_cal, zp_ends_cal) lub None.
     """
-    model = cp_model.CpModel()
+    model   = cp_model.CpModel()
+    horizon = HORIZON_DAYS * 24 * 60
 
-    horizon = horizon_days * WORKCENTER_CAPACITY_H * 60  # minuty
-
-    # Struktury pomocnicze
-    all_tasks = {}      # (zp_id, seq) -> {start, end, interval}
-    wc_intervals = {}   # workcenter -> [interval_var]
+    all_tasks    = {}
+    wc_intervals = {}
 
     for zp in zps:
-        product = zp['product']
-        zp_id   = zp['zp_id']
-        volume  = zp['volume']
-        ops     = routing.get(product, [])
+        zp_id  = zp['zp_id']
+        volume = zp['volume']
+        for op in routing.get(zp['product'], []):
+            seq        = op['seq']
+            wc         = op['workcenter']
+            cap_h      = wc_hours.get(wc, BASE_H)
+            work_min   = max(1, int(op['ct_min'] * volume))
+            cal_dur    = work_to_cal(work_min, cap_h)
 
-        for op in ops:
-            seq = op['seq']
-            # Czas trwania: ct_min * volume (minuty całkowite)
-            duration = int(op['ct_min'] * volume)
-            if duration < 1:
-                duration = 1
-
-            suffix = f"_{zp_id}_op{seq}"
-            start_var    = model.NewIntVar(0, horizon, f"start{suffix}")
-            end_var      = model.NewIntVar(0, horizon, f"end{suffix}")
-            interval_var = model.NewIntervalVar(start_var, duration, end_var, f"interval{suffix}")
+            sfx = f"_{zp_id}_s{seq}"
+            s   = model.NewIntVar(0, horizon, f"s{sfx}")
+            e   = model.NewIntVar(0, horizon, f"e{sfx}")
+            iv  = model.NewIntervalVar(s, cal_dur, e, f"iv{sfx}")
 
             all_tasks[(zp_id, seq)] = {
-                'start':    start_var,
-                'end':      end_var,
-                'interval': interval_var,
-                'duration': duration,
-                'wc':       op['workcenter'],
-                'op_name':  op['operation'],
+                'start': s, 'end': e, 'interval': iv,
+                'cal_dur': cal_dur, 'wc': wc,
             }
+            wc_intervals.setdefault(wc, []).append(iv)
 
-            wc = op['workcenter']
-            if wc not in wc_intervals:
-                wc_intervals[wc] = []
-            wc_intervals[wc].append(interval_var)
-
-    # Ograniczenia precedencji
+    # Precedencje
     for zp in zps:
-        product = zp['product']
-        zp_id   = zp['zp_id']
-        ops     = routing.get(product, [])
-
-        for op in ops:
-            seq   = op['seq']
-            preds = op['predecessors']
-            if not preds:
-                continue
-            for pred_seq in preds:
-                if (zp_id, pred_seq) in all_tasks and (zp_id, seq) in all_tasks:
+        zp_id = zp['zp_id']
+        for op in routing.get(zp['product'], []):
+            for ps in op['predecessors']:
+                if (zp_id, ps) in all_tasks and (zp_id, op['seq']) in all_tasks:
                     model.Add(
-                        all_tasks[(zp_id, seq)]['start'] >=
-                        all_tasks[(zp_id, pred_seq)]['end']
+                        all_tasks[(zp_id, op['seq'])]['start'] >=
+                        all_tasks[(zp_id, ps)]['end']
                     )
 
-    # No-overlap na centrum roboczym (finite capacity = 1 ZP na raz)
-    for wc, intervals in wc_intervals.items():
-        model.AddNoOverlap(intervals)
+    # No-overlap per centrum (bez blocked intervals — czas jest już kalendaryzowany)
+    for wc, ivs in wc_intervals.items():
+        if len(ivs) > 1:
+            model.AddNoOverlap(ivs)
 
-    # Cel: minimalizacja makespan
-    makespan = model.NewIntVar(0, horizon, 'makespan')
-    model.AddMaxEquality(makespan, [
-        t['end'] for t in all_tasks.values()
-    ])
+    # Makespan
+    makespan = model.NewIntVar(0, horizon, 'ms')
+    model.AddMaxEquality(makespan, [t['end'] for t in all_tasks.values()])
     model.Minimize(makespan)
 
-    return model, all_tasks, makespan
-
-
-# ---------------------------------------------------------------------------
-# 4. SOLVE I WYNIKI
-# ---------------------------------------------------------------------------
-
-def solve_and_print(zps, routing):
-    print("=" * 70)
-    print("PlanProd — OR-Tools CP-SAT Job Shop Optimizer")
-    print("=" * 70)
-
-    model, all_tasks, makespan_var = build_schedule(zps, routing)
-
     solver = cp_model.CpSolver()
-    solver.parameters.max_time_in_seconds = 30.0
-    solver.parameters.num_search_workers  = 4
+    solver.parameters.max_time_in_seconds = time_limit
     solver.parameters.log_search_progress = False
-
+    solver.parameters.num_search_workers  = 4
     status = solver.Solve(model)
 
     if status not in (cp_model.OPTIMAL, cp_model.FEASIBLE):
-        print("❌ Brak rozwiązania!")
-        return
+        return None
 
-    tag = "OPTIMAL" if status == cp_model.OPTIMAL else "FEASIBLE"
-    makespan_h = solver.Value(makespan_var) / 60
-    print(f"\n✅ Rozwiązanie: {tag}")
-    print(f"   Makespan: {makespan_h:.1f} h ({makespan_h/8:.1f} dni roboczych)\n")
-
-    # Harmonogram per centrum robocze
-    print(f"{'Centrum':<8} {'ZP':<12} {'Operacja':<42} {'Start':>8} {'Koniec':>8} {'Czas h':>6}")
-    print("-" * 90)
-
-    rows = []
-    for (zp_id, seq), task in all_tasks.items():
-        rows.append({
-            'wc':      task['wc'],
-            'zp_id':   zp_id,
-            'op':      task['op_name'],
-            'start':   solver.Value(task['start']),
-            'end':     solver.Value(task['end']),
-            'dur_min': task['duration'],
-        })
-
-    rows.sort(key=lambda r: (r['wc'], r['start']))
-
-    current_wc = None
-    for r in rows:
-        if r['wc'] != current_wc:
-            if current_wc is not None:
-                print()
-            current_wc = r['wc']
-
-        start_h = r['start'] / 60
-        end_h   = r['end'] / 60
-        dur_h   = r['dur_min'] / 60
-        print(f"{r['wc']:<8} {r['zp_id']:<12} {r['op'][:42]:<42} {start_h:>7.1f}h {end_h:>7.1f}h {dur_h:>5.1f}h")
-
-    # Analiza terminowości per ZP
-    print("\n" + "=" * 70)
-    print("Analiza terminowości ZP")
-    print("=" * 70)
-    print(f"{'ZP':<12} {'Termin':>12} {'Koniec planu':>14} {'Status':<12} {'Opóźnienie':>12}")
-    print("-" * 65)
-
-    # Szukamy max end per ZP
+    ms_val  = solver.Value(makespan)
     zp_ends = {}
-    for (zp_id, seq), task in all_tasks.items():
-        end_val = solver.Value(task['end'])
-        if zp_id not in zp_ends or end_val > zp_ends[zp_id]:
-            zp_ends[zp_id] = end_val
+    for (zp_id, seq), t in all_tasks.items():
+        v = solver.Value(t['end'])
+        if zp_id not in zp_ends or v > zp_ends[zp_id]:
+            zp_ends[zp_id] = v
 
-    start_dt = datetime(2026, 5, 22, 7, 0)  # start harmonogramu
+    return ms_val, zp_ends
 
-    for zp in sorted(zps, key=lambda x: x['due_date']):
-        zp_id    = zp['zp_id']
-        due      = zp['due_date']
-        end_min  = zp_ends.get(zp_id, 0)
-        end_dt   = start_dt + timedelta(minutes=end_min)
+# ---------------------------------------------------------------------------
+# 5. LICZENIE SPÓŹNIONYCH
+# ---------------------------------------------------------------------------
 
-        # Przybliżony termin w minutach od startu (dni robocze 8h)
-        due_days = (due - start_dt).days
-        due_min  = due_days * WORKCENTER_CAPACITY_H * 60
+def count_tardy(zps, zp_ends, wc_hours):
+    max_h = max(wc_hours.values())
+    tardy = []
+    for zp in zps:
+        due_cal = due_to_cal(zp['due_date'], max_h)
+        if zp_ends.get(zp['zp_id'], 0) > due_cal:
+            tardy.append(zp['zp_id'])
+    return tardy
 
-        if end_min <= due_min:
-            status = "✅ NA CZAS"
-            delay  = ""
-        else:
-            delay_h = (end_min - due_min) / 60
-            status  = "❌ OPÓŹNIENIE"
-            delay   = f"+{delay_h:.1f}h"
+# ---------------------------------------------------------------------------
+# 6. SYMULACJA GRAFIKÓW
+# ---------------------------------------------------------------------------
 
-        print(f"{zp_id:<12} {due.strftime('%Y-%m-%d'):>12} {end_dt.strftime('%m-%d %H:%M'):>14}  {status:<14} {delay:>10}")
+def simulate(zps, routing):
+    # Krok 0: bazowy run → utilizacje
+    base_hours = {wc: BASE_H for wc in ALL_WCS}
+    res0 = solve(zps, routing, base_hours, time_limit=15.0)
+    if res0 is None:
+        print("❌ Bazowy plan nie znaleziony"); return
 
-    # Obciążenie centrów roboczych
-    print("\n" + "=" * 70)
-    print("Obciążenie centrów roboczych")
+    ms0, ends0   = res0
+    base_tardy   = count_tardy(zps, ends0, base_hours)
+
+    # Proxy utilizacji: łączny czas roboczy / makespan_cal
+    wc_load = {wc: 0 for wc in ALL_WCS}
+    for zp in zps:
+        for op in routing.get(zp['product'], []):
+            wc_load[op['workcenter']] += int(op['ct_min'] * zp['volume'])
+
+    candidates = [wc for wc in ALL_WCS if (wc_load[wc] / ms0) >= 0.40]
+
     print("=" * 70)
-    print(f"{'Centrum':<10} {'Łączny czas h':>14} {'Makespan h':>12} {'Utilizacja %':>13}")
-    print("-" * 52)
-
-    wc_load = {}
-    for r in rows:
-        wc_load[r['wc']] = wc_load.get(r['wc'], 0) + r['dur_min']
-
-    for wc in sorted(wc_load):
-        load_h = wc_load[wc] / 60
-        util   = (wc_load[wc] / solver.Value(makespan_var)) * 100 if solver.Value(makespan_var) > 0 else 0
-        print(f"{wc:<10} {load_h:>14.1f} {makespan_h:>12.1f} {util:>12.1f}%")
-
-    print(f"\n{'WĄSKIE GARDŁO (CCR)':}")
-    max_wc  = max(wc_load, key=wc_load.get)
-    max_h   = wc_load[max_wc] / 60
-    print(f"  → {max_wc} ({max_h:.1f}h łącznego czasu operacji)")
-
-    print("\n" + "=" * 70)
-    print(f"Solver stats: {solver.WallTime():.2f}s | branches: {solver.NumBranches()}")
+    print("SYMULACJA GRAFIKÓW — PlanProd OR-Tools CP-SAT")
     print("=" * 70)
+    print(f"Bazowy makespan : {ms0/60:.1f}h kalendarzowych")
+    print(f"Spóźnione ZP    : {len(base_tardy)} / {len(zps)}")
+    print(f"Kandydaci (≥40%): {candidates}")
+
+    SHIFT_OPTIONS = [BASE_H, 10, 12, 16]
+    options = {wc: (SHIFT_OPTIONS if wc in candidates else [BASE_H]) for wc in ALL_WCS}
+    combos  = list(iterproduct(*[options[wc] for wc in ALL_WCS]))
+    print(f"Kombinacji      : {len(combos)}\n")
+
+    results = []
+    for idx, combo in enumerate(combos, 1):
+        wc_hours = dict(zip(ALL_WCS, combo))
+        res = solve(zps, routing, wc_hours, time_limit=8.0)
+        if res is None:
+            continue
+        ms_val, zp_ends = res
+        tardy   = count_tardy(zps, zp_ends, wc_hours)
+        extra_h = sum(max(0, h - BASE_H) for h in wc_hours.values())
+        results.append({
+            'wc_hours': wc_hours, 'makespan': ms_val,
+            'tardy': tardy, 'n_tardy': len(tardy),
+            'extra_h': extra_h, 'zp_ends': zp_ends,
+        })
+        zmiany = [f"{wc}:{h}h" for wc, h in wc_hours.items() if h > BASE_H]
+        print(f"  [{idx:>3}/{len(combos)}] {', '.join(zmiany) or 'bazowy':<30} "
+              f"spóźnione: {len(tardy):>2}  makespan: {ms_val/60:>6.1f}h", flush=True)
+
+    if not results:
+        print("❌ Brak wyników"); return
+
+    results.sort(key=lambda r: (r['n_tardy'], r['makespan'], r['extra_h']))
+
+    # Tabela wyników
+    print("\n" + "=" * 70)
+    print(f"{'#':<4} {'Spóźnione':>10} {'Makespan h':>11} {'Nadgodz.':>9}  Rozszerzone centra")
+    print("-" * 70)
+    for i, r in enumerate(results[:10], 1):
+        zmiany = [f"{wc}:{h}h" for wc, h in r['wc_hours'].items() if h > BASE_H]
+        tag    = " ◀ TOP" if i <= 3 else ""
+        print(f"{i:<4} {r['n_tardy']:>10} {r['makespan']/60:>10.1f}h {r['extra_h']:>9}h  "
+              f"{', '.join(zmiany) or 'brak zmian'}{tag}")
+
+    # Top 3 szczegóły
+    print("\n" + "=" * 70)
+    print("SZCZEGÓŁY TOP 3")
+    print("=" * 70)
+
+    for rank, r in enumerate(results[:3], 1):
+        zmiany  = [f"{wc}:{h}h" for wc, h in r['wc_hours'].items() if h > BASE_H]
+        max_h   = max(r['wc_hours'].values())
+        print(f"\n{'─'*70}")
+        print(f"#{rank}  Spóźnione: {r['n_tardy']} ZP | Makespan: {r['makespan']/60:.1f}h | Nadgodziny: {r['extra_h']}h/dzień łącznie")
+        print(f"Grafik: {', '.join(zmiany) or 'bazowy'}")
+        print(f"\n  {'ZP':<12} {'Termin':>12} {'Koniec plan':>13}  Status")
+        for zp in sorted(zps, key=lambda x: x['due_date']):
+            zp_id   = zp['zp_id']
+            end_cal = r['zp_ends'].get(zp_id, 0)
+            end_dt  = cal_to_dt(end_cal)
+            due_cal = due_to_cal(zp['due_date'], max_h)
+            status  = "✅ na czas" if end_cal <= due_cal else "❌ spóźnione"
+            print(f"  {zp_id:<12} {zp['due_date'].strftime('%Y-%m-%d'):>12} "
+                  f"{end_dt.strftime('%m-%d %H:%M'):>13}  {status}")
+
+    return results
 
 
 # ---------------------------------------------------------------------------
-# 5. MAIN
+# 7. MAIN
 # ---------------------------------------------------------------------------
 
 if __name__ == '__main__':
     routing = parse_routing(ROUTING_CSV)
     zps     = parse_zp(ZP_CSV)
-    solve_and_print(zps, routing)
+    simulate(zps, routing)
