@@ -1,9 +1,9 @@
-import React, { useState, useCallback, useMemo, useEffect } from 'react';
+import React, { useState, useCallback, useMemo, useEffect, useRef } from 'react';
 import { s, T, PALETTE } from './constants/theme.js';
-import { DEMO_ROUTING, DEMO_ZS } from './constants/demoData.js';
+import { DEMO_ERP_ZP, DEMO_ZP_STATUS } from './constants/demoData.js';
 import {
-  parseRouting, parseZP, parseZS, zsToZP,
-  backSchedule, forwardSchedule, tocBuffer, computeLoads, dlCSV,
+  parseZPFromERP, erpZpToSchedulerInput,
+  tocBuffer, computeLoads, dlCSV,
   calcHybridZpStatus,
 } from './utils/scheduler.js';
 import {
@@ -24,6 +24,7 @@ import { RealizacjaTab } from './components/tabs/RealizacjaTab.jsx';
 import { LateZSTab }     from './components/tabs/LateZSTab.jsx';
 import { BufferTab }     from './components/tabs/BufferTab.jsx';
 import { BufferZSTab }   from './components/tabs/BufferZSTab.jsx';
+import { ScheduleDebugTab } from './components/tabs/ScheduleDebugTab.jsx';
 import './App.css';
 
 const MENU = [
@@ -46,7 +47,8 @@ const MENU = [
     { id: 'analysis', label: 'Analiza Procesu' },
   ]},
   { label: '⚙️', items: [
-    { id: 'import', label: 'Import / Eksport' },
+    { id: 'import',         label: 'Import / Eksport' },
+    { id: 'schedule_debug', label: 'Diagnostyka harmonogramu' },
   ]},
 ];
 
@@ -123,6 +125,9 @@ function NavMenu({ menu, active, onSelect, indicators = {} }) {
 
 export default function App() {
   const [tab, setTab]               = useState('dashboard');
+  const [erpZp, setErpZp]           = useState([]);   // [NOWE] surowe ZP z ERP (parseZPFromERP)
+  const [isScheduling, setIsScheduling] = useState(false); // Worker liczy w tle
+  const workerRef = useRef(null);
   const [routing, setRouting]       = useState([]);
   const [zp, setZP]                 = useState([]);
   const [wcSchedule, setWcSchedule] = useState({});
@@ -130,7 +135,7 @@ export default function App() {
   const [fwdZP, setFwdZP]           = useState([]);
   const [zpStatus, setZpStatus]     = useState([]);
   const [ganttDirty, setGanttDirty] = useState(true);
-  const [planStart, setPlanStart]   = useState('2026-05-22');
+  const [planStart, setPlanStart]   = useState(() => new Date().toISOString().slice(0,10));
   const [hybridMode, setHybridMode] = useState(false);
 
   const [historyData, setHistoryData]         = useState([]);
@@ -196,54 +201,70 @@ export default function App() {
 
   useEffect(() => {
     const rl = globalLookups.routingByProduct;
-    if (zp.length > 0 && Object.keys(rl).length > 0 && Object.keys(wcSchedule).length > 0) {
+    if (zp.length > 0 && Object.keys(rl).length > 0) {
       recalcGantt();
     }
   }, [zp.length, routing.length, JSON.stringify(wcSchedule), planStart]);
 
   function recalcGantt() {
-    const rl     = globalLookups.routingByProduct;
-    const sorted = [...zp].sort((a, b) => a.priority - b.priority || a.due_date.localeCompare(b.due_date));
+    const rl = globalLookups.routingByProduct;
+    if (!Object.keys(rl).length) return;
 
-    const backResult = backSchedule(sorted, rl, wcSchedule);
-    setSubZP(backResult);
+    if (workerRef.current) workerRef.current.terminate();
+    setIsScheduling(true);
 
-    const planStartDt = new Date(planStart + 'T00:00:00');
-    const fwdResult   = forwardSchedule(sorted, rl, wcSchedule, planStartDt);
-    setFwdZP(fwdResult);
+    const worker = new Worker(
+      new URL('./utils/scheduler.worker.js', import.meta.url),
+      { type: 'module' }
+    );
+    workerRef.current = worker;
 
-    const statuses = sorted.map(zpItem => {
-      const backOps   = backResult.filter(s => s.parent_zp === zpItem.zp_id || s.zp_id === zpItem.zp_id);
-      const backStart = backOps.length
-        ? new Date(Math.min(...backOps.map(s => s.start_dt ? new Date(s.start_dt).getTime() : Infinity)))
-        : planStartDt;
-      const dueDate   = new Date(zpItem.due_date + 'T23:59:59');
-      const fwdOps    = fwdResult.filter(s => s.parent_zp === zpItem.zp_id || s.zp_id === zpItem.zp_id);
-      const lastFwdOp = fwdOps.length
-        ? fwdOps.reduce((best, op) => op.sequence > best.sequence ? op : best, fwdOps[0])
-        : null;
-      const realEnd   = lastFwdOp ? lastFwdOp.end_dt : planStartDt;
-      const delayH    = Math.max(0, (new Date(realEnd) - dueDate) / 3600000);
-      const delayDays = +(delayH / 16).toFixed(1);
-      const toc       = tocBuffer(backStart, planStartDt, dueDate, new Date(realEnd));
-      const fwdForZP  = fwdResult.filter(s => s.parent_zp === zpItem.zp_id || s.zp_id === zpItem.zp_id);
-      const bottleneck = fwdForZP.length
-        ? fwdForZP.reduce((b, op) => op.durH > b.durH ? op : b, fwdForZP[0])
-        : null;
-      return {
-        zp_id:      zpItem.zp_id,
-        zs_id:      zpItem.zs_id || '',
-        pozycja:    zpItem.pozycja || '',
-        product:    zpItem.product,
-        due_date:   zpItem.due_date,
-        priority:   zpItem.priority,
-        klient:     zpItem.klient || '',
-        bottleneck: bottleneck ? bottleneck.workcenter : null,
-        backStart, realEnd, delayH, delayDays, toc,
-      };
+    worker.onmessage = (e) => {
+      const { type, payload } = e.data;
+      if (type === 'PROGRESS') {
+        // opcjonalnie: setSchedulingProgress(payload.pct)
+      } else if (type === 'DONE') {
+        const { fwdZP, zpStatus } = payload;
+        // Daty serialized przez Worker → przywróć Date objects
+        const fwdFixed = fwdZP.map(op => ({
+          ...op,
+          start_dt: op.start_dt ? new Date(op.start_dt) : null,
+          end_dt:   op.end_dt   ? new Date(op.end_dt)   : null,
+          segments: (op.segments||[]).map(s => ({
+            ...s,
+            segStart: s.segStart ? new Date(s.segStart) : null,
+            segEnd:   s.segEnd   ? new Date(s.segEnd)   : null,
+          })),
+          realEnd: op.realEnd ? new Date(op.realEnd) : null,
+        }));
+        const statusFixed = zpStatus.map(z => ({
+          ...z,
+          backStart: z.backStart ? new Date(z.backStart) : null,
+          realEnd:   z.realEnd   ? new Date(z.realEnd)   : null,
+        }));
+        setFwdZP(fwdFixed);
+        setSubZP(fwdFixed);
+        setZpStatus(statusFixed);
+        setGanttDirty(false);
+        setIsScheduling(false);
+        workerRef.current = null;
+      } else if (type === 'ERROR') {
+        console.error('Worker error:', payload.message);
+        setIsScheduling(false);
+        workerRef.current = null;
+      }
+    };
+
+    worker.onerror = (err) => {
+      console.error('Worker crashed:', err);
+      setIsScheduling(false);
+      workerRef.current = null;
+    };
+
+    worker.postMessage({
+      type: 'SCHEDULE',
+      payload: { zpList: zp, routingByProduct: rl, wcSchedule, planStart }
     });
-    setZpStatus(statuses);
-    setGanttDirty(false);
   }
 
   const activeZpStatus = useMemo(() => {
@@ -255,7 +276,6 @@ export default function App() {
       return zpStatus;
     }
   }, [hybridMode, zpStatus, zpStatusData, globalLookups, wcSchedule, planStart]);
-
   const wcLoadMap = useMemo(() => {
     const map = {};
     if (!zp.length || !routing.length) return map;
@@ -286,41 +306,60 @@ export default function App() {
 
   const handleLoad = useCallback((text, type) => {
     if (type === 'demo') {
-      const r  = parseRouting(DEMO_ROUTING);
-      const zs = parseZS(DEMO_ZS);
-      const z  = zsToZP(zs);
-      setRouting(r);
-      setZP(z);
+      // Demo: parsuj przez ten sam parser co produkcja
+      const parsed = parseZPFromERP(DEMO_ERP_ZP);
+      const { zpList, routingByProduct } = erpZpToSchedulerInput(parsed);
+      const routingFlat = _erpRoutingToFlat(routingByProduct);
+      setErpZp(parsed);
+      setRouting(routingFlat);
+      setZP(zpList);
       setGanttDirty(true);
+      setPlanStart('2026-06-22'); // Demo: ustaw planStart na datę demo
       setTab('dashboard');
       return;
     }
-    if (type === 'routing') {
-      const r = parseRouting(text);
-      setRouting(r);
-      if (r.length && zp.length) setTab('plan');
-    } else if (type === 'zs') {
-      const zsList   = parseZS(text);
-      const zpFromZS = zsToZP(zsList);
-      setZP(zpFromZS);
-      if (routing.length && zpFromZS.length) setTab('plan');
-    } else if (type === 'zp_status') {
+    if (type === 'erp_zp') {
+      const parsed = parseZPFromERP(text);
+      const { zpList, routingByProduct } = erpZpToSchedulerInput(parsed);
+      const routingFlat = _erpRoutingToFlat(routingByProduct);
+      setErpZp(parsed);
+      setRouting(routingFlat);
+      setZP(zpList);
+      setGanttDirty(true);
+      if (parsed.length) setTab('dashboard');
+      return { zpList: parsed };
+    }
+    if (type === 'zp_status') {
       const { records, rejected } = parseZpStatus(text);
       setZpStatusData(records);
       setZpStatusHeaders(calcZpHeaderStatus(records));
       return { rejected };
-    } else {
-      const z = parseZP(text).map((zpItem, i) => {
-        if (!zpItem.zs_id) {
-          const num = zpItem.zp_id.replace(/[^0-9]/g, '').padStart(3, '0') || String(i + 1).padStart(3, '0');
-          return { ...zpItem, zs_id: `ZS-${num}`, pozycja: 1, zp_id: `ZP-${num}/01/01` };
-        }
-        return zpItem;
-      });
-      setZP(z);
-      if (routing.length && z.length) setTab('plan');
     }
-  }, [routing, zp, wcLoadMap]);
+  }, [wcLoadMap]);
+
+  // Spłaszcz routingByProduct → routing[] (format zgodny z resztą aplikacji)
+  function _erpRoutingToFlat(routingByProduct) {
+    const flat = [];
+    for (const [product, ops] of Object.entries(routingByProduct)) {
+      for (const op of ops) {
+        flat.push({
+          product,
+          operation:    op.machine_name || op.op_label,
+          workcenter:   op.machine_id,
+          wc_group:     op.wc_group,
+          machine_id:   op.machine_id,
+          machine_name: op.machine_name,
+          ct_min:       0,
+          sequence:     op.sequence,
+          predecessors: op.predecessors || [],
+          capacity_h:   16,
+          _durH:        op._durH,
+          _status:      op._status,
+        });
+      }
+    }
+    return flat;
+  }
 
   function handleExportZpStatus() {
     exportZpStatusCsv(zp, fwdZP, routing);
@@ -421,7 +460,25 @@ export default function App() {
 
       <main className="flowops-main">
         {tab === 'dashboard'  && <DashboardTab routing={routing} zp={zp} zpStatus={activeZpStatus} wcSchedule={wcSchedule} historyData={historyData} zpStatusHeaders={zpStatusHeaders} globalLookups={globalLookups} onTabChange={setTab} hybridMode={hybridMode} />}
-        {tab === 'import'     && <ImportTab routing={routing} zp={zp} historyData={historyData} zpStatusData={zpStatusData} onLoad={handleLoad} onExportZpStatus={handleExportZpStatus} hybridMode={hybridMode} onHybridModeChange={setHybridMode} />}
+        {/* Spinner gdy Worker liczy */}
+        {isScheduling && (
+          <div style={{
+            position:'fixed', inset:0, background:'rgba(0,0,0,0.45)',
+            display:'flex', flexDirection:'column', alignItems:'center', justifyContent:'center',
+            zIndex:9999,
+          }}>
+            <div style={{
+              width:48, height:48, border:'4px solid rgba(255,255,255,0.2)',
+              borderTop:'4px solid #4d94ff', borderRadius:'50%',
+              animation:'spin 0.8s linear infinite',
+            }}/>
+            <div style={{color:'#fff', marginTop:16, fontSize:14, fontWeight:500}}>
+              Harmonogramowanie {zp.length} ZP...
+            </div>
+            <style>{`@keyframes spin{to{transform:rotate(360deg)}}`}</style>
+          </div>
+        )}
+        {tab === 'import'     && <ImportTab erpZp={erpZp} zpStatusData={zpStatusData} onLoad={handleLoad} onExportZpStatus={handleExportZpStatus} hybridMode={hybridMode} onHybridModeChange={setHybridMode} />}
         {tab === 'plan'       && <PlanTab routing={routing} zp={zp} globalLookups={globalLookups} wcSchedule={wcSchedule} subZP={subZP} fwdZP={fwdZP} zpStatus={activeZpStatus} ganttDirty={ganttDirty} onRecalc={() => recalcGantt()} onScheduleChange={updateSchedule} planStart={planStart} onPlanStartChange={setPlanStart} />}
         {tab === 'bottleneck' && <BottleneckTab routing={routing} zp={filteredZP} globalLookups={globalLookups} wcSchedule={wcSchedule} subZP={subZP} />}
         {tab === 'routing'    && <RoutingTab routing={routing} zp={zp} globalLookups={globalLookups} />}
@@ -432,6 +489,7 @@ export default function App() {
         {tab === 'buffer'     && <BufferTab zpStatusData={zpStatusData} />}
         {tab === 'buffer_zs'  && <BufferZSTab zpStatusData={zpStatusData} />}
         {tab === 'late_zs'    && <LateZSTab zpStatus={activeZpStatus} />}
+        {tab === 'schedule_debug' && <ScheduleDebugTab fwdZP={fwdZP} zpStatus={zpStatus} planStart={planStart} />}
         {tab === 'analysis'   && <AnalysisTab historyData={historyData} routing={routing} wcSchedule={wcSchedule} zpStatusData={zpStatusData} zpStatusHeaders={zpStatusHeaders} />}
       </main>
     </div>

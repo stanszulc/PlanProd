@@ -7,9 +7,18 @@ import { EmptyState } from '../common/EmptyState.jsx';
 
 export function GanttTab({ routing, zp, globalLookups, wcSchedule, subZP, fwdZP, zpStatus, onRecalc, ganttDirty, onViewChange, slaveMode, planStart, onPlanStartChange, embedded }) {
 
-  const allWC  = useMemo(() => [...new Set(routing.map(r => r.workcenter))].sort(), [routing]);
+  const wcNameMap = useMemo(() => { const m = {}; routing.forEach(r => { if (!m[r.workcenter]) m[r.workcenter] = r.operation; }); return m; }, [routing]);
+  const allWCFull = useMemo(() => { const wcSeq = {}; routing.forEach(r => { const seq = parseInt(r.sequence)||999; if (wcSeq[r.workcenter]===undefined||seq<wcSeq[r.workcenter]) wcSeq[r.workcenter]=seq; }); return [...new Set(routing.map(r=>r.workcenter))].sort((a,b)=>(wcSeq[a]||999)-(wcSeq[b]||999)); }, [routing]);
   const dates  = useMemo(() => [...new Set(zp.map(z => z.due_date))].sort(), [zp]);
-  const allZP  = useMemo(() => [...zp].sort((a,b) => a.priority-b.priority || a.due_date.localeCompare(b.due_date)), [zp]);
+  const [filterZS,   setFilterZS]  = useState('');
+  const [filterProd, setFilterProd] = useState('');
+  const allZPraw = useMemo(() => [...zp].sort((a,b) => a.priority-b.priority || a.due_date.localeCompare(b.due_date)), [zp]);
+  const allZP = useMemo(() => allZPraw.filter(z => {
+    const zsOk = !filterZS.trim() || (z.zs_id||z.zp_id||'').toLowerCase().includes(filterZS.toLowerCase());
+    const prOk = !filterProd.trim() || (z.product||'').toLowerCase().includes(filterProd.toLowerCase());
+    return zsOk && prOk;
+  }), [allZPraw, filterZS, filterProd]);
+  const filteredZpIds = useMemo(() => new Set(allZP.map(z => z.zp_id)), [allZP]);
 
   const SCALES = [
     { key:'4h',  hourW:96,  tick:1,  label:'1h'  },
@@ -37,10 +46,17 @@ export function GanttTab({ routing, zp, globalLookups, wcSchedule, subZP, fwdZP,
   const scale  = SCALES[scaleIdx];
   const HOUR_W = scale.hourW;
 
-  const displayZP = useMemo(
-    () => (fwdZP && fwdZP.length) ? fwdZP : subZP,
-    [fwdZP, subZP]
-  );
+  const displayZP = useMemo(() => {
+    const base = (fwdZP && fwdZP.length) ? fwdZP : subZP;
+    if (!filterZS.trim() && !filterProd.trim()) return base;
+    return base.filter(s => filteredZpIds.has(s.parent_zp || s.zp_id));
+  }, [fwdZP, subZP, filteredZpIds, filterZS, filterProd]);
+
+  const allWC = useMemo(() => {
+    if (!filterZS.trim() && !filterProd.trim()) return allWCFull;
+    const usedWC = new Set(displayZP.map(s => s.workcenter));
+    return allWCFull.filter(w => usedWC.has(w));
+  }, [allWCFull, displayZP, filterZS, filterProd]);
 
   const planStartDt = useMemo(
     () => new Date((planStart || '2026-05-22') + 'T00:00:00'),
@@ -54,14 +70,20 @@ export function GanttTab({ routing, zp, globalLookups, wcSchedule, subZP, fwdZP,
       return { contentW: 800, axisStart: planStartDt, axisEnd: planStartDt, allDues: [], svgH: TOP + 16 };
     }
     const allSegs = displayZP.flatMap(s => s.segments || []);
-    const allEnds = allSegs.map(s => s.segEnd).filter(Boolean);
+    const allEnds  = allSegs.map(s => s.segEnd).filter(Boolean);
+    const allStarts = allSegs.map(s => s.segStart).filter(Boolean);
     const allDues = dates.map(d => new Date(d + 'T23:59:59'));
     const maxDueDt = new Date(Math.max(
       ...allDues.map(d => d.getTime()),
       ...(allEnds.length ? allEnds.map(d => new Date(d).getTime()) : [0]),
       planStartDt.getTime() + 7 * 24 * 3600000
     ));
-    const axisStart = new Date(planStartDt); axisStart.setHours(0, 0, 0, 0);
+    // axisStart = min(planStart, najwcześniejszy segment) — spóźnione ZP mogą zaczynać się przed planStart
+    const earliestSeg = allStarts.length
+      ? new Date(Math.min(...allStarts.map(d => new Date(d).getTime())))
+      : planStartDt;
+    const axisStart = new Date(Math.min(planStartDt.getTime(), earliestSeg.getTime()));
+    axisStart.setHours(0, 0, 0, 0);
     const axisEnd   = new Date(maxDueDt);   axisEnd.setHours(24, 0, 0, 0);
     const totalH    = Math.max((axisEnd - axisStart) / 3600000, 16);
     const contentW  = Math.ceil(totalH) * HOUR_W;
@@ -179,20 +201,42 @@ export function GanttTab({ routing, zp, globalLookups, wcSchedule, subZP, fwdZP,
         </div>
       </div>
 
+      {/* Filtry */}
+      <div style={{ display:'flex', gap:8, marginBottom:8, flexWrap:'wrap' }}>
+        <input type="text" placeholder="Nr ZS..." value={filterZS} onChange={e => setFilterZS(e.target.value)}
+          style={{ padding:'5px 10px', fontSize:12, borderRadius:6, border:`1px solid ${T.border2}`,
+            background:T.surface2, color:T.text, outline:'none', width:160 }}/>
+        <input type="text" placeholder="Kod produktu..." value={filterProd} onChange={e => setFilterProd(e.target.value)}
+          style={{ padding:'5px 10px', fontSize:12, borderRadius:6, border:`1px solid ${T.border2}`,
+            background:T.surface2, color:T.text, outline:'none', width:200 }}/>
+        {(filterZS||filterProd) && <button onClick={() => { setFilterZS(''); setFilterProd(''); }}
+          style={{ padding:'5px 10px', fontSize:12, borderRadius:6, border:`1px solid ${T.border2}`,
+            background:'transparent', color:T.text3, cursor:'pointer' }}>✕ Wyczyść</button>}
+        {(filterZS||filterProd) && <span style={{fontSize:12, color:T.text3, alignSelf:'center'}}>
+          {allZP.length} / {allZPraw.length} ZP
+        </span>}
+      </div>
+
       {/* Legenda ZP */}
-      <div style={{ display:'flex', gap:12, fontSize:11, color:T.text3, marginBottom:8, flexWrap:'wrap', alignItems:'center' }}>
-        {allZP.map(zp2 => {
-          const col = globalLookups.zpColorMap[zp2.zp_id] || T.text3;
-          return <span key={zp2.zp_id} style={{display:'flex',alignItems:'center',gap:4}}>
-            <Dot color={col} size={7}/>{zp2.zp_id}
-          </span>;
-        })}
-        <span style={{marginLeft:'auto',display:'flex',alignItems:'center',gap:5}}>
-          <span style={{width:14,height:3,background:T.bn,display:'inline-block',borderRadius:2}}/>due_date
-        </span>
-        <span style={{display:'flex',alignItems:'center',gap:5}}>
-          <span style={{width:14,height:12,background:'rgba(0,0,0,0.25)',display:'inline-block',borderRadius:2}}/>niedostępne
-        </span>
+      <div style={{ marginBottom:8 }}>
+        <div style={{ display:'flex', gap:12, fontSize:11, color:T.text3, flexWrap:'wrap', alignItems:'center',
+          maxHeight:64, overflowY:'auto', paddingBottom:2 }}>
+          {allZP.map(zp2 => {
+            const col = globalLookups.zpColorMap[zp2.zp_id] || T.text3;
+            return <span key={zp2.zp_id} style={{display:'flex',alignItems:'center',gap:4,flexShrink:0}}>
+              <Dot color={col} size={7}/>{zp2.zs_id || zp2.zp_id}
+            </span>;
+          })}
+        </div>
+        <div style={{ display:'flex', gap:12, fontSize:11, color:T.text3, marginTop:4 }}>
+          <span style={{display:'flex',alignItems:'center',gap:5}}>
+            <span style={{width:14,height:3,background:T.bn,display:'inline-block',borderRadius:2}}/>due_date
+          </span>
+          <span style={{display:'flex',alignItems:'center',gap:5}}>
+            <span style={{width:14,height:12,background:'rgba(0,0,0,0.25)',display:'inline-block',borderRadius:2}}/>niedostępne
+          </span>
+          <span style={{color:T.text3}}>{allZP.length} ZP</span>
+        </div>
       </div>
 
       {/* SVG Gantt */}
@@ -300,7 +344,7 @@ export function GanttTab({ routing, zp, globalLookups, wcSchedule, subZP, fwdZP,
                             fill={col} opacity={0.9} stroke={borderCol} strokeWidth={borderW}/>
                           {isLast && wpx>30 && <text x={x+Math.min(wpx/2,38)} y={y+bH/2-4}
                             fontSize={wpx>52?10:9} fontWeight="600" fill="white"
-                            textAnchor="middle" style={{pointerEvents:'none'}}>{s2.zp_id}</text>}
+                            textAnchor="middle" style={{pointerEvents:'none'}}>{s2.zs_id || s2.zp_id}</text>}
                           {isLast && wpx>56 && <text x={x+Math.min(wpx/2,38)} y={y+bH/2+9}
                             fontSize="9" fill="rgba(255,255,255,0.75)"
                             textAnchor="middle" style={{pointerEvents:'none'}}>{s2.durH.toFixed(1)}h</text>}
@@ -323,7 +367,7 @@ export function GanttTab({ routing, zp, globalLookups, wcSchedule, subZP, fwdZP,
                       fill={T.surface3} stroke={T.border2} strokeWidth="1"
                       style={{filter:'drop-shadow(0 2px 8px rgba(0,0,0,0.4))'}}/>
                     <text x={tooltip.x+10} y={tooltip.y+14} fontSize="11" fontWeight="700" fill={T.text}>
-                      {tooltip.s2.zp_id} · {tooltip.s2.workcenter}
+                      {tooltip.s2.zs_id || tooltip.s2.zp_id} · {tooltip.s2.workcenter}
                     </text>
                     <text x={tooltip.x+10} y={tooltip.y+40} fontSize="10" fill={T.text2}>
                       {tooltip.s2.product} · {tooltip.s2.volume} szt
@@ -349,7 +393,7 @@ export function GanttTab({ routing, zp, globalLookups, wcSchedule, subZP, fwdZP,
                       <text x="12" y={TOP+wi*LANE_H+LANE_H/2-7} fontSize="12" fontWeight="700"
                         fill={isBn?T.bn:T.text}>{w}</text>
                       <text x="12" y={TOP+wi*LANE_H+LANE_H/2+9} fontSize="10"
-                        fill={isBn?T.bn:T.text3}>{Math.round(ld.util*100)}%</text>
+                        fill={isBn?T.bn:T.text3}>{wcNameMap[w] || ""}</text>
                     </g>;
                   })}
                 </g>
@@ -402,11 +446,9 @@ export function GanttTab({ routing, zp, globalLookups, wcSchedule, subZP, fwdZP,
                       <td style={{ padding:'7px 8px', borderBottom:`1px solid ${T.border}` }}>
                         <span style={{ display:'flex', flexDirection:'column', gap:2 }}>
                           <span style={{ display:'flex', alignItems:'center', gap:5 }}>
-                            <Dot color={col} size={7}/><strong>{st.zp_id}</strong>
+                            <Dot color={col} size={7}/>
+                            <strong>{st.zs_id ? `${st.zs_id}/${st.pozycja||''}` : st.zp_id}</strong>
                           </span>
-                          {st.zs_id && <span style={{ fontSize:10, color:T.text3, marginLeft:12 }}>
-                            {st.zs_id}{st.pozycja ? `/poz.${st.pozycja}` : ''}
-                          </span>}
                         </span>
                       </td>
                       <td style={{ padding:'7px 8px', borderBottom:`1px solid ${T.border}`, color:T.text2 }}>{st.product}</td>

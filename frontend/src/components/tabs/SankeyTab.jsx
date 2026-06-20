@@ -17,27 +17,34 @@ export function SankeyTab({ routing, zp, globalLookups, wcSchedule }) {
 
   useEffect(() => { if (!date && dates.length) setDate(dates[0]); }, [dates]);
 
-  // ── BASE LAYOUT (auto, product-lane Y) ──────────────────────────────
+  // ── BASE LAYOUT (auto, product-lane Y) — tylko produkty z ZP na dany dzień ──
+  const activeProducts = useMemo(() => {
+    const zpForDate = zp.filter(z => z.due_date === date);
+    const prods = [...new Set(zpForDate.map(z => z.product))];
+    return prods.filter(p => routing.some(r => r.product === p));
+  }, [zp, date, routing]);
+
   const baseLayout = useMemo(() => {
     if (!routing.length) return { positions: {}, SVG_W: 800, SVG_H: 400 };
-    const allWCs   = [...new Set(routing.map(r => r.workcenter))];
-    const numProds = products.length;
-    const PAD_X    = 90, PAD_Y = 80, COL_W = 190, LANE_H = 130;
-    const SVG_H    = PAD_Y * 2 + Math.max(numProds - 1, 0) * LANE_H;
+    const activeProd = activeProducts.length ? activeProducts : products;
+    const activeWCs  = [...new Set(routing.filter(r => activeProd.includes(r.product)).map(r => r.workcenter))];
+    const numProds   = activeProd.length;
+    const PAD_X = 90, PAD_Y = 80, COL_W = 190, LANE_H = 80;
+    const SVG_H = PAD_Y * 2 + Math.max(numProds - 1, 0) * LANE_H;
     const prodLaneY = {};
-    products.forEach((p, i) => {
+    activeProd.forEach((p, i) => {
       prodLaneY[p] = numProds === 1 ? SVG_H / 2 : PAD_Y + i * LANE_H;
     });
     const wcMinSeq = {};
-    allWCs.forEach(wc => {
-      const seqs = routing.filter(r => r.workcenter === wc).map(r => r.sequence);
+    activeWCs.forEach(wc => {
+      const seqs = routing.filter(r => r.workcenter === wc && activeProd.includes(r.product)).map(r => r.sequence);
       wcMinSeq[wc] = Math.min(...seqs);
     });
     const colKeys = [...new Set(Object.values(wcMinSeq))].sort((a, b) => a - b);
     const SVG_W   = PAD_X * 2 + Math.max(colKeys.length - 1, 0) * COL_W;
     const positions = {};
-    allWCs.forEach(wc => {
-      const users  = products.filter(p => routing.some(r => r.product === p && r.workcenter === wc));
+    activeWCs.forEach(wc => {
+      const users  = activeProd.filter(p => routing.some(r => r.product === p && r.workcenter === wc));
       const avgY   = users.reduce((s, p) => s + prodLaneY[p], 0) / (users.length || 1);
       const colIdx = colKeys.indexOf(wcMinSeq[wc]);
       const x      = PAD_X + colIdx * COL_W;
@@ -45,7 +52,7 @@ export function SankeyTab({ routing, zp, globalLookups, wcSchedule }) {
       positions[wc] = { x, y: avgY, label: op ? op.operation.substring(0, 16) : wc };
     });
     return { positions, SVG_W, SVG_H };
-  }, [routing, products]);
+  }, [routing, activeProducts, products]);
 
   // ── LOAD SAVED POSITIONS from localStorage ──────────────────────────
   useEffect(() => {
@@ -240,9 +247,9 @@ export function SankeyTab({ routing, zp, globalLookups, wcSchedule }) {
           <span style={{ display:"flex", alignItems:"center", gap:5 }}><Dot color={T.bn}   size={7}/> BN &gt;100%</span>
           <span style={{ color: T.text3 }}>· Grubość = wolumen · Kolor = produkt · Przeciągnij węzeł</span>
         </div>
-        <div style={{ display:"flex", gap:10, flexWrap:"wrap" }}>
-          {products.map((p, i) => (
-            <span key={p} style={{ display:"flex", alignItems:"center", gap:5, fontSize:11, color:T.text2 }}>
+        <div style={{ display:"flex", gap:10, flexWrap:"wrap", maxHeight:64, overflowY:"auto", paddingBottom:2 }}>
+          {activeProducts.map((p, i) => (
+            <span key={p} style={{ display:"flex", alignItems:"center", gap:5, fontSize:11, color:T.text2, flexShrink:0 }}>
               <span style={{ width:22, height:3, borderRadius:2, background:PALETTE[i%PALETTE.length], display:"inline-block" }}/>
               {p}
             </span>

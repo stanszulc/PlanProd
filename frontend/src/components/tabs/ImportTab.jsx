@@ -9,28 +9,21 @@ function dlCSV(content, filename) {
   a.click();
 }
 
+// [ZMIANA] Sample CSV zastąpiony formatem ERP (TSV z realnych danych)
 const SAMPLE_CSVS = {
-  routing: {
-    filename: 'routing_przyklad.csv',
-    content: `product,operation,workcenter,ct_min,sequence,capacity_h,predecessors
-P-KOD-100-100,Wycinanie laserowe podstawy,G-01,3.0,1,8,
-P-KOD-100-100,Gięcie profili podstawy,G-02,8.0,2,8,1
-P-KOD-100-100,Spawanie narożników korpusu,G-03,6.0,3,8,
-P-KOD-100-100,Izolacja PIR i montaż poliwęglanu,G-04,12.0,4,8,3
-P-KOD-100-100,Montaż siłownika i testy KJ,G-05,15.0,5,8,2|4
-P-SKR-ROZ-02,Wycinanie obudowy skrzynki,G-01,1.0,1,8,
-P-SKR-ROZ-02,Gięcie skrzynki,G-02,2.0,2,8,
-P-SKR-ROZ-02,Zgrzewanie liniowe korpusu,G-03,2.0,3,8,
-P-SKR-ROZ-02,Wyklejanie matą kauczukową,G-04,5.0,4,8,
-P-SKR-ROZ-02,Montaż króćców i przepustnicy,G-05,4.0,5,8,`,
-  },
-  zs: {
-    filename: 'zs_przyklad.csv',
-    content: `zs_id,pozycja,klient,product,volume,due_date,priority
-ZS-001,1,Klima-Tech Sp. z o.o.,P-KOD-100-100,30,2026-05-25,1
-ZS-001,2,Klima-Tech Sp. z o.o.,P-KOD-100-100,20,2026-05-26,1
-ZS-002,1,VentPro S.A.,P-SKR-ROZ-02,50,2026-05-25,2
-ZS-002,2,VentPro S.A.,P-SKR-ROZ-02,40,2026-05-26,2`,
+  erp_zp: {
+    filename: 'erp_zp_przyklad.csv',
+    content: `Numer ZP\tKlient/zam\tNumer ZS\tData zak\tData wys\tKod\tNazwa\tIlość ZP\tWyprod.\tOP\tWC\tWCname\tWC2\tCzasPlan\tCzasPozost
+7310980009\tAIRTEAM [MindeT]\t2000034452\t2026-06-24 00:00\t2026-07-27 00:00\t1274449\tZUP-L /1/304048\t1\t0\t010\t20043\tWykrawarko-gilotyna SG6 M107\tMaszyny\t0,35\t0,35
+7310980009\tAIRTEAM [MindeT]\t2000034452\t2026-06-24 00:00\t2026-07-27 00:00\t1274449\tZUP-L /1/304048\t1\t0\t020\t30009\tCentrum gięć\tMaszyny\t0,15\t0,15
+7310980009\tAIRTEAM [MindeT]\t2000034452\t2026-06-24 00:00\t2026-07-27 00:00\t1274449\tZUP-L /1/304048\t1\t0\t040\t30052\tŚlusarnia - iSWAY\tiSWAY\t2\t2
+7310980010\tAIRTEAM [MindeT]\t2000034452\t2026-06-24 00:00\t2026-07-27 00:00\t1274450\tZUP-L /2/304048\t1\t0\t010\t20043\tWykrawarko-gilotyna SG6 M107\tMaszyny\t0,35\t0,35
+7310980010\tAIRTEAM [MindeT]\t2000034452\t2026-06-24 00:00\t2026-07-27 00:00\t1274450\tZUP-L /2/304048\t1\t0\t020\t30009\tCentrum gięć\tMaszyny\t0,15\t0,15
+7310980010\tAIRTEAM [MindeT]\t2000034452\t2026-06-24 00:00\t2026-07-27 00:00\t1274450\tZUP-L /2/304048\t1\t0\t040\t30052\tŚlusarnia - iSWAY\tiSWAY\t2\t2
+7310982834\tROCKFIN [S101326]\t1000227356\t2026-07-08 00:00\t2026-07-09 00:00\t1238582\tTAPS-HA-1000x2000x700\t6\t0\t010\t20005\tPiła taśmowa STG230 DPG M002\tPilarnia Stalowa\t0,74064\t0,74064
+7310982834\tROCKFIN [S101326]\t1000227356\t2026-07-08 00:00\t2026-07-09 00:00\t1238582\tTAPS-HA-1000x2000x700\t6\t0\t011\t20059\tWykrawarko-gilotyna SGe_2 M227\tMaszyny\t0,683\t0,683
+7310982834\tROCKFIN [S101326]\t1000227356\t2026-07-08 00:00\t2026-07-09 00:00\t1238582\tTAPS-HA-1000x2000x700\t6\t0\t015\t30009\tCentrum gięć\tMaszyny\t0,45002\t0,45002
+7310982834\tROCKFIN [S101326]\t1000227356\t2026-07-08 00:00\t2026-07-09 00:00\t1238582\tTAPS-HA-1000x2000x700\t6\t0\t019\t30003\tŚlusarnia - kanały\tKanały\t21,9332\t21,9332`,
   },
   zp_status: {
     filename: 'zp_status_przyklad.csv',
@@ -41,28 +34,47 @@ ZP-001/01/03,ZP-001/01,ZS-001,1,Kowalski,P-KOD,Spawanie,G-03,3,30,0,PLAN,2026-05
   },
 };
 
-export function ImportTab({ routing, zp, zpStatusData, onLoad, onExportZpStatus, hybridMode, onHybridModeChange }) {
-  const [rLoaded,   setRLoaded]   = useState(routing.length > 0);
-  const [zsLoaded,  setZsLoaded]  = useState(false);
+// [ZMIANA] Props: usunięto `routing` (zastąpione przez erpZp),
+// dodano `erpZp` — lista ZP sparsowana z parseZPFromERP
+export function ImportTab({
+  erpZp, zpStatusData,
+  onLoad, onExportZpStatus,
+  hybridMode, onHybridModeChange,
+}) {
+  const [erpLoaded, setErpLoaded] = useState(erpZp?.length > 0);
   const [zpLoaded,  setZpLoaded]  = useState(zpStatusData?.length > 0);
   const [rejectLog, setRejectLog] = useState([]);
+  const [erpInfo,   setErpInfo]   = useState(null); // { zpCount, machineCount, opCount }
 
   function readFile(file, type) {
     const reader = new FileReader();
     reader.onload = e => {
       const result = onLoad(e.target.result, type);
-      if (type === 'routing')   setRLoaded(true);
-      if (type === 'zs')        setZsLoaded(true);
+      if (type === 'erp_zp') {
+        setErpLoaded(true);
+        // Podsumowanie wczytanych danych
+        if (result?.zpList) {
+          const machines = new Set(
+            result.zpList.flatMap(z => (z.ops || []).map(op => op.machine_id))
+          );
+          setErpInfo({
+            zpCount:      result.zpList.length,
+            machineCount: machines.size,
+            opCount:      result.zpList.reduce((s, z) => s + (z.ops?.length || 0), 0),
+          });
+        }
+      }
       if (type === 'zp_status') {
         setZpLoaded(true);
         if (result?.rejected?.length) setRejectLog(result.rejected);
         else setRejectLog([]);
       }
     };
-    reader.readAsText(file);
+    reader.readAsText(file, 'UTF-8');
   }
 
-  const DropBox = ({ type, loaded, label, icon, desc, cols }) => (
+  // [ZMIANA] DropBox — uproszczony, obsługuje drag & drop i click
+  const DropBox = ({ type, loaded, label, icon, desc, cols, info }) => (
     <div
       style={{
         border: `1.5px dashed ${loaded ? T.ok : T.border2}`,
@@ -77,18 +89,31 @@ export function ImportTab({ routing, zp, zpStatusData, onLoad, onExportZpStatus,
       <div style={{ fontSize: 28, marginBottom: 8 }}>{icon}</div>
       <div style={{ fontSize: 13, fontWeight: 600, color: T.text, marginBottom: 4 }}>{label}</div>
       <div style={{ fontSize: 11, color: T.text2, marginBottom: 10, lineHeight: 1.5 }}>{desc}</div>
-      {loaded
-        ? <div style={{ fontSize: 12, color: T.ok, fontWeight: 600 }}>✓ Załadowano</div>
-        : <div style={{ display: 'flex', gap: 5, justifyContent: 'center', flexWrap: 'wrap' }}>
-            {cols.map(c => <span key={c.n} style={{ ...s.tag(c.req ? T.accent : T.text3), fontSize: 10 }}>{c.n}</span>)}
-          </div>
-      }
-      <input id={`file_${type}`} type="file" accept=".csv" style={{ display: 'none' }}
-        onChange={e => { const f = e.target.files[0]; if (f) readFile(f, type); }} />
+      {loaded ? (
+        <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 4 }}>
+          <div style={{ fontSize: 12, color: T.ok, fontWeight: 600 }}>✓ Załadowano</div>
+          {info && (
+            <div style={{ fontSize: 10, color: T.text3, lineHeight: 1.6 }}>
+              {info.zpCount} ZP · {info.opCount} operacji · {info.machineCount} maszyn
+            </div>
+          )}
+        </div>
+      ) : (
+        <div style={{ display: 'flex', gap: 5, justifyContent: 'center', flexWrap: 'wrap' }}>
+          {cols.map(c => (
+            <span key={c.n} style={{ ...s.tag(c.req ? T.accent : T.text3), fontSize: 10 }}>{c.n}</span>
+          ))}
+        </div>
+      )}
+      <input
+        id={`file_${type}`} type="file" accept=".csv,.tsv,.txt"
+        style={{ display: 'none' }}
+        onChange={e => { const f = e.target.files[0]; if (f) readFile(f, type); }}
+      />
     </div>
   );
 
-  const hasPlanData   = routing.length > 0 && zp.length > 0;
+  const hasErpData    = erpZp?.length > 0;
   const hasStatusData = zpStatusData?.length > 0;
 
   return (
@@ -97,36 +122,81 @@ export function ImportTab({ routing, zp, zpStatusData, onLoad, onExportZpStatus,
       {/* ── 1. WGRAJ PLIKI ─────────────────────────────────────────────────── */}
       <section>
         <SectionHeader icon="📥" label="Wgraj pliki" />
-        <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: 16 }}>
-          <DropBox type="routing" loaded={rLoaded || routing.length > 0}
-            label="routing.csv" icon="🗂️"
-            desc="Marszruty technologiczne — operacje, gniazda, czasy cyklu"
-            cols={[{n:'product',req:true},{n:'operation',req:true},{n:'workcenter',req:true},{n:'ct_min',req:true},{n:'sequence',req:true},{n:'capacity_h',req:false}]} />
-          <DropBox type="zs" loaded={zsLoaded}
-            label="zs.csv" icon="🧾"
-            desc="Zamówienia sprzedaży — klienci, produkty, ilości, terminy"
-            cols={[{n:'zs_id',req:true},{n:'pozycja',req:true},{n:'klient',req:false},{n:'product',req:true},{n:'volume',req:true},{n:'due_date',req:true},{n:'priority',req:false}]} />
-          <DropBox type="zp_status" loaded={zpLoaded || hasStatusData}
-            label="zp_status.csv" icon="🏭"
-            desc="Status realizacji ZP z ERP — daty, ilości, statusy operacji"
-            cols={[{n:'zp_id',req:true},{n:'parent_zp',req:true},{n:'status',req:true},{n:'need_date',req:true},{n:'actual_start',req:false},{n:'actual_end',req:false},{n:'volume_actual',req:false}]} />
+        {/* [ZMIANA] Dwa boxy zamiast trzech — ERP zastępuje routing + zs */}
+        <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 16 }}>
+          <DropBox
+            type="erp_zp"
+            loaded={erpLoaded || hasErpData}
+            label="Eksport ZP z ERP"
+            icon="🏭"
+            desc="Plik TSV z ERP: ZP + operacje + maszyny + czasy."
+            info={erpInfo}
+            cols={[
+              { n: 'Numer ZP',   req: true  },
+              { n: 'OP',         req: true  },
+              { n: 'WC',         req: true  },
+              { n: 'WC2',        req: true  },
+              { n: 'WCname',     req: false },
+              { n: 'CzasPlan',   req: true  },
+              { n: 'CzasPozost', req: true  },
+              { n: 'Data zak',   req: true  },
+              { n: 'Klient/zam', req: false },
+              { n: 'Numer ZS',   req: false },
+            ]}
+          />
+          <DropBox
+            type="zp_status"
+            loaded={zpLoaded || hasStatusData}
+            label="zp_status.csv"
+            icon="📋"
+            desc="Status realizacji ZP — daty rzeczywiste, ilości, statusy operacji (CNF/WIP/PLAN)."
+            cols={[
+              { n: 'zp_id',         req: true  },
+              { n: 'parent_zp',     req: true  },
+              { n: 'status',        req: true  },
+              { n: 'actual_start',  req: false },
+              { n: 'actual_end',    req: false },
+              { n: 'volume_actual', req: false },
+            ]}
+          />
         </div>
 
         {/* Log odrzuconych */}
         {rejectLog.length > 0 && (
-          <div style={{ background: 'rgba(248,113,113,0.07)', border: `1px solid ${T.bn}`, borderRadius: 10, padding: '12px 16px', marginTop: 14 }}>
+          <div style={{
+            background: 'rgba(248,113,113,0.07)',
+            border: `1px solid ${T.bn}`,
+            borderRadius: 10, padding: '12px 16px', marginTop: 14,
+          }}>
             <div style={{ fontSize: 12, fontWeight: 600, color: T.bn, marginBottom: 8 }}>
               ⚠ Odrzucono {rejectLog.length} rekordów
             </div>
             <div style={{ display: 'flex', flexDirection: 'column', gap: 3, maxHeight: 100, overflowY: 'auto' }}>
               {rejectLog.map((r, i) => (
                 <div key={i} style={{ fontSize: 11, color: T.text2 }}>
-                  Linia {r.line}: {r.data.zp_id || '?'} — {r.reason}
+                  Linia {r.line}: {r.data?.zp_id || '?'} — {r.reason}
                 </div>
               ))}
             </div>
           </div>
         )}
+
+        {/* [NOWE] Info o formacie pliku ERP */}
+        <div style={{
+          marginTop: 12,
+          padding: '10px 14px',
+          background: T.surface,
+          border: `1px solid ${T.border}`,
+          borderRadius: 8,
+          fontSize: 11,
+          color: T.text3,
+          lineHeight: 1.7,
+        }}>
+          <strong style={{ color: T.text2 }}>Format pliku ERP:</strong>{' '}
+          TSV (tabulatory) lub CSV (średniki). Separator dziesiętny: przecinek.
+          Kolumny: <code>WC</code> = numer maszyny, <code>WC2</code> = gniazdo/linia,
+          <code> WCname</code> = pełna nazwa maszyny, <code>CzasPlan</code> = czas całkowity [h].
+        </div>
       </section>
 
       {/* ── 2. EKSPORTUJ ───────────────────────────────────────────────────── */}
@@ -139,11 +209,16 @@ export function ImportTab({ routing, zp, zpStatusData, onLoad, onExportZpStatus,
             <div style={{ fontSize: 22 }}>🎮</div>
             <div style={{ fontSize: 13, fontWeight: 600, color: T.text }}>Demo data</div>
             <div style={{ fontSize: 11, color: T.text3, lineHeight: 1.5 }}>
-              Załaduj przykładowe routing + zs — gotowe dane do testowania wszystkich widoków.
+              Załaduj przykładowe dane ERP — gotowe ZP z operacjami, maszynami i czasami.
             </div>
             <button
               style={{ ...s.btn(true), fontSize: 12, marginTop: 'auto' }}
-              onClick={() => { onLoad(null, 'demo'); onLoad(DEMO_ZP_STATUS, 'zp_status'); setZpLoaded(true); }}>
+              onClick={() => {
+                onLoad(null, 'demo');
+                onLoad(DEMO_ZP_STATUS, 'zp_status');
+                setZpLoaded(true);
+                setErpLoaded(true);
+              }}>
               ▶ Załaduj demo
             </button>
           </div>
@@ -153,18 +228,20 @@ export function ImportTab({ routing, zp, zpStatusData, onLoad, onExportZpStatus,
             <div style={{ fontSize: 22 }}>📤</div>
             <div style={{ fontSize: 13, fontWeight: 600, color: T.text }}>Eksportuj ZP → zp_status.csv</div>
             <div style={{ fontSize: 11, color: T.text3, lineHeight: 1.5 }}>
-              Generuje szablon z datami z APS (status PLAN). Uzupełnij w ERP: actual_start, actual_end, volume_actual, status — i wgraj z powrotem.
+              Generuje szablon z datami z APS (status PLAN). Uzupełnij w ERP i wgraj z powrotem.
             </div>
             <button
-              style={{ ...s.btn(hasPlanData), fontSize: 12, marginTop: 'auto',
-                opacity: hasPlanData ? 1 : 0.4,
-                cursor: hasPlanData ? 'pointer' : 'not-allowed' }}
-              disabled={!hasPlanData}
+              style={{
+                ...s.btn(hasErpData), fontSize: 12, marginTop: 'auto',
+                opacity: hasErpData ? 1 : 0.4,
+                cursor: hasErpData ? 'pointer' : 'not-allowed',
+              }}
+              disabled={!hasErpData}
               onClick={onExportZpStatus}>
               ↓ Eksportuj ZP → CSV
             </button>
-            {!hasPlanData && (
-              <div style={{ fontSize: 10, color: T.text3 }}>Wczytaj routing + zs najpierw</div>
+            {!hasErpData && (
+              <div style={{ fontSize: 10, color: T.text3 }}>Wczytaj plik ERP najpierw</div>
             )}
           </div>
         </div>
@@ -172,12 +249,12 @@ export function ImportTab({ routing, zp, zpStatusData, onLoad, onExportZpStatus,
 
       {/* ── 3. POBIERZ PRZYKŁADY ───────────────────────────────────────────── */}
       <section>
-        <SectionHeader icon="📋" label="Pobierz przykłady CSV" />
-        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3,1fr)', gap: 12 }}>
+        <SectionHeader icon="📋" label="Pobierz przykłady" />
+        {/* [ZMIANA] Dwa przykłady zamiast trzech */}
+        <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12 }}>
           {[
-            { key: 'routing',   label: 'routing.csv',   icon: '🗂️', desc: 'Marszruty technologiczne' },
-            { key: 'zs',        label: 'zs.csv',        icon: '🧾', desc: 'Zamówienia sprzedaży' },
-            { key: 'zp_status', label: 'zp_status.csv', icon: '🏭', desc: 'Status realizacji ZP' },
+            { key: 'erp_zp',    label: 'erp_zp_przyklad.csv',    icon: '🏭', desc: 'Eksport ZP z ERP (format TSV)' },
+            { key: 'zp_status', label: 'zp_status_przyklad.csv', icon: '📋', desc: 'Status realizacji ZP' },
           ].map(({ key, label, icon, desc }) => (
             <div key={key} style={{ ...s.card, display: 'flex', alignItems: 'center', gap: 12 }}>
               <span style={{ fontSize: 22, flexShrink: 0 }}>{icon}</span>

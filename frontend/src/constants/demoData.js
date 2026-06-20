@@ -1,3 +1,7 @@
+// ─── demoData.js ──────────────────────────────────────────────────────────────
+// Oryginalne dane demo + DEMO_SCHEDULE (grafik maszyn) + DEMO_BRIGADE_MAP
+// Brygada = spinacz maszyn. Dostępność brygady = suma dostępności jej maszyn.
+// ─────────────────────────────────────────────────────────────────────────────
 export const DEMO_ROUTING = `product,operation,workcenter,ct_min,sequence,capacity_h,predecessors
 P-KOD-100-100,Wycinanie laserowe podstawy,G-01,3.0,1,8,
 P-KOD-100-100,Gięcie profili podstawy,G-02,8.0,2,8,1
@@ -180,3 +184,119 @@ ZP-007/01/02,ZP-007/01,ZS-007,1,KlimaSystem Łódź,P-SKR-ROZ-02,"Gięcie skrzyn
 ZP-007/01/03,ZP-007/01,ZS-007,1,KlimaSystem Łódź,P-SKR-ROZ-02,"Zgrzewanie liniowe korpusu",G-03,3,45,45,CNF,2026-05-30,2026-05-23 09:30,2026-05-23 11:00,2026-05-23 09:28,2026-05-23 11:22,3,INNE
 ZP-007/01/04,ZP-007/01,ZS-007,1,KlimaSystem Łódź,P-SKR-ROZ-02,"Wyklejanie matą kauczukową",G-04,4,45,30,WIP,2026-05-30,2026-05-23 11:45,2026-05-23 15:30,2026-05-23 12:10,,3,
 ZP-007/01/05,ZP-007/01,ZS-007,1,KlimaSystem Łódź,P-SKR-ROZ-02,"Montaż króćców i przepustnicy",G-05,5,45,0,PLAN,2026-05-30,2026-05-23 16:10,2026-05-23 19:10,,,3,`;
+
+
+// ─── GRAFIK MASZYN (2 tygodnie robocze: 2026-06-01 → 2026-06-12) ─────────────
+// Format: date,workcenter,brigade,hours
+// Logika:
+//   G-01 Brygada-Ciecia   — laser 2-zmianowy (16h), środa tyg.1 = 0h (przegląd)
+//   G-02 Brygada-Giecia   — prasy 1-zmianowy (8h), piątek skrócony do 6h
+//   G-03 Brygada-Spawania — spawarki 2-zmianowy (16h), czwartek tyg.2 = 0h (awaria)
+//   G-04 Brygada-Montazu  — montaż 1-zmianowy (8h)
+//   G-05 Brygada-Montazu  — montaż 1-zmianowy (8h) — ta sama brygada co G-04!
+//        → Brygada-Montazu = spinacz G-04 + G-05, dostępność = 8+8 = 16h/dzień
+export const DEMO_SCHEDULE = `date,workcenter,brigade,hours
+2026-06-01,G-01,Brygada-Ciecia,16
+2026-06-02,G-01,Brygada-Ciecia,16
+2026-06-03,G-01,Brygada-Ciecia,0
+2026-06-04,G-01,Brygada-Ciecia,16
+2026-06-05,G-01,Brygada-Ciecia,16
+2026-06-08,G-01,Brygada-Ciecia,16
+2026-06-09,G-01,Brygada-Ciecia,16
+2026-06-10,G-01,Brygada-Ciecia,16
+2026-06-11,G-01,Brygada-Ciecia,16
+2026-06-12,G-01,Brygada-Ciecia,16
+2026-06-01,G-02,Brygada-Giecia,8
+2026-06-02,G-02,Brygada-Giecia,8
+2026-06-03,G-02,Brygada-Giecia,8
+2026-06-04,G-02,Brygada-Giecia,8
+2026-06-05,G-02,Brygada-Giecia,6
+2026-06-08,G-02,Brygada-Giecia,8
+2026-06-09,G-02,Brygada-Giecia,8
+2026-06-10,G-02,Brygada-Giecia,8
+2026-06-11,G-02,Brygada-Giecia,8
+2026-06-12,G-02,Brygada-Giecia,6
+2026-06-01,G-03,Brygada-Spawania,16
+2026-06-02,G-03,Brygada-Spawania,16
+2026-06-03,G-03,Brygada-Spawania,16
+2026-06-04,G-03,Brygada-Spawania,16
+2026-06-05,G-03,Brygada-Spawania,16
+2026-06-08,G-03,Brygada-Spawania,16
+2026-06-09,G-03,Brygada-Spawania,16
+2026-06-10,G-03,Brygada-Spawania,16
+2026-06-11,G-03,Brygada-Spawania,0
+2026-06-12,G-03,Brygada-Spawania,16
+2026-06-01,G-04,Brygada-Montazu,8
+2026-06-02,G-04,Brygada-Montazu,8
+2026-06-03,G-04,Brygada-Montazu,8
+2026-06-04,G-04,Brygada-Montazu,8
+2026-06-05,G-04,Brygada-Montazu,8
+2026-06-08,G-04,Brygada-Montazu,8
+2026-06-09,G-04,Brygada-Montazu,8
+2026-06-10,G-04,Brygada-Montazu,8
+2026-06-11,G-04,Brygada-Montazu,8
+2026-06-12,G-04,Brygada-Montazu,8
+2026-06-01,G-05,Brygada-Montazu,8
+2026-06-02,G-05,Brygada-Montazu,8
+2026-06-03,G-05,Brygada-Montazu,8
+2026-06-04,G-05,Brygada-Montazu,8
+2026-06-05,G-05,Brygada-Montazu,8
+2026-06-08,G-05,Brygada-Montazu,8
+2026-06-09,G-05,Brygada-Montazu,8
+2026-06-10,G-05,Brygada-Montazu,8
+2026-06-11,G-05,Brygada-Montazu,8
+2026-06-12,G-05,Brygada-Montazu,8`;
+
+
+// ─── MAPA BRYGAD ──────────────────────────────────────────────────────────────
+// Wynika z DEMO_SCHEDULE (parseScheduleCSV buduje to automatycznie),
+// ale eksportujemy też jako stałą do użycia bez parsowania CSV.
+// Użycie: przekaż do calcBrigadeBalance(brigadeToWC, wcSchedule, scheduledOps, days)
+export const DEMO_BRIGADE_MAP = {
+  'Brygada-Ciecia':   ['G-01'],
+  'Brygada-Giecia':   ['G-02'],
+  'Brygada-Spawania': ['G-03'],
+  'Brygada-Montazu':  ['G-04', 'G-05'],  // spinacz — obie maszyny, jedna brygada
+};
+
+
+// ─── HELPER: dni robocze z DEMO_SCHEDULE ─────────────────────────────────────
+// Gotowa lista dat do przekazania jako `days` do calcBrigadeBalance
+export const DEMO_SCHEDULE_DAYS = [
+  '2026-06-01','2026-06-02','2026-06-03','2026-06-04','2026-06-05',
+  '2026-06-08','2026-06-09','2026-06-10','2026-06-11','2026-06-12',
+];
+
+// ─── DEMO ERP ZP ─────────────────────────────────────────────────────────────
+// Zastępuje DEMO_ROUTING + DEMO_ZS — format TSV zgodny z parseZPFromERP()
+// Dane przykładowe: 4 ZP, różne maszyny, różna liczba operacji
+export const DEMO_ERP_ZP = `Numer ZP	Klient/zam	Numer ZS	Data zak	Data wys	Kod	Nazwa	Ilość ZP	Wyprod.	OP	WC	WCname	WC2	CzasPlan	CzasPozost
+7310980009	AIRTEAM [MindeT]	2000034452	2026-06-24 00:00	2026-06-25 00:00	1274449	ZUP-L /1/304048	1	0	010	20043	Wykrawarko-gilotyna SG6 M107	Maszyny	2	2
+7310980009	AIRTEAM [MindeT]	2000034452	2026-06-24 00:00	2026-06-25 00:00	1274449	ZUP-L /1/304048	1	0	020	30009	Centrum gięć	Maszyny	4	4
+7310980009	AIRTEAM [MindeT]	2000034452	2026-06-24 00:00	2026-06-25 00:00	1274449	ZUP-L /1/304048	1	0	040	30052	Ślusarnia - iSWAY	iSWAY	8	8
+7310980010	AIRTEAM [MindeT]	2000034452	2026-06-24 00:00	2026-06-25 00:00	1274449	ZUP-L /2/304048	1	0	010	20043	Wykrawarko-gilotyna SG6 M107	Maszyny	2	2
+7310980010	AIRTEAM [MindeT]	2000034452	2026-06-24 00:00	2026-06-25 00:00	1274449	ZUP-L /2/304048	1	0	020	30009	Centrum gięć	Maszyny	4	4
+7310980010	AIRTEAM [MindeT]	2000034452	2026-06-24 00:00	2026-06-25 00:00	1274449	ZUP-L /2/304048	1	0	040	30052	Ślusarnia - iSWAY	iSWAY	8	8
+7310980011	AIRTEAM [MindeT]	2000034452	2026-06-24 00:00	2026-06-25 00:00	1274449	ZUP-L /3/304048	1	0	010	20043	Wykrawarko-gilotyna SG6 M107	Maszyny	2	2
+7310980011	AIRTEAM [MindeT]	2000034452	2026-06-24 00:00	2026-06-25 00:00	1274449	ZUP-L /3/304048	1	0	020	30009	Centrum gięć	Maszyny	4	4
+7310980011	AIRTEAM [MindeT]	2000034452	2026-06-24 00:00	2026-06-25 00:00	1274449	ZUP-L /3/304048	1	0	040	30052	Ślusarnia - iSWAY	iSWAY	8	8
+7310982834	ROCKFIN [S101326]	1000227356	2026-06-24 00:00	2026-06-25 00:00	1238582	TAPS-HA-1000x2000x700 (200x133)x3	6	0	010	20005	Piła taśmowa STG230 DPG M002	Pilarnia Stalowa	2	2
+7310982834	ROCKFIN [S101326]	1000227356	2026-06-24 00:00	2026-06-25 00:00	1238582	TAPS-HA-1000x2000x700 (200x133)x3	6	0	011	20059	Wykrawarko-gilotyna SGe_2 M227	Maszyny	3	3
+7310982834	ROCKFIN [S101326]	1000227356	2026-06-24 00:00	2026-06-25 00:00	1238582	TAPS-HA-1000x2000x700 (200x133)x3	6	0	015	30009	Centrum gięć	Maszyny	6	6
+7310982834	ROCKFIN [S101326]	1000227356	2026-06-24 00:00	2026-06-25 00:00	1238582	TAPS-HA-1000x2000x700 (200x133)x3	6	0	019	30003	Ślusarnia - kanały	Kanały	20	20
+7311017392	KORGAS [2026.06.10./Deimant]	2000044436	2026-06-25 00:00	2026-06-26 00:00	1290544	KWP-P-E-1400x520-350 -BEN230-M	2	0	010	20043	Wykrawarko-gilotyna SG6 M107	Maszyny	3	3
+7311017392	KORGAS [2026.06.10./Deimant]	2000044436	2026-06-25 00:00	2026-06-26 00:00	1290544	KWP-P-E-1400x520-350 -BEN230-M	2	0	020	30009	Centrum gięć	Maszyny	5	5
+7311017392	KORGAS [2026.06.10./Deimant]	2000044436	2026-06-25 00:00	2026-06-26 00:00	1290544	KWP-P-E-1400x520-350 -BEN230-M	2	0	040	30052	Ślusarnia - iSWAY	iSWAY	10	10
+7311017393	KORGAS [2026.06.10./Deimant]	2000044436	2026-06-25 00:00	2026-06-26 00:00	1290545	KWP-P-E-1100x670-350 -BEN230-M	2	0	010	20043	Wykrawarko-gilotyna SG6 M107	Maszyny	3	3
+7311017393	KORGAS [2026.06.10./Deimant]	2000044436	2026-06-25 00:00	2026-06-26 00:00	1290545	KWP-P-E-1100x670-350 -BEN230-M	2	0	020	30009	Centrum gięć	Maszyny	5	5
+7311017393	KORGAS [2026.06.10./Deimant]	2000044436	2026-06-25 00:00	2026-06-26 00:00	1290545	KWP-P-E-1100x670-350 -BEN230-M	2	0	040	30052	Ślusarnia - iSWAY	iSWAY	10	10
+7310899766	TECHNOINSTAL SP.Z O.O.	1000207265	2026-06-25 00:00	2026-06-26 00:00	1236762	ZUP /1/203839	1	0	020	30009	Centrum gięć	Maszyny	4	4
+7310899766	TECHNOINSTAL SP.Z O.O.	1000207265	2026-06-25 00:00	2026-06-26 00:00	1236762	ZUP /1/203839	1	0	040	30052	Ślusarnia - iSWAY	iSWAY	12	12
+7311017236	KLIMABAZAR [z dn. 10.06.2026r.]	1000235338	2026-06-26 00:00	2026-06-27 00:00	1225930	KWP-O-E-1300x400-350 -BFN24-T	1	0	010	20043	Wykrawarko-gilotyna SG6 M107	Maszyny	2	2
+7311017236	KLIMABAZAR [z dn. 10.06.2026r.]	1000235338	2026-06-26 00:00	2026-06-27 00:00	1225930	KWP-O-E-1300x400-350 -BFN24-T	1	0	020	30009	Centrum gięć	Maszyny	4	4
+7311017236	KLIMABAZAR [z dn. 10.06.2026r.]	1000235338	2026-06-26 00:00	2026-06-27 00:00	1225930	KWP-O-E-1300x400-350 -BFN24-T	1	0	040	30052	Ślusarnia - iSWAY	iSWAY	8	8
+7311017240	KLIMABAZAR [z dn. 10.06.2026r.]	1000235338	2026-06-26 00:00	2026-06-27 00:00	1209741	KWP-LE-800x400-350 -BFN24-T	2	0	010	20043	Wykrawarko-gilotyna SG6 M107	Maszyny	2	2
+7311017240	KLIMABAZAR [z dn. 10.06.2026r.]	1000235338	2026-06-26 00:00	2026-06-27 00:00	1209741	KWP-LE-800x400-350 -BFN24-T	2	0	020	30009	Centrum gięć	Maszyny	4	4
+7311017240	KLIMABAZAR [z dn. 10.06.2026r.]	1000235338	2026-06-26 00:00	2026-06-27 00:00	1209741	KWP-LE-800x400-350 -BFN24-T	2	0	040	30052	Ślusarnia - iSWAY	iSWAY	8	8
+7310930520	SMAY REKLAMACJE	0901011826	2026-06-23 00:00	2026-06-24 00:00	95001	Naprawa kielichów NSDZ	1	0	010	30003	Ślusarnia - kanały	Kanały	24	24
+7310930520	SMAY REKLAMACJE	0901011826	2026-06-23 00:00	2026-06-24 00:00	95001	Naprawa kielichów NSDZ	1	0	020	30052	Ślusarnia - iSWAY	iSWAY	16	16`;
