@@ -24,7 +24,9 @@ import { RealizacjaTab } from './components/tabs/RealizacjaTab.jsx';
 import { LateZSTab }     from './components/tabs/LateZSTab.jsx';
 import { BufferTab }     from './components/tabs/BufferTab.jsx';
 import { BufferZSTab }   from './components/tabs/BufferZSTab.jsx';
-import { ScheduleDebugTab } from './components/tabs/ScheduleDebugTab.jsx';
+import { ScheduleDebugTab }  from './components/tabs/ScheduleDebugTab.jsx';
+import { HeatmapPlanTab }   from './components/tabs/HeatmapPlanTab.jsx';
+import { SettingsTab }      from './components/tabs/SettingsTab.jsx';
 import './App.css';
 
 const MENU = [
@@ -32,7 +34,8 @@ const MENU = [
   { label: '📋 Planowanie', items: [
     { id: 'plan',       label: 'Harmonogram' },
     { id: 'bottleneck', label: 'Wąskie gardła' },
-    { id: 'heatmap',    label: 'Heatmapa obciążeń' },
+    { id: 'heatmap',      label: 'Heatmapa obciążeń' },
+    { id: 'heatmap_plan', label: 'Heatmapa planu' },
     { id: 'swimlane',   label: 'Swimlane' },
     { id: 'sankey',     label: 'Przepływ (Sankey)' },
     { id: 'routing',    label: 'Routing' },
@@ -49,6 +52,7 @@ const MENU = [
   { label: '⚙️', items: [
     { id: 'import',         label: 'Import / Eksport' },
     { id: 'schedule_debug', label: 'Diagnostyka harmonogramu' },
+    { id: 'settings',       label: 'Ustawienia planowania' },
   ]},
 ];
 
@@ -137,6 +141,13 @@ export default function App() {
   const [ganttDirty, setGanttDirty] = useState(true);
   const [planStart, setPlanStart]   = useState(() => new Date().toISOString().slice(0,10));
   const [hybridMode, setHybridMode] = useState(false);
+  const [scheduleConfig, setScheduleConfig] = useState({
+    vipBufferDays:   2,       // bufor bezpieczeństwa VIP [dni]
+    urgencyMethod:   'cr',    // metoda sortowania: cr | due_date | slack
+    autoPlanStart:   true,    // planStart = dziś przy imporcie
+    defaultSchedule: [16,16,16,16,16,0,0], // pon-nd [h]
+    horizonDays:     14,      // horyzont planowania [dni] — filtr ZP przed schedulingiem
+  });
 
   const [historyData, setHistoryData]         = useState([]);
   const [zpStatusData, setZpStatusData]       = useState([]);
@@ -263,7 +274,7 @@ export default function App() {
 
     worker.postMessage({
       type: 'SCHEDULE',
-      payload: { zpList: zp, routingByProduct: rl, wcSchedule, planStart }
+      payload: { zpList: zp, routingByProduct: rl, wcSchedule, planStart, config: scheduleConfig }
     });
   }
 
@@ -322,11 +333,18 @@ export default function App() {
       const parsed = parseZPFromERP(text);
       const { zpList, routingByProduct } = erpZpToSchedulerInput(parsed);
       const routingFlat = _erpRoutingToFlat(routingByProduct);
-      setErpZp(parsed);
+      // Filtruj do horyzontu — spóźnione max 30 dni wstecz, przyszłe do horizonDays
+      const horizonDate = new Date();
+      horizonDate.setDate(horizonDate.getDate() + (scheduleConfig.horizonDays || 14));
+      const horizonStr  = horizonDate.toISOString().slice(0, 10);
+      const cutoffDate  = new Date();
+      cutoffDate.setDate(cutoffDate.getDate() - 30);
+      const cutoffStr   = cutoffDate.toISOString().slice(0, 10);
+      const zpFiltered  = zpList.filter(z => z.due_date >= cutoffStr && z.due_date <= horizonStr);
       setRouting(routingFlat);
-      setZP(zpList);
+      setZP(zpFiltered);
       setGanttDirty(true);
-      if (parsed.length) setTab('dashboard');
+      if (parsed.length) setTab('heatmap_plan');
       return { zpList: parsed };
     }
     if (type === 'zp_status') {
@@ -335,7 +353,7 @@ export default function App() {
       setZpStatusHeaders(calcZpHeaderStatus(records));
       return { rejected };
     }
-  }, [wcLoadMap]);
+  }, [wcLoadMap, scheduleConfig]);
 
   // Spłaszcz routingByProduct → routing[] (format zgodny z resztą aplikacji)
   function _erpRoutingToFlat(routingByProduct) {
@@ -482,7 +500,8 @@ export default function App() {
         {tab === 'plan'       && <PlanTab routing={routing} zp={zp} globalLookups={globalLookups} wcSchedule={wcSchedule} subZP={subZP} fwdZP={fwdZP} zpStatus={activeZpStatus} ganttDirty={ganttDirty} onRecalc={() => recalcGantt()} onScheduleChange={updateSchedule} planStart={planStart} onPlanStartChange={setPlanStart} />}
         {tab === 'bottleneck' && <BottleneckTab routing={routing} zp={filteredZP} globalLookups={globalLookups} wcSchedule={wcSchedule} subZP={subZP} />}
         {tab === 'routing'    && <RoutingTab routing={routing} zp={zp} globalLookups={globalLookups} />}
-        {tab === 'heatmap'    && <HeatmapTab routing={routing} zp={filteredZP} globalLookups={globalLookups} wcSchedule={wcSchedule} />}
+        {tab === 'heatmap'      && <HeatmapTab routing={routing} zp={filteredZP} globalLookups={globalLookups} wcSchedule={wcSchedule} />}
+        {tab === 'heatmap_plan' && <HeatmapPlanTab fwdZP={fwdZP} routing={routing} wcSchedule={wcSchedule} />}
         {tab === 'swimlane'   && <SwimlaneTab routing={routing} zp={filteredZP} globalLookups={globalLookups} wcSchedule={wcSchedule} />}
         {tab === 'sankey'     && <SankeyTab routing={routing} zp={filteredZP} globalLookups={globalLookups} wcSchedule={wcSchedule} />}
         {tab === 'realizacja' && <RealizacjaTab zpStatusData={zpStatusData} />}
@@ -490,6 +509,7 @@ export default function App() {
         {tab === 'buffer_zs'  && <BufferZSTab zpStatusData={zpStatusData} />}
         {tab === 'late_zs'    && <LateZSTab zpStatus={activeZpStatus} />}
         {tab === 'schedule_debug' && <ScheduleDebugTab fwdZP={fwdZP} zpStatus={zpStatus} planStart={planStart} />}
+        {tab === 'settings'       && <SettingsTab config={scheduleConfig} onConfigChange={cfg => { setScheduleConfig(cfg); setGanttDirty(true); }} />}
         {tab === 'analysis'   && <AnalysisTab historyData={historyData} routing={routing} wcSchedule={wcSchedule} zpStatusData={zpStatusData} zpStatusHeaders={zpStatusHeaders} />}
       </main>
     </div>
