@@ -8,6 +8,7 @@ export function HeatmapPlanTab({ fwdZP = [], routing = [], wcSchedule = {} }) {
   const [showDetail, setShowDetail] = useState(false);
   const [expanded,   setExpanded]   = useState(new Set());
   const [mode,       setMode]       = useState('pct');
+  const [groupBy,    setGroupBy]    = useState('plan'); // 'plan' | 'due'
 
   // Buduj mapę wc → wc_group i wc → machine_name z routingu
   const wcMeta = useMemo(() => {
@@ -19,19 +20,27 @@ export function HeatmapPlanTab({ fwdZP = [], routing = [], wcSchedule = {} }) {
     return map;
   }, [routing.length]);
 
-  // Obciążenie z segmentów fwdZP per maszyna per dzień
-  const { loadMap, dates, groups } = useMemo(() => {
+  // Obciążenie z segmentów fwdZP per maszyna per dzień (lub per due_date)
+  const { loadMap, dates, groups, lateKeys } = useMemo(() => {
     const loadMap = {};
     const dateSet = new Set();
 
     for (const op of fwdZP) {
       const wc = op.workcenter;
       if (!loadMap[wc]) loadMap[wc] = {};
-      for (const seg of (op.segments || [])) {
-        if (!seg.segStart) continue;
-        const d = localDateStr(seg.segStart);
-        dateSet.add(d);
-        loadMap[wc][d] = (loadMap[wc][d] || 0) + seg.durH;
+      if (groupBy === 'due') {
+        // Tryb "wg terminu" — całe durH operacji trafia do due_date ZP
+        if (!op.due_date) continue;
+        dateSet.add(op.due_date);
+        loadMap[wc][op.due_date] = (loadMap[wc][op.due_date] || 0) + (op.durH || 0);
+      } else {
+        // Tryb "wg planu" — obciążenie wg faktycznych dat segmentów
+        for (const seg of (op.segments || [])) {
+          if (!seg.segStart) continue;
+          const d = localDateStr(seg.segStart);
+          dateSet.add(d);
+          loadMap[wc][d] = (loadMap[wc][d] || 0) + seg.durH;
+        }
       }
     }
 
@@ -55,8 +64,24 @@ export function HeatmapPlanTab({ fwdZP = [], routing = [], wcSchedule = {} }) {
       .map(([wc2, machines]) => ({ wc2, machines: machines.sort((a,b) => a.wc.localeCompare(b.wc)) }))
       .sort((a, b) => a.wc2.localeCompare(b.wc2));
 
-    return { loadMap, dates, groups };
-  }, [fwdZP.length, routing.length, wcMeta]);
+    // Zbiór kluczy "wc|date" gdzie pracuje spóźnione ZP
+    const lateKeys = new Set();
+    for (const op of fwdZP) {
+      const isLate = op.realEnd && op.due_date &&
+        new Date(op.realEnd) > new Date(op.due_date + 'T23:59:59');
+      if (!isLate) continue;
+      if (groupBy === 'due') {
+        if (op.due_date) lateKeys.add(`${op.workcenter}|${op.due_date}`);
+      } else {
+        for (const seg of (op.segments || [])) {
+          if (!seg.segStart) continue;
+          lateKeys.add(`${op.workcenter}|${localDateStr(seg.segStart)}`);
+        }
+      }
+    }
+
+    return { loadMap, dates, groups, lateKeys };
+  }, [fwdZP.length, routing.length, wcMeta, groupBy]);
 
   function getAvailH(wc, dateStr) {
     const sched = wcSchedule[wc];
@@ -107,10 +132,25 @@ export function HeatmapPlanTab({ fwdZP = [], routing = [], wcSchedule = {} }) {
     <div style={s.card}>
       {/* Toolbar */}
       <div style={{ display: 'flex', alignItems: 'center', gap: 12, marginBottom: 14, flexWrap: 'wrap' }}>
-        <div style={{ ...s.cardTitle, margin: 0 }}>Heatmapa planu — gniazda × dni</div>
+        <div style={{ ...s.cardTitle, margin: 0 }}>
+          Heatmapa planu — gniazda × {groupBy === 'due' ? 'terminy' : 'dni'}
+        </div>
 
-        <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginLeft: 'auto' }}>
-          {/* Toggle */}
+        <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginLeft: 'auto', flexWrap: 'wrap' }}>
+
+          {/* Przełącznik grupowania */}
+          <div style={{ display: 'flex', gap: 2, background: T.surface3, borderRadius: 7, padding: 2 }}>
+            {[['plan', '📅 wg planu'], ['due', '🏁 wg terminu']].map(([val, label]) => (
+              <button key={val} onClick={() => setGroupBy(val)}
+                style={{ padding: '3px 10px', fontSize: 11, fontWeight: 600, borderRadius: 5, border: 'none',
+                  background: groupBy === val ? T.accent : 'transparent',
+                  color: groupBy === val ? '#fff' : T.text3, cursor: 'pointer' }}>
+                {label}
+              </button>
+            ))}
+          </div>
+
+          {/* Toggle maszyn */}
           <span style={{ fontSize: 12, color: T.text3 }}>Maszyny:</span>
           <div onClick={() => { setShowDetail(v => !v); setExpanded(new Set()); }}
             style={{
@@ -126,7 +166,7 @@ export function HeatmapPlanTab({ fwdZP = [], routing = [], wcSchedule = {} }) {
             }} />
           </div>
 
-          {/* Tryb */}
+          {/* Tryb wartości */}
           <select value={mode} onChange={e => setMode(e.target.value)}
             style={{ fontSize: 11, padding: '3px 8px', borderRadius: 6,
               border: `1px solid ${T.border2}`, background: T.surface2, color: T.text }}>
@@ -136,8 +176,17 @@ export function HeatmapPlanTab({ fwdZP = [], routing = [], wcSchedule = {} }) {
         </div>
       </div>
 
+      {/* Info dla trybu wg terminu */}
+      {groupBy === 'due' && (
+        <div style={{ fontSize: 11, color: T.text3, marginBottom: 10, padding: '6px 10px',
+          background: T.surface2, borderRadius: 6, border: `1px solid ${T.border}` }}>
+          ℹ️ Tryb <strong style={{ color: T.text2 }}>wg terminu</strong> — kolumny = due_date ZP.
+          Pokazuje ile godzin pracy przypada na każdy termin, niezależnie od faktycznego dnia wykonania.
+        </div>
+      )}
+
       {/* Tabela */}
-      <div style={{ overflowX: 'auto', overflowY: 'auto', maxHeight: 'calc(100vh - 220px)' }}>
+      <div style={{ overflowX: 'auto', overflowY: 'auto', maxHeight: 'calc(100vh - 240px)' }}>
         <table style={{ borderCollapse: 'collapse', fontSize: 12, width: '100%' }}>
           <thead>
             <tr>
@@ -177,12 +226,15 @@ export function HeatmapPlanTab({ fwdZP = [], routing = [], wcSchedule = {} }) {
                   </td>
                   {aggLoad.map((load, i) => {
                     const hs = hmStyle(aggAvail[i], load);
+                    const isLateCell = machines.some(m => lateKeys.has(`${m.wc}|${dates[i]}`));
                     return (
                       <td key={i} style={{ padding: 4, textAlign: 'center' }}>
                         <div style={{ display: 'inline-flex', alignItems: 'center',
                           justifyContent: 'center', minWidth: 56, height: 26,
                           borderRadius: 5, background: hs.bg, color: hs.color,
-                          fontSize: 11, fontWeight: 600, fontFamily: 'monospace' }}>
+                          fontSize: 11, fontWeight: 600, fontFamily: 'monospace',
+                          boxShadow: isLateCell ? 'inset 0 0 0 2px #ef4444' : 'none',
+                        }}>
                           {hs.text}
                         </div>
                       </td>
@@ -212,12 +264,15 @@ export function HeatmapPlanTab({ fwdZP = [], routing = [], wcSchedule = {} }) {
                       </td>
                       {mLoads.map((load, i) => {
                         const hs = hmStyle(mAvail[i], load);
+                        const isLateMCell = lateKeys.has(`${m.wc}|${dates[i]}`);
                         return (
                           <td key={i} style={{ padding: 4, textAlign: 'center' }}>
                             <div style={{ display: 'inline-flex', alignItems: 'center',
                               justifyContent: 'center', minWidth: 56, height: 24,
                               borderRadius: 5, background: hs.bg, color: hs.color,
-                              fontSize: 11, fontWeight: 500, fontFamily: 'monospace' }}>
+                              fontSize: 11, fontWeight: 500, fontFamily: 'monospace',
+                              boxShadow: isLateMCell ? 'inset 0 0 0 2px #ef4444' : 'none',
+                            }}>
                               {hs.text}
                             </div>
                           </td>

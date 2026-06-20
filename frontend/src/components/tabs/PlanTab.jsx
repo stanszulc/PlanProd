@@ -7,7 +7,7 @@ import { GrafikTab } from './GrafikTab.jsx';
 
 export function PlanTab({ routing, zp, globalLookups, wcSchedule, subZP, fwdZP, zpStatus,
                      onRecalc, ganttDirty, onScheduleChange, planStart, onPlanStartChange }) {
-  const [sharedView, setSharedView] = useState({ panX:0, scaleIdx:2, hourW:28 });
+  const [sharedView, setSharedView] = useState({ panX:0, scaleIdx:2, hourW:28, scrollY:0, wcOrder:[] });
 
   const panelStyle = {
     background: T.surface,
@@ -57,6 +57,8 @@ export function PlanTab({ routing, zp, globalLookups, wcSchedule, subZP, fwdZP, 
             slavePanX={sharedView.panX}
             slaveScaleIdx={sharedView.scaleIdx}
             slaveHourW={sharedView.hourW}
+            slaveScrollY={sharedView.scrollY}
+            wcOrder={sharedView.wcOrder}
             planStart={planStart}
           />
         </div>

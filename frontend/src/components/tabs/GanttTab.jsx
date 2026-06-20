@@ -38,10 +38,22 @@ export function GanttTab({ routing, zp, globalLookups, wcSchedule, subZP, fwdZP,
   const panRef       = useRef(null);
   const containerRef = useRef(null);
 
-  // Synchronizacja widoku z PlanTab
+  // Synchronizacja widoku z PlanTab (X + Y + wcOrder)
+  const scrollYRef = useRef(0);
   useEffect(() => {
-    if (onViewChange) onViewChange({ panX, scaleIdx, hourW: SCALES[scaleIdx].hourW });
-  }, [panX, scaleIdx]);
+    const el = containerRef.current;
+    if (!el) return;
+    function onScroll() {
+      scrollYRef.current = el.scrollTop;
+      if (onViewChange) onViewChange({ panX, scaleIdx, hourW: SCALES[scaleIdx].hourW, scrollY: el.scrollTop, wcOrder: allWCFull });
+    }
+    el.addEventListener('scroll', onScroll, { passive: true });
+    return () => el.removeEventListener('scroll', onScroll);
+  }, [panX, scaleIdx, allWCFull, onViewChange]);
+
+  useEffect(() => {
+    if (onViewChange) onViewChange({ panX, scaleIdx, hourW: SCALES[scaleIdx].hourW, scrollY: scrollYRef.current, wcOrder: allWCFull });
+  }, [panX, scaleIdx, allWCFull]);
 
   const scale  = SCALES[scaleIdx];
   const HOUR_W = scale.hourW;
@@ -118,31 +130,53 @@ export function GanttTab({ routing, zp, globalLookups, wcSchedule, subZP, fwdZP,
     return LABEL_W + Math.max(0, (new Date(dt) - axisStart) / 3600000) * HOUR_W;
   }
 
-  // Ticki
-  const ticks = [];
-  for (let t = new Date(axisStart); t <= axisEnd; t.setHours(t.getHours() + scale.tick)) {
-    ticks.push(new Date(t));
-  }
+  // Ticki — memoized
+  const ticks = useMemo(() => {
+    const result = [];
+    for (let t = new Date(axisStart); t <= axisEnd; t.setHours(t.getHours() + scale.tick)) {
+      result.push(new Date(t));
+    }
+    return result;
+  }, [axisStart, axisEnd, scale.tick]);
 
-  // Niedostępne strefy
-  const unavailZones = [];
-  const dayIter = new Date(axisStart);
-  while (dayIter <= axisEnd) {
-    allWC.forEach((wc, wi) => {
-      const avail = getAvail(wc, dayIter, wcSchedule);
-      const ds = new Date(dayIter); ds.setHours(0,0,0,0);
-      const de = new Date(dayIter); de.setHours(24,0,0,0);
-      if (avail === 0) unavailZones.push({ wi, x1: xOf(ds), x2: xOf(de) });
-      else if (avail < 24) {
-        const we = new Date(dayIter); we.setHours(avail, 0, 0, 0);
-        unavailZones.push({ wi, x1: xOf(we), x2: xOf(de) });
-      }
-    });
-    dayIter.setDate(dayIter.getDate() + 1);
-  }
+  // Niedostępne strefy — memoized, generowane tylko dla widocznych maszyn
+  const unavailZones = useMemo(() => {
+    const zones = [];
+    const dayIter = new Date(axisStart);
+    while (dayIter <= axisEnd) {
+      allWC.forEach((wc, wi) => {
+        const avail = getAvail(wc, dayIter, wcSchedule);
+        const ds = new Date(dayIter); ds.setHours(0,0,0,0);
+        const de = new Date(dayIter); de.setHours(24,0,0,0);
+        const x1 = LABEL_W + Math.max(0, (ds - axisStart) / 3600000) * HOUR_W;
+        const x2 = LABEL_W + Math.max(0, (de - axisStart) / 3600000) * HOUR_W;
+        if (avail === 0) zones.push({ wi, x1, x2 });
+        else if (avail < 24) {
+          const we = new Date(dayIter); we.setHours(avail, 0, 0, 0);
+          const xw = LABEL_W + Math.max(0, (we - axisStart) / 3600000) * HOUR_W;
+          zones.push({ wi, x1: xw, x2 });
+        }
+      });
+      dayIter.setDate(dayIter.getDate() + 1);
+    }
+    return zones;
+  }, [axisStart, axisEnd, allWC, wcSchedule, HOUR_W]);
 
   const loads   = computeLoads(globalLookups.routingByProduct, allZP, wcSchedule, dates[0]);
   const maxUtil = Object.values(loads).length ? Math.max(...Object.values(loads).map(v => v.util)) : 0;
+
+  // Precompute wcIndex map — O(1) zamiast indexOf() O(n) w pętli renderowania
+  const wcIndexMap = useMemo(() => {
+    const m = {};
+    allWC.forEach((w, i) => { m[w] = i; });
+    return m;
+  }, [allWC]);
+  const zpStatusMap = useMemo(() => {
+    if (!zpStatus) return {};
+    const m = {};
+    zpStatus.forEach(st => { m[st.zp_id] = st; });
+    return m;
+  }, [zpStatus]);
 
   function onBgMouseDown(e) {
     const tag = e.target.tagName;
@@ -324,18 +358,22 @@ export function GanttTab({ routing, zp, globalLookups, wcSchedule, subZP, fwdZP,
                       </g>;
                     })}
                     {displayZP.map(s2 => {
-                      const wi = allWC.indexOf(s2.workcenter);
-                      if (wi<0) return null;
+                      const wi = wcIndexMap[s2.workcenter];
+                      if (wi === undefined) return null;
                       const col = globalLookups.zpColorMap[s2.parent_zp] || globalLookups.zpColorMap[s2.zp_id] || T.text3;
                       const y = TOP+wi*LANE_H+5, bH = LANE_H-10;
                       return (s2.segments||[]).map((seg,si) => {
                         const x   = xOf(seg.segStart);
                         const x2  = xOf(seg.segEnd);
                         const wpx = Math.max(x2-x, 2);
+                        // Viewport culling — pomiń segmenty poza ekranem
+                        const viewLeft  = -panX;
+                        const viewRight = viewLeft + (containerRef.current?.offsetWidth || 1200);
+                        if (x2 < viewLeft - 20 || x > viewRight + 20) return null;
                         const dueDtLocal = allDues[dates.indexOf(s2.due_date)];
                         const isOver = dueDtLocal && new Date(seg.segEnd) > dueDtLocal;
                         const isLast = si===s2.segments.length-1;
-                        const zpSt = zpStatus && zpStatus.find(st => st.zp_id === (s2.parent_zp || s2.zp_id));
+                        const zpSt = zpStatusMap[s2.parent_zp || s2.zp_id];
                         const tocZone = zpSt ? (zpSt.toc && zpSt.toc.zone) : (isOver ? 'black' : 'green');
                         const borderCol = tocZone==='black'?T.bn:tocZone==='red'?T.bn:tocZone==='yellow'?T.warn:'transparent';
                         const borderW   = tocZone==='green'||!tocZone ? 0 : 2.5;

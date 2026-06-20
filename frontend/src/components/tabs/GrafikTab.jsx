@@ -4,9 +4,17 @@ import { localDateStr, computeLoads } from '../../utils/scheduler.js';
 import { EmptyState } from '../common/EmptyState.jsx';
 import { DAY_NAMES } from '../../constants/theme.js';
 
-export function GrafikTab({ routing, zp, wcSchedule, onScheduleChange, subZP, slavePanX, slaveScaleIdx, slaveHourW, planStart, embedded }) {
+export function GrafikTab({ routing, zp, wcSchedule, onScheduleChange, subZP, slavePanX, slaveScaleIdx, slaveHourW, slaveScrollY, wcOrder, planStart, embedded }) {
 
-  const WCS = useMemo(() => [...new Set(routing.map(r => r.workcenter))].sort(), [routing]);
+  const WCSraw = useMemo(() => [...new Set(routing.map(r => r.workcenter))].sort(), [routing]);
+  // Gdy slave — używaj kolejności z Gantta (wcOrder), żeby scroll Y był zsynchronizowany
+  const WCS = useMemo(() => {
+    if (wcOrder && wcOrder.length) {
+      const set = new Set(WCSraw);
+      return [...wcOrder.filter(w => set.has(w)), ...WCSraw.filter(w => !wcOrder.includes(w))];
+    }
+    return WCSraw;
+  }, [WCSraw, wcOrder]);
 
   const SCALES = [
     { key:'4h',  dayW:160 },
@@ -21,6 +29,13 @@ export function GrafikTab({ routing, zp, wcSchedule, onScheduleChange, subZP, sl
   const [_panX,     _setPanX]     = useState(0);
   const [isPan,     setIsPan]     = useState(false);
   const containerRef = useRef(null);
+
+  // Synchronizacja pionowego scrolla z Ganttą
+  useEffect(() => {
+    if (slaveScrollY === undefined) return;
+    const el = containerRef.current;
+    if (el) el.scrollTop = slaveScrollY;
+  }, [slaveScrollY]);
   const panRef       = useRef(null);
 
   // Slave mode — przejmuje wartości z GanttTab przez PlanTab
