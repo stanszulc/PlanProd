@@ -129,9 +129,10 @@ function NavMenu({ menu, active, onSelect, indicators = {} }) {
 
 export default function App() {
   const [tab, setTab]               = useState('dashboard');
-  const [erpZp, setErpZp]           = useState([]);   // [NOWE] surowe ZP z ERP (parseZPFromERP)
-  const [isScheduling, setIsScheduling] = useState(false); // Worker liczy w tle
-  const workerRef = useRef(null);
+  const [erpZp, setErpZp]           = useState([]);
+  const [isScheduling, setIsScheduling] = useState(false);
+  const workerRef    = useRef(null);
+  const workerSeqRef = useRef(0); // [FIX P0] sequence ID — odrzuca przestarzałe wyniki workera
   const [routing, setRouting]       = useState([]);
   const [zp, setZP]                 = useState([]);
   const [wcSchedule, setWcSchedule] = useState({});
@@ -142,11 +143,11 @@ export default function App() {
   const [planStart, setPlanStart]   = useState(() => new Date().toISOString().slice(0,10));
   const [hybridMode, setHybridMode] = useState(false);
   const [scheduleConfig, setScheduleConfig] = useState({
-    vipBufferDays:   2,       // bufor bezpieczeństwa VIP [dni]
-    urgencyMethod:   'cr',    // metoda sortowania: cr | due_date | slack
-    autoPlanStart:   true,    // planStart = dziś przy imporcie
-    defaultSchedule: [16,16,16,16,16,0,0], // pon-nd [h]
-    horizonDays:     14,      // horyzont planowania [dni] — filtr ZP przed schedulingiem
+    vipBufferDays:   2,
+    urgencyMethod:   'cr',
+    autoPlanStart:   true,
+    defaultSchedule: [16,16,16,16,16,0,0],
+    horizonDays:     14,
   });
 
   const [historyData, setHistoryData]         = useState([]);
@@ -155,7 +156,6 @@ export default function App() {
   const [dateFrom, setDateFrom] = useState('');
   const [dateTo,   setDateTo]   = useState('');
 
-  // ZP przefiltrowane wg zakresu dat — używane w Heatmap, Bottleneck, Swimlane, Sankey
   const filteredZP = useMemo(() => {
     if (!dateFrom && !dateTo) return zp;
     return zp.filter(z =>
@@ -164,7 +164,6 @@ export default function App() {
     );
   }, [zp, dateFrom, dateTo]);
 
-  // unikalne due_dates z ZP — do quick buttons
   const allDueDates = useMemo(() => [...new Set(zp.map(z => z.due_date))].sort(), [zp]);
 
   function updateSchedule(s) {
@@ -221,8 +220,10 @@ export default function App() {
     const rl = globalLookups.routingByProduct;
     if (!Object.keys(rl).length) return;
 
+    // [FIX P0] Terminate poprzedni worker + nowy sequence ID
     if (workerRef.current) workerRef.current.terminate();
     setIsScheduling(true);
+    const seq = ++workerSeqRef.current;
 
     const worker = new Worker(
       new URL('./utils/scheduler.worker.js', import.meta.url),
@@ -231,12 +232,16 @@ export default function App() {
     workerRef.current = worker;
 
     worker.onmessage = (e) => {
+      // [FIX P0] Ignoruj wyniki przestarzałych workerów
+      if (seq !== workerSeqRef.current) {
+        worker.terminate();
+        return;
+      }
       const { type, payload } = e.data;
       if (type === 'PROGRESS') {
         // opcjonalnie: setSchedulingProgress(payload.pct)
       } else if (type === 'DONE') {
         const { fwdZP, zpStatus } = payload;
-        // Daty serialized przez Worker → przywróć Date objects
         const fwdFixed = fwdZP.map(op => ({
           ...op,
           start_dt: op.start_dt ? new Date(op.start_dt) : null,
@@ -278,6 +283,13 @@ export default function App() {
     });
   }
 
+  // [FIX P0] Cleanup workera przy odmontowaniu komponentu
+  useEffect(() => {
+    return () => {
+      if (workerRef.current) workerRef.current.terminate();
+    };
+  }, []);
+
   const activeZpStatus = useMemo(() => {
     if (!hybridMode || !zpStatusData.length) return zpStatus;
     try {
@@ -287,6 +299,7 @@ export default function App() {
       return zpStatus;
     }
   }, [hybridMode, zpStatus, zpStatusData, globalLookups, wcSchedule, planStart]);
+
   const wcLoadMap = useMemo(() => {
     const map = {};
     if (!zp.length || !routing.length) return map;
@@ -317,7 +330,6 @@ export default function App() {
 
   const handleLoad = useCallback((text, type) => {
     if (type === 'demo') {
-      // Demo: parsuj przez ten sam parser co produkcja
       const parsed = parseZPFromERP(DEMO_ERP_ZP);
       const { zpList, routingByProduct } = erpZpToSchedulerInput(parsed);
       const routingFlat = _erpRoutingToFlat(routingByProduct);
@@ -325,7 +337,7 @@ export default function App() {
       setRouting(routingFlat);
       setZP(zpList);
       setGanttDirty(true);
-      setPlanStart('2026-06-22'); // Demo: ustaw planStart na datę demo
+      setPlanStart('2026-06-22');
       setTab('dashboard');
       return;
     }
@@ -333,7 +345,6 @@ export default function App() {
       const parsed = parseZPFromERP(text);
       const { zpList, routingByProduct } = erpZpToSchedulerInput(parsed);
       const routingFlat = _erpRoutingToFlat(routingByProduct);
-      // Filtruj do horyzontu — spóźnione max 30 dni wstecz, przyszłe do horizonDays
       const horizonDate = new Date();
       horizonDate.setDate(horizonDate.getDate() + (scheduleConfig.horizonDays || 14));
       const horizonStr  = horizonDate.toISOString().slice(0, 10);
@@ -355,7 +366,6 @@ export default function App() {
     }
   }, [wcLoadMap, scheduleConfig]);
 
-  // Spłaszcz routingByProduct → routing[] (format zgodny z resztą aplikacji)
   function _erpRoutingToFlat(routingByProduct) {
     const flat = [];
     for (const [product, ops] of Object.entries(routingByProduct)) {
@@ -425,26 +435,14 @@ export default function App() {
 
         {hasData && (
           <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginLeft: 'auto' }}>
-            {/* Date range picker */}
             <div style={{ display: 'flex', alignItems: 'center', gap: 5, padding: '3px 10px', borderRadius: 8, border: `1px solid ${T.border2}`, background: T.surface2 }}>
               <span style={{ fontSize: 11, color: T.text3 }}>od</span>
-              <input
-                type="date" value={dateFrom}
-                onChange={e => setDateFrom(e.target.value)}
-                style={{ fontSize: 11, background: 'transparent', border: 'none', color: T.text2, outline: 'none', width: 110, cursor: 'pointer' }}
-              />
+              <input type="date" value={dateFrom} onChange={e => setDateFrom(e.target.value)}
+                style={{ fontSize: 11, background: 'transparent', border: 'none', color: T.text2, outline: 'none', width: 110, cursor: 'pointer' }} />
               <span style={{ fontSize: 11, color: T.text3 }}>do</span>
-              <input
-                type="date" value={dateTo}
-                onChange={e => setDateTo(e.target.value)}
-                style={{ fontSize: 11, background: 'transparent', border: 'none', color: T.text2, outline: 'none', width: 110, cursor: 'pointer' }}
-              />
-              {/* Quick buttons — +1d/+3d/+7d = pierwsze N terminów z danych */}
-              {[
-                { label: '+1d', n: 1 },
-                { label: '+3d', n: 3 },
-                { label: '+7d', n: 7 },
-              ].map(({ label, n }) => {
+              <input type="date" value={dateTo} onChange={e => setDateTo(e.target.value)}
+                style={{ fontSize: 11, background: 'transparent', border: 'none', color: T.text2, outline: 'none', width: 110, cursor: 'pointer' }} />
+              {[{ label: '+1d', n: 1 }, { label: '+3d', n: 3 }, { label: '+7d', n: 7 }].map(({ label, n }) => {
                 const from = allDueDates[0] || '';
                 const to   = allDueDates[Math.min(n - 1, allDueDates.length - 1)] || from;
                 const active = dateFrom === from && dateTo === to;
@@ -456,17 +454,13 @@ export default function App() {
                   </button>
                 );
               })}
-              <button type="button"
-                onClick={() => { setDateFrom(''); setDateTo(''); }}
+              <button type="button" onClick={() => { setDateFrom(''); setDateTo(''); }}
                 style={{ ...s.btnSm(!dateFrom && !dateTo), fontSize: 10, padding: '2px 7px' }}>
                 wszystkie
               </button>
-
             </div>
             {(dateFrom || dateTo) && (
-              <span style={{ fontSize: 10, color: T.accent }}>
-                ● {filteredZP.length}/{zp.length} ZP
-              </span>
+              <span style={{ fontSize: 10, color: T.accent }}>● {filteredZP.length}/{zp.length} ZP</span>
             )}
             <button type="button" className="flowops-export-btn"
               style={{ ...s.btn(false), fontSize: 11 }} onClick={exportLoad}>
@@ -478,21 +472,10 @@ export default function App() {
 
       <main className="flowops-main">
         {tab === 'dashboard'  && <DashboardTab routing={routing} zp={zp} zpStatus={activeZpStatus} wcSchedule={wcSchedule} historyData={historyData} zpStatusHeaders={zpStatusHeaders} globalLookups={globalLookups} onTabChange={setTab} hybridMode={hybridMode} />}
-        {/* Spinner gdy Worker liczy */}
         {isScheduling && (
-          <div style={{
-            position:'fixed', inset:0, background:'rgba(0,0,0,0.45)',
-            display:'flex', flexDirection:'column', alignItems:'center', justifyContent:'center',
-            zIndex:9999,
-          }}>
-            <div style={{
-              width:48, height:48, border:'4px solid rgba(255,255,255,0.2)',
-              borderTop:'4px solid #4d94ff', borderRadius:'50%',
-              animation:'spin 0.8s linear infinite',
-            }}/>
-            <div style={{color:'#fff', marginTop:16, fontSize:14, fontWeight:500}}>
-              Harmonogramowanie {zp.length} ZP...
-            </div>
+          <div style={{ position:'fixed', inset:0, background:'rgba(0,0,0,0.45)', display:'flex', flexDirection:'column', alignItems:'center', justifyContent:'center', zIndex:9999 }}>
+            <div style={{ width:48, height:48, border:'4px solid rgba(255,255,255,0.2)', borderTop:'4px solid #4d94ff', borderRadius:'50%', animation:'spin 0.8s linear infinite' }}/>
+            <div style={{ color:'#fff', marginTop:16, fontSize:14, fontWeight:500 }}>Harmonogramowanie {zp.length} ZP...</div>
             <style>{`@keyframes spin{to{transform:rotate(360deg)}}`}</style>
           </div>
         )}

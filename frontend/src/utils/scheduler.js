@@ -459,7 +459,7 @@ function calcDelay(realEnd, dueDateStr) {
   const dueDate  = new Date(dueDateStr + 'T23:59:59');
   const delayMs  = Math.max(0, realEnd - dueDate);
   const delayH   = delayMs / MS_PER_HOUR;
-  const delayDays = +(delayH / DEFAULT_AVAIL).toFixed(1);
+  const delayDays = +(delayH / DEFAULT_CAP).toFixed(1); // [FIX P0] DEFAULT_CAP=8h, nie DEFAULT_AVAIL=16h
   return { dueDate, delayH, delayDays };
 }
 

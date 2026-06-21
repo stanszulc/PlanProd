@@ -224,7 +224,7 @@ export function GanttTab({ routing, zp, globalLookups, wcSchedule, subZP, fwdZP,
           <span style={{ fontSize:10, color:T.text3 }}>
             Ctrl+scroll=zoom · scroll=pan · scroll⬆⬇=gniazda
           </span>
-          <button onClick={() => { setPanX(0); setPanY(0); setScaleIdx(2); }}
+          <button onClick={() => { setPanX(0); setScaleIdx(2); if (containerRef.current) containerRef.current.scrollTop = 0; }} /* [FIX P0] setPanY nie istnieje — reset scrollTop bezpośrednio */
             style={{ ...s.btn(false), fontSize:11, padding:'4px 10px' }}>⊡ Reset</button>
           <button onClick={onRecalc}
             style={{ padding:'6px 14px', fontSize:12, fontWeight:600, borderRadius:8, border:'none',
