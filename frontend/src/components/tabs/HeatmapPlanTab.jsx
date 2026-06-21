@@ -134,7 +134,7 @@ export function HeatmapPlanTab({ fwdZP = [], routing = [], wcSchedule = {}, onSc
     }
 
     return { loadMap, brigadeLoadMap: brigadeLoad, dates, groups, lateKeys, lateBrigadeKeys, weekendSet };
-  }, [fwdZP.length, routing.length, wcMeta, groupBy]);
+  }, [fwdZP, routing.length, wcMeta, groupBy]);
 
   const brigades = useMemo(() => [...new Set(groups.map(g => g.wc2))].sort(), [groups]);
 
@@ -202,7 +202,8 @@ export function HeatmapPlanTab({ fwdZP = [], routing = [], wcSchedule = {}, onSc
 
   function hmStyle(avail, load) {
     if (load === 0) return { bg: T.surface2, color: T.text3, text: '–' };
-    const u    = avail > 0 ? load / avail : 999;
+    if (avail === 0) return { bg: 'rgba(239,68,68,0.2)', color: '#ef4444', text: mode === 'h' ? load.toFixed(1) + 'h' : '!' };
+    const u    = load / avail;
     const text = mode === 'h' ? load.toFixed(1) + 'h' : Math.round(u * 100) + '%';
     if (u <= 0.85) return { bg: 'rgba(34,197,94,0.12)',  color: '#22c55e', text };
     if (u <= 1.00) return { bg: 'rgba(245,158,11,0.15)', color: '#f59e0b', text };
@@ -314,6 +315,7 @@ export function HeatmapPlanTab({ fwdZP = [], routing = [], wcSchedule = {}, onSc
             <thead>
               <tr>
                 <th style={{ ...thStyle, textAlign: 'left', minWidth: 160 }}>Gniazdo</th>
+                <th style={{ ...thStyle, minWidth: 60 }}></th>
                 {dates.map(d => <th key={d} style={thStyle}>{fmtDate(d)}</th>)}
                 <th style={thStyle}>Suma</th>
               </tr>
@@ -334,6 +336,7 @@ export function HeatmapPlanTab({ fwdZP = [], routing = [], wcSchedule = {}, onSc
                       {wc2}
                       <span style={{ fontSize: 10, color: T.text3, fontWeight: 400, marginLeft: 4 }}>({machines.length})</span>
                     </td>
+                    <td></td>
                     {aggLoad.map((load, i) => {
                       const hs     = hmStyle(aggAvail[i], load);
                       const isLate = machines.some(m => lateKeys.has(`${m.wc}|${dates[i]}`));
@@ -365,6 +368,7 @@ export function HeatmapPlanTab({ fwdZP = [], routing = [], wcSchedule = {}, onSc
                           <span style={{ fontFamily: 'monospace', fontWeight: 600, fontSize: 10 }}>{m.wc}</span>
                           <span style={{ color: T.text3, marginLeft: 6, fontSize: 10 }}>{m.name}</span>
                         </td>
+                        <td></td>
                         {mLoads.map((load, i) => {
                           const hs     = hmStyle(mAvail[i], load);
                           const isLate = lateKeys.has(`${m.wc}|${dates[i]}`);
