@@ -4,9 +4,58 @@ import { localDateStr, computeLoads } from '../../utils/scheduler.js';
 import { EmptyState } from '../common/EmptyState.jsx';
 import { DAY_NAMES } from '../../constants/theme.js';
 
+// Domyślna capacity brygad [rbh/dzień] — dane rzeczywiste z 2 zmian
+const BRIGADE_DEMO_CAPACITY = {
+  'Maszyny':              202.6,
+  'Kanały':               180.4,
+  'Kratki Stalowe':       156.7,
+  'Kratki Aluminium':     140.0,
+  'Regulatory VAV/NSDZ':  124.6,
+  'Przepustnice':          92.4,
+  'Gniazdo KTM/KTS':       84.9,
+  'Pilarnia Aluminium':    80.0,
+  'Pilarnia Stalowa':      72.0,
+  'Linia WKP':             73.4,
+  'Spawalnia':             56.0,
+  'Montaż Podzespołów':    60.1,
+  'Linia KWP/KWP-L':       54.9,
+  'Gniazdo montażu SN':    32.0,
+  'Gniazdo NSDZ':          16.0,
+  'Gniazdo ZS':            16.0,
+  'Heager':                 8.0,
+  'Klinczarka':             8.0,
+  'Szlifiernia Stal':       8.0,
+};
+
 export function GrafikTab({ routing, zp, wcSchedule, onScheduleChange, subZP, slavePanX, slaveScaleIdx, slaveHourW, slaveScrollY, wcOrder, planStart, embedded }) {
+  const [viewMode, setViewMode] = useState('machines'); // 'machines' | 'brigades'
+  const [brigadeCapacity, setBrigadeCapacity] = useState(BRIGADE_DEMO_CAPACITY);
+  const [editingBrigade, setEditingBrigade] = useState(null); // {name, value}
 
   const WCSraw = useMemo(() => [...new Set(routing.map(r => r.workcenter))].sort(), [routing]);
+
+  // Mapa WC → WC2 (gniazdo/brygada) z routingu
+  const wcToWC2 = useMemo(() => {
+    const m = {};
+    routing.forEach(r => { if (r.workcenter && r.wc_group) m[r.workcenter] = r.wc_group; });
+    return m;
+  }, [routing]);
+
+  // Unikalne brygady (WC2) posortowane
+  const brigades = useMemo(() => {
+    const set = new Set(Object.values(wcToWC2));
+    return [...set].sort();
+  }, [wcToWC2]);
+
+  // Mapa brygada → lista WC
+  const brigadeToWC = useMemo(() => {
+    const m = {};
+    Object.entries(wcToWC2).forEach(([wc, wc2]) => {
+      if (!m[wc2]) m[wc2] = [];
+      if (!m[wc2].includes(wc)) m[wc2].push(wc);
+    });
+    return m;
+  }, [wcToWC2]);
   // Gdy slave — używaj kolejności z Gantta (wcOrder), żeby scroll Y był zsynchronizowany
   const WCS = useMemo(() => {
     if (wcOrder && wcOrder.length) {
@@ -49,6 +98,7 @@ export function GrafikTab({ routing, zp, wcSchedule, onScheduleChange, subZP, sl
   const DAY_W = slaveHourW !== undefined ? slaveHourW * 24 : SCALES[scaleIdx].dayW;
   const CYCLE = [0,4,8,12,16,20,24];
 
+  // Precomputed: brygada → dzień → suma durH (O(n) raz zamiast O(n²) per render)
   // Zakres dat
   const dateRange = useMemo(() => {
     const ps = planStart || localDateStr(new Date());
@@ -73,6 +123,33 @@ export function GrafikTab({ routing, zp, wcSchedule, onScheduleChange, subZP, sl
     return dates;
   }, [subZP, zp, planStart]);
 
+  // Precomputed: set weekendów z dateRange — musi być po dateRange
+  const weekendSet = useMemo(() => {
+    const s = new Set();
+    dateRange.forEach(d => {
+      const jsDay = new Date(d + 'T12:00:00').getDay();
+      if (jsDay === 0 || jsDay === 6) s.add(d);
+    });
+    return s;
+  }, [dateRange]);
+
+  // Precomputed: brygada → dzień → suma durH
+  const brigadeLoadMap = useMemo(() => {
+    const map = {};
+    if (!subZP || !subZP.length) return map;
+    for (const op of subZP) {
+      const wc2 = wcToWC2[op.workcenter];
+      if (!wc2) continue;
+      if (!map[wc2]) map[wc2] = {};
+      for (const seg of (op.segments || [])) {
+        if (!seg.segStart) continue;
+        const d = localDateStr(new Date(seg.segStart));
+        map[wc2][d] = (map[wc2][d] || 0) + seg.durH;
+      }
+    }
+    return map;
+  }, [subZP, wcToWC2]);
+
   function defaultAvail(dateStr) {
     const jsDay = new Date(dateStr+'T12:00:00').getDay();
     return (jsDay===0||jsDay===6) ? 0 : 16;
@@ -96,6 +173,17 @@ export function GrafikTab({ routing, zp, wcSchedule, onScheduleChange, subZP, sl
     newWC[dateStr] = next;
     onScheduleChange({ ...wcSchedule, [wc]: newWC });
   }
+  // O(1) lookup z precomputed brigadeLoadMap
+  function needForBrigadeDate(brigadeName, dateStr) {
+    return brigadeLoadMap[brigadeName]?.[dateStr] || 0;
+  }
+
+  // Capacity brygady — O(1) lookup weekendSet
+  function getBrigadeCapH(brigadeName, dateStr) {
+    if (weekendSet.has(dateStr)) return 0;
+    return brigadeCapacity[brigadeName] ?? 16;
+  }
+
   function needForDate(wc, dateStr) {
     if (!subZP || !subZP.length) return 0;
     let total = 0;
@@ -114,7 +202,8 @@ export function GrafikTab({ routing, zp, wcSchedule, onScheduleChange, subZP, sl
   const TOP_H   = 42;
   const ROW_H   = 50;
   const LANE_H  = ROW_H;
-  const topH    = TOP_H + WCS.length * ROW_H;
+  const rowCount = viewMode === 'brigades' ? brigades.length : WCS.length;
+  const topH    = TOP_H + rowCount * ROW_H;
   const contentW = dateRange.length * DAY_W;
 
   // ── WHEEL ──────────────────────────────────────────────────────────────
@@ -160,6 +249,18 @@ export function GrafikTab({ routing, zp, wcSchedule, onScheduleChange, subZP, sl
   return (
     <div className={embedded ? 'grafik-tab grafik-tab--embedded' : undefined} style={embedded ? {display:'flex', flexDirection:'column', height:'100%'} : undefined}>
       {/* Controls — ukryte gdy embedded (slave) */}
+      {/* Przełącznik trybu — zawsze widoczny */}
+      <div style={{ display:'flex', gap:2, background:T.surface2, borderRadius:7, padding:2, marginBottom:6, alignSelf:'flex-start' }}>
+        {[['machines','🔧 Maszyny'],['brigades','👷 Brygady']].map(([val,label]) => (
+          <button key={val} onClick={() => setViewMode(val)}
+            style={{ padding:'3px 10px', fontSize:11, fontWeight:600, borderRadius:5, border:'none',
+              background: viewMode===val ? T.accent : 'transparent',
+              color: viewMode===val ? '#fff' : T.text3, cursor:'pointer' }}>
+            {label}
+          </button>
+        ))}
+      </div>
+
       {!isSlave && (
         <div style={{display:'flex',alignItems:'center',gap:8,marginBottom:12,flexWrap:'wrap'}}>
           <span style={{fontSize:13,color:T.text2}}>
@@ -227,7 +328,7 @@ export function GrafikTab({ routing, zp, wcSchedule, onScheduleChange, subZP, sl
             <g clipPath="url(#gfClip)">
               <g transform={`translate(${panX},0)`}>
                 {/* Tła pasków */}
-                {WCS.map((_,wi) => (
+                {(viewMode==='brigades'?brigades:WCS).map((_,wi) => (
                   <rect key={`tbg${wi}`} x={LABEL_W} y={TOP_H+wi*ROW_H} width={contentW+40} height={ROW_H}
                     fill={wi%2===0?T.surface:T.surface2}/>
                 ))}
@@ -254,7 +355,45 @@ export function GrafikTab({ routing, zp, wcSchedule, onScheduleChange, subZP, sl
                   );
                 })}
                 {/* Komórki utilization */}
-                {WCS.map((wc,wi) => (
+                {viewMode === 'brigades' ? brigades.map((br,wi) => (
+                  <g key={`br${br}`}>
+                    {dateRange.map((d,di) => {
+                      const x    = LABEL_W + di*DAY_W;
+                      const h    = getBrigadeCapH(br, d);
+                      const need = needForBrigadeDate(br, d);
+                      const ratio = h > 0 ? need / h : (need > 0 ? 999 : 0);
+                      const pad  = 3;
+                      let bg, textCol, borderCol;
+                      if (h===0&&need===0)      { bg='rgba(0,0,0,0)'; textCol=T.text3; borderCol='transparent'; }
+                      else if (need===0)         { bg='rgba(255,255,255,0.04)'; textCol=T.text3; borderCol='transparent'; }
+                      else if (ratio>1.0)        { bg=T.critBg; textCol=T.crit; borderCol=T.crit; }
+                      else if (ratio>0.85)       { bg=T.warnBg; textCol=T.warn; borderCol=T.warn; }
+                      else if (ratio>0)          { bg=T.okBg;   textCol=T.ok;   borderCol=T.ok; }
+                      else                       { bg='rgba(255,255,255,0.04)'; textCol=T.text3; borderCol='transparent'; }
+                      return (
+                        <g key={d}>
+                          <rect x={x+pad} y={TOP_H+wi*ROW_H+pad}
+                            width={DAY_W-pad*2} height={ROW_H-pad*2}
+                            rx="4" fill={bg} stroke={borderCol} strokeWidth={ratio>0.85?1.5:0}/>
+                          <text x={x+DAY_W/2} y={TOP_H+wi*ROW_H+ROW_H/2-4}
+                            textAnchor="middle" fontSize={DAY_W>40?11:9}
+                            fontWeight="600" fill={textCol} fontFamily="monospace"
+                            style={{pointerEvents:'none'}}>
+                            {h>0 ? need.toFixed(0)+'h' : '—'}
+                          </text>
+                          {need>0 && DAY_W>30 && (
+                            <text x={x+DAY_W/2} y={TOP_H+wi*ROW_H+ROW_H/2+10}
+                              textAnchor="middle" fontSize="9"
+                              fill={textCol} fontFamily="monospace" opacity="0.8"
+                              style={{pointerEvents:'none'}}>
+                              {Math.round(ratio*100)}%
+                            </text>
+                          )}
+                        </g>
+                      );
+                    })}
+                  </g>
+                )) : WCS.map((wc,wi) => (
                   <g key={`top${wc}`}>
                     {dateRange.map((d,di) => {
                       const x    = LABEL_W + di*DAY_W;
@@ -294,7 +433,7 @@ export function GrafikTab({ routing, zp, wcSchedule, onScheduleChange, subZP, sl
                   </g>
                 ))}
                 {/* Linie poziome */}
-                {WCS.map((_,wi) => (
+                {(viewMode==='brigades'?brigades:WCS).map((_,wi) => (
                   <line key={`ln${wi}`} x1={LABEL_W} y1={TOP_H+(wi+1)*ROW_H}
                     x2={LABEL_W+contentW+40} y2={TOP_H+(wi+1)*ROW_H}
                     stroke={T.border} strokeWidth="0.5"/>
@@ -305,7 +444,30 @@ export function GrafikTab({ routing, zp, wcSchedule, onScheduleChange, subZP, sl
             {/* STAŁA lewa kolumna — przesuwa się tylko pionowo */}
             <rect x="0" y="0" width={LABEL_W} height="10000" fill={T.ganttBg}/>
             <g>
-              {WCS.map((wc,wi) => {
+              {viewMode === 'brigades' ? brigades.map((br,wi) => {
+                const totalNeed  = dateRange.reduce((sum,d)=>sum+needForBrigadeDate(br,d),0);
+                const totalAvail = dateRange.reduce((sum,d)=>sum+getBrigadeCapH(br,d),0);
+                const ratio = totalAvail>0 ? totalNeed/totalAvail : 0;
+                const col = ratio>1?T.crit:ratio>0.85?T.warn:totalNeed>0?T.ok:T.text3;
+                const capDay = brigadeCapacity[br] ?? 0;
+                return (
+                  <g key={`lbl${br}`}>
+                    <rect x="0" y={TOP_H+wi*ROW_H} width={LABEL_W} height={ROW_H} fill={T.surface2}/>
+                    <text x="8" y={TOP_H+wi*ROW_H+14} fontSize="10" fontWeight="700" fill={T.text}
+                      style={{pointerEvents:'none'}}>
+                      {br.length>14 ? br.slice(0,13)+'…' : br}
+                    </text>
+                    <text x="8" y={TOP_H+wi*ROW_H+27} fontSize="9" fill={T.text3}
+                      style={{pointerEvents:'none'}}>
+                      cap: {capDay}h/d
+                    </text>
+                    <text x="8" y={TOP_H+wi*ROW_H+40} fontSize="10" fontWeight="600" fill={col}
+                      style={{pointerEvents:'none'}}>
+                      {Math.round(ratio*100)}%
+                    </text>
+                  </g>
+                );
+              }) : WCS.map((wc,wi) => {
                 const totalNeed  = dateRange.reduce((sum,d)=>sum+needForDate(wc,d),0);
                 const totalAvail = dateRange.reduce((sum,d)=>sum+getH(wc,d),0);
                 const ratio = totalAvail>0 ? totalNeed/totalAvail : 0;
@@ -321,7 +483,7 @@ export function GrafikTab({ routing, zp, wcSchedule, onScheduleChange, subZP, sl
             </g>
             {/* Przykrycie nagłówka — stały */}
             <rect x="0" y="0" width={LABEL_W} height={TOP_H} fill={T.surface2}/>
-            <text x="12" y={TOP_H-12} fontSize="9" fontWeight="600" fill={T.text3} textTransform="uppercase">DOSTĘPNE H</text>
+            <text x="12" y={TOP_H-12} fontSize="9" fontWeight="600" fill={T.text3} textTransform="uppercase">{viewMode==='brigades'?'BRYGADA / CAP':'DOSTĘPNE H'}</text>
             <line x1={LABEL_W} y1="0" x2={LABEL_W} y2="10000" stroke={T.border2} strokeWidth="1.5"/>
 
           </svg>

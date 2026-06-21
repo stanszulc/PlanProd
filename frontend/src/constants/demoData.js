@@ -300,3 +300,136 @@ export const DEMO_ERP_ZP = `Numer ZP	Klient/zam	Numer ZS	Data zak	Data wys	Kod	N
 7311017240	KLIMABAZAR [z dn. 10.06.2026r.]	1000235338	2026-06-26 00:00	2026-06-27 00:00	1209741	KWP-LE-800x400-350 -BFN24-T	2	0	040	30052	Ślusarnia - iSWAY	iSWAY	8	8
 7310930520	SMAY REKLAMACJE	0901011826	2026-06-23 00:00	2026-06-24 00:00	95001	Naprawa kielichów NSDZ	1	0	010	30003	Ślusarnia - kanały	Kanały	24	24
 7310930520	SMAY REKLAMACJE	0901011826	2026-06-23 00:00	2026-06-24 00:00	95001	Naprawa kielichów NSDZ	1	0	020	30052	Ślusarnia - iSWAY	iSWAY	16	16`;
+
+// ─── CAPACITY PER MASZYNA [rbh/dzień, pon-pt] ────────────────────────────────
+// Źródło: rzeczywiste dane produkcyjne, 2 zmiany, pełna obsada
+// Formuła: capacity brygady / liczba maszyn w brygadzie
+export const WC_DAILY_CAPACITY = {
+  // Gniazdo KTM/KTS: 84.9h / 4 maszyn = 21.2h
+  '20074': 21.2, '30042': 21.2, '30043': 21.2, '30045': 21.2,
+  // Gniazdo montażu SN: 32h / 1
+  '30017': 32.0,
+  // Gniazdo NSDZ: 16h / 1
+  '30020': 16.0,
+  // Gniazdo ZS: 16h / 1
+  '30057': 16.0,
+  // Heager: 8h / 1
+  '20049': 8.0,
+  // iSWAY: 48h / 1
+  '30052': 48.0,
+  // Kanały: 180.4h / 2 = 90.2h
+  '30003': 90.2, '30031': 90.2,
+  // Klinczarka: 8h / 1
+  '20065': 8.0,
+  // Kratki Aluminium: 140h / 3 = 46.7h
+  '30002': 46.7, '30022': 46.7, '30023': 46.7,
+  // Kratki Stalowe: 156.7h / 7 = 22.4h
+  '30001': 22.4, '30012': 22.4, '30014': 22.4, '30016': 22.4,
+  '30021': 22.4, '30056': 22.4, '30060': 22.4,
+  // Linia KWP/KWP-L: 54.9h / 1
+  '30040': 54.9,
+  // Linia WKP: 73.4h / 3 = 24.5h
+  '30053': 24.5, '30054': 24.5, '30055': 24.5,
+  // Maszyny: 202.6h / 12 = 16.9h
+  '20017': 16.9, '20043': 16.9, '20045': 16.9, '20047': 16.9,
+  '20048': 16.9, '20050': 16.9, '20058': 16.9, '20059': 16.9,
+  '20067': 16.9, '20068': 16.9, '30009': 16.9, '30025': 16.9,
+  // Montaż Podzespołów: 60.1h / 3 = 20h
+  '20007': 20.0, '20034': 20.0, '30013': 20.0,
+  // Pilarnia Aluminium: 80h / 9 = 8.9h
+  '20025': 8.9, '20035': 8.9, '20051': 8.9, '20055': 8.9,
+  '20056': 8.9, '20063': 8.9, '30081': 8.9, '30083': 8.9, '30084': 8.9,
+  // Pilarnia Stalowa: 72h / 6 = 12h
+  '20005': 12.0, '20011': 12.0, '20012': 12.0, '20040': 12.0,
+  '30008': 12.0, '30019': 12.0,
+  // Przepustnice: 92.4h / 3 = 30.8h
+  '30005': 30.8, '30050': 30.8, '30051': 30.8,
+  // Regulatory VAV/NSDZ: 124.6h / 6 = 20.8h
+  '20072': 20.8, '30006': 20.8, '30061': 20.8, '30062': 20.8,
+  '30068': 20.8, '30069': 20.8,
+  // Spawalnia: 56h / 2 = 28h
+  '30011': 28.0, '30026': 28.0,
+  // Szlifiernia Stal: 8h / 1
+  '30015': 8.0,
+};
+
+// Buduje wcSchedule z WC_DAILY_CAPACITY — pon-pt = capacity, sob-nd = 0
+// [pon, wt, sr, czw, pt, sob, nd]
+export function buildWcScheduleFromCapacity(wcList) {
+  const schedule = {};
+  for (const wc of wcList) {
+    const h = WC_DAILY_CAPACITY[wc] ?? 16;
+    schedule[wc] = [h, h, h, h, h, 0, 0];
+  }
+  return schedule;
+}
+export const WC_TO_WC2 = {
+  '20074': 'Gniazdo KTM/KTS',
+  '30042': 'Gniazdo KTM/KTS',
+  '30043': 'Gniazdo KTM/KTS',
+  '30045': 'Gniazdo KTM/KTS',
+  '30017': 'Gniazdo montażu SN',
+  '30020': 'Gniazdo NSDZ',
+  '30057': 'Gniazdo ZS',
+  '20049': 'Heager',
+  '30052': 'iSWAY',
+  '30003': 'Kanały',
+  '30031': 'Kanały',
+  '20065': 'Klinczarka',
+  '30002': 'Kratki Aluminium',
+  '30022': 'Kratki Aluminium',
+  '30023': 'Kratki Aluminium',
+  '30001': 'Kratki Stalowe',
+  '30012': 'Kratki Stalowe',
+  '30014': 'Kratki Stalowe',
+  '30016': 'Kratki Stalowe',
+  '30021': 'Kratki Stalowe',
+  '30056': 'Kratki Stalowe',
+  '30060': 'Kratki Stalowe',
+  '30040': 'Linia KWP/KWP-L',
+  '30053': 'Linia WKP',
+  '30054': 'Linia WKP',
+  '30055': 'Linia WKP',
+  '20017': 'Maszyny',
+  '20043': 'Maszyny',
+  '20045': 'Maszyny',
+  '20047': 'Maszyny',
+  '20048': 'Maszyny',
+  '20050': 'Maszyny',
+  '20058': 'Maszyny',
+  '20059': 'Maszyny',
+  '20067': 'Maszyny',
+  '20068': 'Maszyny',
+  '30009': 'Maszyny',
+  '30025': 'Maszyny',
+  '20007': 'Montaż Podzespołów',
+  '20034': 'Montaż Podzespołów',
+  '30013': 'Montaż Podzespołów',
+  '20025': 'Pilarnia Aluminium',
+  '20035': 'Pilarnia Aluminium',
+  '20051': 'Pilarnia Aluminium',
+  '20055': 'Pilarnia Aluminium',
+  '20056': 'Pilarnia Aluminium',
+  '20063': 'Pilarnia Aluminium',
+  '30081': 'Pilarnia Aluminium',
+  '30083': 'Pilarnia Aluminium',
+  '30084': 'Pilarnia Aluminium',
+  '20005': 'Pilarnia Stalowa',
+  '20011': 'Pilarnia Stalowa',
+  '20012': 'Pilarnia Stalowa',
+  '20040': 'Pilarnia Stalowa',
+  '30008': 'Pilarnia Stalowa',
+  '30019': 'Pilarnia Stalowa',
+  '30005': 'Przepustnice',
+  '30050': 'Przepustnice',
+  '30051': 'Przepustnice',
+  '20072': 'Regulatory VAV/NSDZ',
+  '30006': 'Regulatory VAV/NSDZ',
+  '30061': 'Regulatory VAV/NSDZ',
+  '30062': 'Regulatory VAV/NSDZ',
+  '30068': 'Regulatory VAV/NSDZ',
+  '30069': 'Regulatory VAV/NSDZ',
+  '30011': 'Spawalnia',
+  '30026': 'Spawalnia',
+  '30015': 'Szlifiernia Stal',
+};

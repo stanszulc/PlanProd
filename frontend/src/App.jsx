@@ -28,6 +28,68 @@ import { ScheduleDebugTab }  from './components/tabs/ScheduleDebugTab.jsx';
 import { HeatmapPlanTab }   from './components/tabs/HeatmapPlanTab.jsx';
 import { SettingsTab }      from './components/tabs/SettingsTab.jsx';
 import './App.css';
+import { WC_DAILY_CAPACITY, buildWcScheduleFromCapacity } from './constants/demoData.js';
+import { initBrigadeSchedule } from './components/tabs/SettingsTab.jsx';
+
+// ─── buildWcSchedule ──────────────────────────────────────────────────────────
+// Buduje wcSchedule jako obiekt per-date dla każdej maszyny.
+// Zakres: planStart do max(planStart+horizonDays, maxDueDate) + 30 dni bufora.
+// Format: wcSchedule[wc][dateStr] = h
+// Sob/nd = 0, dni robocze = WC_DAILY_CAPACITY[wc] ?? defaultH
+function buildWcSchedule(wcList, planStartStr, zpList, horizonDays = 14, prev = {}) {
+  const planStart = new Date(planStartStr + 'T00:00:00');
+
+  // Wyznacz koniec zakresu: max(planStart+horizon, maxDueDate) + 30 dni bufora
+  const horizonEnd = new Date(planStart);
+  horizonEnd.setDate(horizonEnd.getDate() + horizonDays);
+
+  let maxDue = new Date(horizonEnd);
+  if (zpList && zpList.length) {
+    zpList.forEach(z => {
+      if (z.due_date) {
+        const d = new Date(z.due_date + 'T00:00:00');
+        if (d > maxDue) maxDue = d;
+      }
+    });
+  }
+
+  // +30 dni bufora żeby scheduler miał miejsce dla spóźnionych ZP
+  const endDate = new Date(maxDue);
+  endDate.setDate(endDate.getDate() + 30);
+
+  // Buduj per-date dla każdej maszyny
+  const next = {};
+  for (const wc of wcList) {
+    const capH = WC_DAILY_CAPACITY[wc] ?? 16;
+    const obj  = {};
+
+    // Zachowaj istniejące per-date wartości z prev (edycje użytkownika)
+    const prevSc = prev[wc];
+
+    const cur = new Date(planStart);
+    while (cur <= endDate) {
+      const dateStr = `${cur.getFullYear()}-${String(cur.getMonth()+1).padStart(2,'0')}-${String(cur.getDate()).padStart(2,'0')}`;
+      const jsDay   = cur.getDay();
+      const isWe    = jsDay === 0 || jsDay === 6;
+
+      if (prevSc && typeof prevSc === 'object' && !Array.isArray(prevSc) && prevSc[dateStr] !== undefined) {
+        // Zachowaj edycję użytkownika
+        obj[dateStr] = prevSc[dateStr];
+      } else if (Array.isArray(prevSc)) {
+        // Stary format tablicy — przelicz
+        const idx = jsDay === 0 ? 6 : jsDay - 1;
+        obj[dateStr] = prevSc[idx] ?? 0;
+      } else {
+        // Domyślna capacity
+        obj[dateStr] = isWe ? 0 : capH;
+      }
+
+      cur.setDate(cur.getDate() + 1);
+    }
+    next[wc] = obj;
+  }
+  return next;
+}
 
 const MENU = [
   { id: 'dashboard', label: '🏠 Dashboard' },
@@ -55,8 +117,6 @@ const MENU = [
     { id: 'settings',       label: 'Ustawienia planowania' },
   ]},
 ];
-
-// ─── NAWIGACJA Z DROPDOWNAMI ─────────────────────────────────────────────────
 
 function NavMenu({ menu, active, onSelect, indicators = {} }) {
   const [open, setOpen] = React.useState(null);
@@ -132,7 +192,7 @@ export default function App() {
   const [erpZp, setErpZp]           = useState([]);
   const [isScheduling, setIsScheduling] = useState(false);
   const workerRef    = useRef(null);
-  const workerSeqRef = useRef(0); // [FIX P0] sequence ID — odrzuca przestarzałe wyniki workera
+  const workerSeqRef = useRef(0);
   const [routing, setRouting]       = useState([]);
   const [zp, setZP]                 = useState([]);
   const [wcSchedule, setWcSchedule] = useState({});
@@ -148,6 +208,7 @@ export default function App() {
     autoPlanStart:   true,
     defaultSchedule: [16,16,16,16,16,0,0],
     horizonDays:     14,
+    brigadeSchedule: initBrigadeSchedule(),
   });
 
   const [historyData, setHistoryData]         = useState([]);
@@ -171,19 +232,15 @@ export default function App() {
     setGanttDirty(true);
   }
 
+  // Przebuduj wcSchedule gdy zmienia się routing, planStart lub zp
+  // Zachowuje edycje użytkownika przez prev
   useEffect(() => {
     if (routing.length > 0) {
       const wcs = [...new Set(routing.map(r => r.workcenter))].sort();
-      setWcSchedule(prev => {
-        const missing = wcs.filter(w => !prev[w]);
-        if (missing.length === 0) return prev;
-        const next = { ...prev };
-        missing.forEach(w => { next[w] = [16, 16, 16, 16, 16, 0, 0]; });
-        return next;
-      });
+      setWcSchedule(prev => buildWcSchedule(wcs, planStart, zp, scheduleConfig.horizonDays, prev));
       setGanttDirty(true);
     }
-  }, [routing.length]);
+  }, [routing.length, planStart, zp.length]);
 
   const globalLookups = useMemo(() => {
     const routingByProduct = {};
@@ -220,7 +277,6 @@ export default function App() {
     const rl = globalLookups.routingByProduct;
     if (!Object.keys(rl).length) return;
 
-    // [FIX P0] Terminate poprzedni worker + nowy sequence ID
     if (workerRef.current) workerRef.current.terminate();
     setIsScheduling(true);
     const seq = ++workerSeqRef.current;
@@ -232,15 +288,9 @@ export default function App() {
     workerRef.current = worker;
 
     worker.onmessage = (e) => {
-      // [FIX P0] Ignoruj wyniki przestarzałych workerów
-      if (seq !== workerSeqRef.current) {
-        worker.terminate();
-        return;
-      }
+      if (seq !== workerSeqRef.current) { worker.terminate(); return; }
       const { type, payload } = e.data;
-      if (type === 'PROGRESS') {
-        // opcjonalnie: setSchedulingProgress(payload.pct)
-      } else if (type === 'DONE') {
+      if (type === 'DONE') {
         const { fwdZP, zpStatus } = payload;
         const fwdFixed = fwdZP.map(op => ({
           ...op,
@@ -283,11 +333,8 @@ export default function App() {
     });
   }
 
-  // [FIX P0] Cleanup workera przy odmontowaniu komponentu
   useEffect(() => {
-    return () => {
-      if (workerRef.current) workerRef.current.terminate();
-    };
+    return () => { if (workerRef.current) workerRef.current.terminate(); };
   }, []);
 
   const activeZpStatus = useMemo(() => {
@@ -330,19 +377,24 @@ export default function App() {
 
   const handleLoad = useCallback((text, type) => {
     if (type === 'demo') {
-      const parsed = parseZPFromERP(DEMO_ERP_ZP);
+      const parsed      = parseZPFromERP(DEMO_ERP_ZP);
       const { zpList, routingByProduct } = erpZpToSchedulerInput(parsed);
       const routingFlat = _erpRoutingToFlat(routingByProduct);
+      const ps          = '2026-06-22';
+      const wcs         = [...new Set(routingFlat.map(r => r.workcenter))].sort();
+      // Buduj wcSchedule z właściwym planStart od razu — nie czekaj na useEffect
+      const newSched    = buildWcSchedule(wcs, ps, zpList, scheduleConfig.horizonDays, {});
       setErpZp(parsed);
       setRouting(routingFlat);
       setZP(zpList);
+      setWcSchedule(newSched);
       setGanttDirty(true);
-      setPlanStart('2026-06-22');
+      setPlanStart(ps);
       setTab('dashboard');
       return;
     }
     if (type === 'erp_zp') {
-      const parsed = parseZPFromERP(text);
+      const parsed      = parseZPFromERP(text);
       const { zpList, routingByProduct } = erpZpToSchedulerInput(parsed);
       const routingFlat = _erpRoutingToFlat(routingByProduct);
       const horizonDate = new Date();
@@ -352,8 +404,12 @@ export default function App() {
       cutoffDate.setDate(cutoffDate.getDate() - 30);
       const cutoffStr   = cutoffDate.toISOString().slice(0, 10);
       const zpFiltered  = zpList.filter(z => z.due_date >= cutoffStr && z.due_date <= horizonStr);
+      const ps          = new Date().toISOString().slice(0, 10);
+      const wcs         = [...new Set(routingFlat.map(r => r.workcenter))].sort();
+      const newSched    = buildWcSchedule(wcs, ps, zpFiltered, scheduleConfig.horizonDays, {});
       setRouting(routingFlat);
       setZP(zpFiltered);
+      setWcSchedule(newSched);
       setGanttDirty(true);
       if (parsed.length) setTab('heatmap_plan');
       return { zpList: parsed };
@@ -374,13 +430,13 @@ export default function App() {
           product,
           operation:    op.machine_name || op.op_label,
           workcenter:   op.machine_id,
-          wc_group:     op.wc_group,
+          wc_group:     op.wc_group || op.workcenter,
           machine_id:   op.machine_id,
           machine_name: op.machine_name,
           ct_min:       0,
           sequence:     op.sequence,
           predecessors: op.predecessors || [],
-          capacity_h:   16,
+          capacity_h:   WC_DAILY_CAPACITY[op.machine_id] ?? 16,
           _durH:        op._durH,
           _status:      op._status,
         });
@@ -389,9 +445,7 @@ export default function App() {
     return flat;
   }
 
-  function handleExportZpStatus() {
-    exportZpStatusCsv(zp, fwdZP, routing);
-  }
+  function handleExportZpStatus() { exportZpStatusCsv(zp, fwdZP, routing); }
 
   function exportLoad() {
     const dates = [...new Set(zp.map(z => z.due_date))].sort();
@@ -412,7 +466,6 @@ export default function App() {
     <div className="flowops-app">
       <nav className="flowops-nav">
         <span className="flowops-nav-brand">FlowOps</span>
-
         <NavMenu menu={MENU} active={tab} onSelect={setTab}
           indicators={{
             analysis:   historyData.length > 0,
@@ -421,18 +474,13 @@ export default function App() {
             buffer_zs:  zpStatusData.length > 0,
             late_zs:    zpStatus.some(z => (z.toc?.zone ?? z.toc) === 'black'),
           }} />
-
         {hybridMode && (
-          <div style={{
-            display: 'flex', alignItems: 'center', gap: 5,
-            padding: '3px 10px', borderRadius: 8,
+          <div style={{ display: 'flex', alignItems: 'center', gap: 5, padding: '3px 10px', borderRadius: 8,
             background: 'rgba(77,148,255,0.12)', border: '1px solid rgba(77,148,255,0.3)',
-            fontSize: 11, color: '#4d94ff', fontWeight: 600,
-          }}>
+            fontSize: 11, color: '#4d94ff', fontWeight: 600 }}>
             🔬 <span>BETA: Tryb realizacja</span>
           </div>
         )}
-
         {hasData && (
           <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginLeft: 'auto' }}>
             <div style={{ display: 'flex', alignItems: 'center', gap: 5, padding: '3px 10px', borderRadius: 8, border: `1px solid ${T.border2}`, background: T.surface2 }}>
@@ -447,25 +495,18 @@ export default function App() {
                 const to   = allDueDates[Math.min(n - 1, allDueDates.length - 1)] || from;
                 const active = dateFrom === from && dateTo === to;
                 return (
-                  <button key={label} type="button"
-                    onClick={() => { setDateFrom(from); setDateTo(to); }}
-                    style={{ ...s.btnSm(active), fontSize: 10, padding: '2px 7px' }}>
-                    {label}
-                  </button>
+                  <button key={label} type="button" onClick={() => { setDateFrom(from); setDateTo(to); }}
+                    style={{ ...s.btnSm(active), fontSize: 10, padding: '2px 7px' }}>{label}</button>
                 );
               })}
               <button type="button" onClick={() => { setDateFrom(''); setDateTo(''); }}
-                style={{ ...s.btnSm(!dateFrom && !dateTo), fontSize: 10, padding: '2px 7px' }}>
-                wszystkie
-              </button>
+                style={{ ...s.btnSm(!dateFrom && !dateTo), fontSize: 10, padding: '2px 7px' }}>wszystkie</button>
             </div>
             {(dateFrom || dateTo) && (
               <span style={{ fontSize: 10, color: T.accent }}>● {filteredZP.length}/{zp.length} ZP</span>
             )}
             <button type="button" className="flowops-export-btn"
-              style={{ ...s.btn(false), fontSize: 11 }} onClick={exportLoad}>
-              ↓ Eksportuj raport
-            </button>
+              style={{ ...s.btn(false), fontSize: 11 }} onClick={exportLoad}>↓ Eksportuj raport</button>
           </div>
         )}
       </nav>
@@ -484,7 +525,7 @@ export default function App() {
         {tab === 'bottleneck' && <BottleneckTab routing={routing} zp={filteredZP} globalLookups={globalLookups} wcSchedule={wcSchedule} subZP={subZP} />}
         {tab === 'routing'    && <RoutingTab routing={routing} zp={zp} globalLookups={globalLookups} />}
         {tab === 'heatmap'      && <HeatmapTab routing={routing} zp={filteredZP} globalLookups={globalLookups} wcSchedule={wcSchedule} />}
-        {tab === 'heatmap_plan' && <HeatmapPlanTab fwdZP={fwdZP} routing={routing} wcSchedule={wcSchedule} />}
+        {tab === 'heatmap_plan' && <HeatmapPlanTab fwdZP={fwdZP} routing={routing} wcSchedule={wcSchedule} onScheduleChange={updateSchedule} onRecalc={() => recalcGantt()} ganttDirty={ganttDirty} isScheduling={isScheduling} planStart={planStart} />}
         {tab === 'swimlane'   && <SwimlaneTab routing={routing} zp={filteredZP} globalLookups={globalLookups} wcSchedule={wcSchedule} />}
         {tab === 'sankey'     && <SankeyTab routing={routing} zp={filteredZP} globalLookups={globalLookups} wcSchedule={wcSchedule} />}
         {tab === 'realizacja' && <RealizacjaTab zpStatusData={zpStatusData} />}
