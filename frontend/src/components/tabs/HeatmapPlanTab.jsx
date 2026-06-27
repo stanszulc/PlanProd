@@ -29,28 +29,36 @@ const BRIGADE_CAPACITY = {
   'Szlifiernia Stal':      8.0,
 };
 
-export function HeatmapPlanTab({ fwdZP = [], routing = [], wcSchedule = {}, onScheduleChange, onRecalc, ganttDirty, isScheduling, planStart }) {
+export function HeatmapPlanTab({ fwdZP = [], routing = [], wcSchedule = {}, onScheduleChange, onRecalc, ganttDirty, isScheduling, planStart, onPlanStartChange, schedulingMode = 'asap', onSchedulingModeChange }) {
 
   const [showDetail, setShowDetail] = useState(false);
   const [expanded,   setExpanded]   = useState(new Set());
   const [mode,       setMode]       = useState('pct');
   const [groupBy,       setGroupBy]       = useState('plan');
   const [expandedBr,    setExpandedBr]    = useState(new Set());
+  const [filterWc2,     setFilterWc2]     = useState(null); // aktywny filtr gniazda
+  const [filterCell,    setFilterCell]    = useState(null);
+  const [tooltip,       setTooltip]       = useState(null); // { wc2, date, x, y, zps } // { wc2, date } aktywny filtr komórki
 
   // wc → { group, name }
   const wcMeta = useMemo(() => {
     const map = {};
-    // Najpierw z routingu (ma pełne dane)
+    // Najpierw WC_TO_WC2 — zawsze poprawne mapowanie wc → brygada
+    Object.entries(WC_TO_WC2).forEach(([wc, wc2]) => {
+      map[wc] = { group: wc2, name: wc };
+    });
+    // Uzupełnij nazwami z routingu (ale nie nadpisuj group z WC_TO_WC2)
     routing.forEach(r => {
       if (!r.workcenter) return;
-      if (!map[r.workcenter]) map[r.workcenter] = {
-        group: r.wc_group || r.workcenter,
-        name:  r.machine_name || r.workcenter,
-      };
-    });
-    // Uzupełnij z WC_TO_WC2 — maszyny bez ZP w routingu
-    Object.entries(WC_TO_WC2).forEach(([wc, wc2]) => {
-      if (!map[wc]) map[wc] = { group: wc2, name: wc };
+      if (!map[r.workcenter]) {
+        map[r.workcenter] = {
+          group: r.wc_group || r.workcenter,
+          name:  r.machine_name || r.workcenter,
+        };
+      } else {
+        // Zachowaj group z WC_TO_WC2, tylko zaktualizuj name
+        map[r.workcenter].name = r.machine_name || map[r.workcenter].name;
+      }
     });
     return map;
   }, [routing.length]);
@@ -136,7 +144,102 @@ export function HeatmapPlanTab({ fwdZP = [], routing = [], wcSchedule = {}, onSc
     return { loadMap, brigadeLoadMap: brigadeLoad, dates, groups, lateKeys, lateBrigadeKeys, weekendSet };
   }, [fwdZP, routing.length, wcMeta, groupBy]);
 
+  // ZP powiązane z wybranym gniazdem (przez routing)
+  const filteredGroups = useMemo(() => {
+    if (!filterWc2 && !filterCell) return groups;
+
+    let filteredZpIds;
+    if (filterCell) {
+      // Filtr komórki: ZP które mają segment w danym gnieździe w danym dniu
+      const cellWcs = new Set(
+        Object.entries(wcMeta).filter(([, m]) => m.group === filterCell.wc2).map(([wc]) => wc)
+      );
+      filteredZpIds = new Set(
+        fwdZP.filter(op => {
+          if (!cellWcs.has(op.workcenter)) return false;
+          return (op.segments || []).some(seg => seg.segStart && localDateStr(seg.segStart) === filterCell.date);
+        }).map(op => op.parent_zp || op.zp_id)
+      );
+      console.log('filteredZpIds:', [...filteredZpIds]);
+      console.log('relatedWc2s:', [...new Set(fwdZP.filter(op => filteredZpIds.has(op.parent_zp || op.zp_id)).map(op => wcMeta[op.workcenter]?.group || op.workcenter))]);
+    } else {
+      // Filtr gniazda
+      const filterWcs = new Set(
+        Object.entries(wcMeta).filter(([, m]) => m.group === filterWc2).map(([wc]) => wc)
+      );
+      filteredZpIds = new Set(
+        fwdZP.filter(op => filterWcs.has(op.workcenter)).map(op => op.parent_zp || op.zp_id)
+      );
+    }
+
+    const relatedWc2s = new Set(
+      fwdZP.filter(op => filteredZpIds.has(op.parent_zp || op.zp_id))
+           .map(op => wcMeta[op.workcenter]?.group || op.workcenter)
+    );
+    return groups.filter(g => relatedWc2s.has(g.wc2));
+  }, [groups, filterWc2, filterCell?.wc2, filterCell?.date, fwdZP, wcMeta]);
+
+  // Mapa wc2 → Set(dat) gdzie wyfiltrowane ZP mają operacje w danym gnieździe
+  const activeMap = useMemo(() => {
+    if (!filterWc2 && !filterCell) return null;
+    let filteredZpIds;
+    if (filterCell) {
+      const cellWcs = new Set(
+        Object.entries(wcMeta).filter(([, m]) => m.group === filterCell.wc2).map(([wc]) => wc)
+      );
+      filteredZpIds = new Set(
+        fwdZP.filter(op => {
+          if (!cellWcs.has(op.workcenter)) return false;
+          return (op.segments || []).some(seg => seg.segStart && localDateStr(seg.segStart) === filterCell.date);
+        }).map(op => op.parent_zp || op.zp_id)
+      );
+    } else {
+      const filterWcs = new Set(
+        Object.entries(wcMeta).filter(([, m]) => m.group === filterWc2).map(([wc]) => wc)
+      );
+      filteredZpIds = new Set(
+        fwdZP.filter(op => filterWcs.has(op.workcenter)).map(op => op.parent_zp || op.zp_id)
+      );
+    }
+    // Buduj mapę: wc2 → Set(dat) gdzie wyfiltrowane ZP mają segmenty
+    const map = {};
+    fwdZP.filter(op => filteredZpIds.has(op.parent_zp || op.zp_id))
+         .forEach(op => {
+           const wc2 = wcMeta[op.workcenter]?.group || op.workcenter;
+           if (!map[wc2]) map[wc2] = new Set();
+           (op.segments || []).forEach(seg => {
+             if (seg.segStart) map[wc2].add(localDateStr(seg.segStart));
+           });
+         });
+    return map;
+  }, [filterWc2, filterCell?.wc2, filterCell?.date, fwdZP, wcMeta]);
+
   const brigades = useMemo(() => [...new Set(groups.map(g => g.wc2))].sort(), [groups]);
+
+  const filteredBrigades = useMemo(() => {
+    if (!filterWc2 && !filterCell) return brigades;
+    const wc2s = new Set(filteredGroups.map(g => g.wc2));
+    return brigades.filter(br => wc2s.has(br));
+  }, [brigades, filteredGroups, filterWc2, filterCell?.wc2, filterCell?.date]);
+
+  // ZP w danym gnieździe × dacie
+  function getZpsForCell(wc2, dateStr, singleWc = null) {
+    const wc2Wcs = singleWc
+      ? new Set([singleWc])
+      : new Set(Object.entries(wcMeta).filter(([,m]) => m.group === wc2).map(([wc]) => wc));
+    const zps = [];
+    const seen = new Set();
+    fwdZP.forEach(op => {
+      if (!wc2Wcs.has(op.workcenter)) return;
+      const hasDate = (op.segments || []).some(seg => seg.segStart && localDateStr(seg.segStart) === dateStr);
+      if (!hasDate) return;
+      const id = op.parent_zp || op.zp_id;
+      if (seen.has(id)) return;
+      seen.add(id);
+      zps.push({ id, klient: op.klient || op.zp_id, durH: op.durH });
+    });
+    return zps;
+  }
 
   function getAvailH(wc, dateStr) {
     const sched = wcSchedule[wc];
@@ -238,6 +341,31 @@ export function HeatmapPlanTab({ fwdZP = [], routing = [], wcSchedule = {}, onSc
     });
   }
 
+  const TooltipEl = tooltip && (
+    <div style={{
+      position: 'fixed', zIndex: 9999, pointerEvents: 'none',
+      left: tooltip.x + 12, top: tooltip.y - 8,
+      background: '#1a2030', border: `1px solid ${T.border2}`,
+      borderRadius: 8, padding: '8px 12px', minWidth: 200, maxWidth: 320,
+      boxShadow: '0 8px 24px rgba(0,0,0,0.5)', fontSize: 11,
+    }}>
+      <div style={{ fontWeight: 700, color: T.accent, marginBottom: 6, fontSize: 12 }}>
+        {tooltip.wc2} × {tooltip.date}
+      </div>
+      {tooltip.zps.length === 0
+        ? <div style={{ color: T.text3 }}>Brak operacji</div>
+        : tooltip.zps.map(z => (
+          <div key={z.id} style={{ display: 'flex', justifyContent: 'space-between', gap: 12,
+            padding: '2px 0', borderBottom: `1px solid ${T.border2}`, color: T.text }}>
+            <span style={{ color: T.text2, fontFamily: 'monospace', fontSize: 10 }}>{z.id}</span>
+            <span style={{ color: T.text3, whiteSpace: 'nowrap' }}>{z.klient}</span>
+            <span style={{ color: T.accent, fontWeight: 600, whiteSpace: 'nowrap' }}>{z.durH?.toFixed(1)}h</span>
+          </div>
+        ))
+      }
+    </div>
+  );
+
   if (!fwdZP.length) return <EmptyState icon="📊" title="Brak danych planu" sub="Załaduj dane ERP aby zobaczyć heatmapę" />;
   if (!dates.length)  return <EmptyState icon="📊" title="Brak zaplanowanych operacji" sub="Harmonogram jest pusty" />;
 
@@ -257,6 +385,7 @@ export function HeatmapPlanTab({ fwdZP = [], routing = [], wcSchedule = {}, onSc
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
+      {TooltipEl}
 
       {/* ── TOOLBAR ── */}
       <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
@@ -270,6 +399,28 @@ export function HeatmapPlanTab({ fwdZP = [], routing = [], wcSchedule = {}, onSc
             </button>
           ))}
         </div>
+        {onPlanStartChange && (
+          <div style={{ display: 'flex', alignItems: 'center', gap: 6, padding: '3px 10px',
+            borderRadius: 7, background: T.surface3, border: `1px solid ${T.border2}` }}>
+            <span style={{ fontSize: 11, color: T.text3 }}>Planuj od</span>
+            <input type="date" value={planStart || ''}
+              onChange={e => onPlanStartChange(e.target.value)}
+              style={{ fontSize: 11, background: 'transparent', border: 'none',
+                color: T.text, outline: 'none', cursor: 'pointer' }} />
+          </div>
+        )}
+        {onSchedulingModeChange && (
+          <div style={{ display: 'flex', gap: 2, background: T.surface3, borderRadius: 7, padding: 2 }}>
+            {[['asap', '⏩ ASAP'], ['alap', '⏪ ALAP']].map(([val, label]) => (
+              <button key={val} onClick={() => onSchedulingModeChange(val)}
+                style={{ padding: '3px 10px', fontSize: 11, fontWeight: 600, borderRadius: 5,
+                  border: 'none', background: schedulingMode === val ? T.accent : 'transparent',
+                  color: schedulingMode === val ? '#fff' : T.text3, cursor: 'pointer' }}>
+                {label}
+              </button>
+            ))}
+          </div>
+        )}
         <select value={mode} onChange={e => setMode(e.target.value)}
           style={{ fontSize: 11, padding: '3px 8px', borderRadius: 6,
             border: `1px solid ${T.border2}`, background: T.surface2, color: T.text }}>
@@ -285,6 +436,20 @@ export function HeatmapPlanTab({ fwdZP = [], routing = [], wcSchedule = {}, onSc
           ))}
           <span style={{ fontSize: 11, color: '#ef4444' }}>🔴 spóźnione</span>
         </div>
+        {filterCell && (
+          <button onClick={() => setFilterCell(null)}
+            style={{ padding: '4px 12px', fontSize: 11, fontWeight: 600, borderRadius: 8,
+              border: `1px solid ${T.border2}`, background: T.surface3, color: T.accent, cursor: 'pointer' }}>
+            ✕ Pokaż wszystko ({filterCell.wc2} × {filterCell.date})
+          </button>
+        )}
+        {filterWc2 && !filterCell && (
+          <button onClick={() => setFilterWc2(null)}
+            style={{ padding: '4px 12px', fontSize: 11, fontWeight: 600, borderRadius: 8,
+              border: `1px solid ${T.border2}`, background: T.surface3, color: T.accent, cursor: 'pointer' }}>
+            ✕ Pokaż wszystko ({filterWc2})
+          </button>
+        )}
         {onRecalc && (
           <button onClick={onRecalc} disabled={isScheduling}
             style={{ marginLeft: 'auto', padding: '4px 14px', fontSize: 12, fontWeight: 600,
@@ -321,7 +486,7 @@ export function HeatmapPlanTab({ fwdZP = [], routing = [], wcSchedule = {}, onSc
               </tr>
             </thead>
             <tbody>
-              {groups.map(({ wc2, machines }) => {
+              {filteredGroups.map(({ wc2, machines }) => {
                 const isOpen   = expanded.has(wc2) || showDetail;
                 const aggLoad  = dates.map(d => machines.reduce((s, m) => s + (loadMap[m.wc]?.[d] || 0), 0));
                 const aggAvail = dates.map(d => machines.reduce((s, m) => s + getAvailH(m.wc, d), 0));
@@ -335,6 +500,13 @@ export function HeatmapPlanTab({ fwdZP = [], routing = [], wcSchedule = {}, onSc
                         transform: isOpen ? 'rotate(90deg)' : 'none', transition: 'transform .15s' }}>▶</span>
                       {wc2}
                       <span style={{ fontSize: 10, color: T.text3, fontWeight: 400, marginLeft: 4 }}>({machines.length})</span>
+                      <button onClick={e => { e.stopPropagation(); setFilterWc2(filterWc2 === wc2 ? null : wc2); }}
+                        style={{ marginLeft: 6, fontSize: 9, padding: '1px 5px', borderRadius: 4,
+                          border: `1px solid ${T.border2}`, cursor: 'pointer',
+                          background: filterWc2 === wc2 ? T.accent : T.surface3,
+                          color: filterWc2 === wc2 ? '#fff' : T.text3 }}>
+                        {filterWc2 === wc2 ? '✕' : '⊕'}
+                      </button>
                     </td>
                     <td></td>
                     {aggLoad.map((load, i) => {
@@ -342,12 +514,26 @@ export function HeatmapPlanTab({ fwdZP = [], routing = [], wcSchedule = {}, onSc
                       const isLate = machines.some(m => lateKeys.has(`${m.wc}|${dates[i]}`));
                       return (
                         <td key={i} style={{ padding: 3, textAlign: 'center' }}>
-                          <div style={{ display: 'inline-flex', alignItems: 'center', justifyContent: 'center',
-                            minWidth: 52, height: 24, borderRadius: 4, background: hs.bg, color: hs.color,
-                            fontSize: 11, fontWeight: 600, fontFamily: 'monospace',
-                            boxShadow: isLate ? 'inset 0 0 0 2px #ef4444' : 'none' }}>
-                            {hs.text}
-                          </div>
+                          {(() => {
+                            const isDimmed = activeMap && !(activeMap[wc2]?.has(dates[i]));
+                            const isActive = filterCell?.wc2 === wc2 && filterCell?.date === dates[i];
+                            return (
+                              <div
+                                onClick={() => load > 0 && setFilterCell(fc => fc?.wc2 === wc2 && fc?.date === dates[i] ? null : { wc2, date: dates[i] })}
+                                onMouseEnter={e => { if (load > 0) { const r = e.currentTarget.getBoundingClientRect(); setTooltip({ wc2, date: dates[i], x: r.right, y: r.top, zps: getZpsForCell(wc2, dates[i]) }); }}}
+                                onMouseLeave={() => setTooltip(null)}
+                                style={{ display: 'inline-flex', alignItems: 'center', justifyContent: 'center',
+                                minWidth: 52, height: 24, borderRadius: 4,
+                                background: isDimmed ? T.surface2 : hs.bg,
+                                color: isDimmed ? T.text3 : hs.color,
+                                fontSize: 11, fontWeight: 600, fontFamily: 'monospace',
+                                cursor: load > 0 && !isDimmed ? 'pointer' : 'default',
+                                opacity: isDimmed ? 0.3 : 1,
+                                boxShadow: isActive ? 'inset 0 0 0 2px #fff' : isLate && !isDimmed ? 'inset 0 0 0 2px #ef4444' : 'none' }}>
+                                {isDimmed ? '–' : hs.text}
+                              </div>
+                            );
+                          })()}
                         </td>
                       );
                     })}
@@ -370,14 +556,25 @@ export function HeatmapPlanTab({ fwdZP = [], routing = [], wcSchedule = {}, onSc
                         </td>
                         <td></td>
                         {mLoads.map((load, i) => {
-                          const hs     = hmStyle(mAvail[i], load);
-                          const isLate = lateKeys.has(`${m.wc}|${dates[i]}`);
+                          const hs       = hmStyle(mAvail[i], load);
+                          const isLate   = lateKeys.has(`${m.wc}|${dates[i]}`);
+                          const mWc2     = wcMeta[m.wc]?.group || m.wc;
+                          const isDimmed = activeMap && !(activeMap[mWc2]?.has(dates[i]));
                           return (
                             <td key={i} style={{ padding: 3, textAlign: 'center' }}>
-                              <div style={{ display: 'inline-flex', alignItems: 'center', justifyContent: 'center',
-                                minWidth: 52, height: 22, borderRadius: 4, background: hs.bg, color: hs.color,
+                              <div
+                                onMouseEnter={e => { if (load > 0) { const r = e.currentTarget.getBoundingClientRect(); setTooltip({ wc2: `${m.wc} ${m.name}`, date: dates[i], x: r.right, y: r.top, zps: getZpsForCell(mWc2, dates[i], m.wc) }); }}}
+                                onMouseLeave={() => setTooltip(null)}
+                                style={{ display: 'inline-flex', alignItems: 'center', justifyContent: 'center',
+                                minWidth: 52, height: 22, borderRadius: 4,
+                                background: isDimmed ? T.surface2 : hs.bg,
+                                color: isDimmed ? T.text3 : hs.color,
+                                opacity: isDimmed ? 0.3 : 1,
                                 fontSize: 10, fontWeight: 500, fontFamily: 'monospace',
-                                boxShadow: isLate ? 'inset 0 0 0 2px #ef4444' : 'none' }}>{hs.text}</div>
+                                cursor: load > 0 && !isDimmed ? 'default' : 'default',
+                                boxShadow: isLate && !isDimmed ? 'inset 0 0 0 2px #ef4444' : 'none' }}>
+                                {isDimmed ? '–' : hs.text}
+                              </div>
                             </td>
                           );
                         })}
@@ -410,7 +607,7 @@ export function HeatmapPlanTab({ fwdZP = [], routing = [], wcSchedule = {}, onSc
               </tr>
             </thead>
             <tbody>
-              {brigades.map((br, bi) => {
+              {filteredBrigades.map((br, bi) => {
                 // Cap/d = stała demo capacity (nie zmienia się po +8h)
                 const capH    = BRIGADE_CAPACITY[br] ?? 0;
                 // weekSum = suma aktualnych godzin z wcSchedule per dzień roboczy

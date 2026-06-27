@@ -33,42 +33,32 @@ export function GanttTab({ routing, zp, globalLookups, wcSchedule, subZP, fwdZP,
   const [panX,       setPanX]      = useState(0);
   const [isPan,      setIsPan]     = useState(false);
   const [tableOpen,  setTableOpen] = useState(false);
-  const [tooltip,    setTooltip]   = useState(null);
+  const [tooltip,    setTooltip]   = useState(null); // { x, y, op }
+  const [selectedZp,  setSelectedZp]  = useState(null); // kliknięty zp_id → filtr
   const svgRef       = useRef(null);
   const panRef       = useRef(null);
   const containerRef = useRef(null);
 
-  // Synchronizacja widoku z PlanTab (X + Y + wcOrder)
-  const scrollYRef = useRef(0);
+  // Synchronizacja widoku z PlanTab
   useEffect(() => {
-    const el = containerRef.current;
-    if (!el) return;
-    function onScroll() {
-      scrollYRef.current = el.scrollTop;
-      if (onViewChange) onViewChange({ panX, scaleIdx, hourW: SCALES[scaleIdx].hourW, scrollY: el.scrollTop, wcOrder: allWCFull });
-    }
-    el.addEventListener('scroll', onScroll, { passive: true });
-    return () => el.removeEventListener('scroll', onScroll);
-  }, [panX, scaleIdx, allWCFull, onViewChange]);
-
-  useEffect(() => {
-    if (onViewChange) onViewChange({ panX, scaleIdx, hourW: SCALES[scaleIdx].hourW, scrollY: scrollYRef.current, wcOrder: allWCFull });
-  }, [panX, scaleIdx, allWCFull]);
+    if (onViewChange) onViewChange({ panX, scaleIdx, hourW: SCALES[scaleIdx].hourW });
+  }, [panX, scaleIdx]);
 
   const scale  = SCALES[scaleIdx];
   const HOUR_W = scale.hourW;
 
   const displayZP = useMemo(() => {
     const base = (fwdZP && fwdZP.length) ? fwdZP : subZP;
+    if (selectedZp) return base.filter(s => (s.parent_zp || s.zp_id) === selectedZp);
     if (!filterZS.trim() && !filterProd.trim()) return base;
     return base.filter(s => filteredZpIds.has(s.parent_zp || s.zp_id));
-  }, [fwdZP, subZP, filteredZpIds, filterZS, filterProd]);
+  }, [fwdZP, subZP, filteredZpIds, filterZS, filterProd, selectedZp]);
 
   const allWC = useMemo(() => {
-    if (!filterZS.trim() && !filterProd.trim()) return allWCFull;
+    if (!filterZS.trim() && !filterProd.trim() && !selectedZp) return allWCFull;
     const usedWC = new Set(displayZP.map(s => s.workcenter));
     return allWCFull.filter(w => usedWC.has(w));
-  }, [allWCFull, displayZP, filterZS, filterProd]);
+  }, [allWCFull, displayZP, filterZS, filterProd, selectedZp]);
 
   const planStartDt = useMemo(
     () => new Date((planStart || '2026-05-22') + 'T00:00:00'),
@@ -124,59 +114,65 @@ export function GanttTab({ routing, zp, globalLookups, wcSchedule, subZP, fwdZP,
     return () => el.removeEventListener('wheel', onWheel);
   }, [contentW, svgH, embedded]);
 
+  const TooltipEl = tooltip && (
+    <div style={{
+      position: 'fixed', zIndex: 9999, pointerEvents: 'none',
+      left: tooltip.x + 14, top: tooltip.y - 8,
+      background: '#1a2030', border: `1px solid ${T.border2}`,
+      borderRadius: 8, padding: '10px 14px', minWidth: 220,
+      boxShadow: '0 8px 24px rgba(0,0,0,0.5)', fontSize: 11,
+    }}>
+      <div style={{ fontWeight: 700, color: T.accent, marginBottom: 4, fontSize: 12 }}>
+        {tooltip.op.zs_id || tooltip.op.parent_zp || tooltip.op.zp_id}
+      </div>
+      <div style={{ color: T.text2, marginBottom: 2 }}>{tooltip.op.klient || '—'}</div>
+      <div style={{ color: T.text3, marginBottom: 6, fontSize: 10 }}>{tooltip.op.operation}</div>
+      <div style={{ display: 'grid', gridTemplateColumns: 'auto 1fr', gap: '2px 8px', fontSize: 10 }}>
+        <span style={{ color: T.text3 }}>Gniazdo</span>
+        <span style={{ color: T.text, fontFamily: 'monospace' }}>{tooltip.op.workcenter}</span>
+        <span style={{ color: T.text3 }}>Czas</span>
+        <span style={{ color: T.accent, fontWeight: 600 }}>{tooltip.op.durH?.toFixed(1)}h</span>
+        <span style={{ color: T.text3 }}>Start</span>
+        <span style={{ color: T.text, fontFamily: 'monospace' }}>{fmtDt(tooltip.op.start_dt)}</span>
+        <span style={{ color: T.text3 }}>Koniec</span>
+        <span style={{ color: T.text, fontFamily: 'monospace' }}>{fmtDt(tooltip.op.end_dt)}</span>
+        <span style={{ color: T.text3 }}>Termin</span>
+        <span style={{ color: T.bn, fontFamily: 'monospace' }}>{tooltip.op.due_date}</span>
+      </div>
+    </div>
+  );
+
   if (!dates.length) return <EmptyState icon="📅" title="Brak danych" sub="Wgraj pliki CSV" />;
 
   function xOf(dt) {
     return LABEL_W + Math.max(0, (new Date(dt) - axisStart) / 3600000) * HOUR_W;
   }
 
-  // Ticki — memoized
-  const ticks = useMemo(() => {
-    const result = [];
-    for (let t = new Date(axisStart); t <= axisEnd; t.setHours(t.getHours() + scale.tick)) {
-      result.push(new Date(t));
-    }
-    return result;
-  }, [axisStart, axisEnd, scale.tick]);
+  // Ticki
+  const ticks = [];
+  for (let t = new Date(axisStart); t <= axisEnd; t.setHours(t.getHours() + scale.tick)) {
+    ticks.push(new Date(t));
+  }
 
-  // Niedostępne strefy — memoized, generowane tylko dla widocznych maszyn
-  const unavailZones = useMemo(() => {
-    const zones = [];
-    const dayIter = new Date(axisStart);
-    while (dayIter <= axisEnd) {
-      allWC.forEach((wc, wi) => {
-        const avail = getAvail(wc, dayIter, wcSchedule);
-        const ds = new Date(dayIter); ds.setHours(0,0,0,0);
-        const de = new Date(dayIter); de.setHours(24,0,0,0);
-        const x1 = LABEL_W + Math.max(0, (ds - axisStart) / 3600000) * HOUR_W;
-        const x2 = LABEL_W + Math.max(0, (de - axisStart) / 3600000) * HOUR_W;
-        if (avail === 0) zones.push({ wi, x1, x2 });
-        else if (avail < 24) {
-          const we = new Date(dayIter); we.setHours(avail, 0, 0, 0);
-          const xw = LABEL_W + Math.max(0, (we - axisStart) / 3600000) * HOUR_W;
-          zones.push({ wi, x1: xw, x2 });
-        }
-      });
-      dayIter.setDate(dayIter.getDate() + 1);
-    }
-    return zones;
-  }, [axisStart, axisEnd, allWC, wcSchedule, HOUR_W]);
+  // Niedostępne strefy
+  const unavailZones = [];
+  const dayIter = new Date(axisStart);
+  while (dayIter <= axisEnd) {
+    allWC.forEach((wc, wi) => {
+      const avail = getAvail(wc, dayIter, wcSchedule);
+      const ds = new Date(dayIter); ds.setHours(0,0,0,0);
+      const de = new Date(dayIter); de.setHours(24,0,0,0);
+      if (avail === 0) unavailZones.push({ wi, x1: xOf(ds), x2: xOf(de) });
+      else if (avail < 24) {
+        const we = new Date(dayIter); we.setHours(avail, 0, 0, 0);
+        unavailZones.push({ wi, x1: xOf(we), x2: xOf(de) });
+      }
+    });
+    dayIter.setDate(dayIter.getDate() + 1);
+  }
 
   const loads   = computeLoads(globalLookups.routingByProduct, allZP, wcSchedule, dates[0]);
   const maxUtil = Object.values(loads).length ? Math.max(...Object.values(loads).map(v => v.util)) : 0;
-
-  // Precompute wcIndex map — O(1) zamiast indexOf() O(n) w pętli renderowania
-  const wcIndexMap = useMemo(() => {
-    const m = {};
-    allWC.forEach((w, i) => { m[w] = i; });
-    return m;
-  }, [allWC]);
-  const zpStatusMap = useMemo(() => {
-    if (!zpStatus) return {};
-    const m = {};
-    zpStatus.forEach(st => { m[st.zp_id] = st; });
-    return m;
-  }, [zpStatus]);
 
   function onBgMouseDown(e) {
     const tag = e.target.tagName;
@@ -197,7 +193,9 @@ export function GanttTab({ routing, zp, globalLookups, wcSchedule, subZP, fwdZP,
 
 
   return (
-    <div className={embedded ? 'gantt-tab gantt-tab--embedded' : undefined} style={embedded ? {display:'flex', flexDirection:'column', height:'100%'} : undefined}>
+    <>
+      {TooltipEl}
+      <div className={embedded ? 'gantt-tab gantt-tab--embedded' : undefined} style={embedded ? {display:'flex', flexDirection:'column', height:'100%'} : undefined}>
       {/* Controls */}
       <div style={{ display:'flex', alignItems:'center', gap:8, marginBottom:12, flexWrap:'wrap' }}>
         <span style={{ fontSize:13, color:T.text2 }}>
@@ -224,7 +222,7 @@ export function GanttTab({ routing, zp, globalLookups, wcSchedule, subZP, fwdZP,
           <span style={{ fontSize:10, color:T.text3 }}>
             Ctrl+scroll=zoom · scroll=pan · scroll⬆⬇=gniazda
           </span>
-          <button onClick={() => { setPanX(0); setScaleIdx(2); if (containerRef.current) containerRef.current.scrollTop = 0; }} /* [FIX P0] setPanY nie istnieje — reset scrollTop bezpośrednio */
+          <button onClick={() => { setPanX(0); setScaleIdx(2); if (containerRef.current) containerRef.current.scrollTop = 0; }}
             style={{ ...s.btn(false), fontSize:11, padding:'4px 10px' }}>⊡ Reset</button>
           <button onClick={onRecalc}
             style={{ padding:'6px 14px', fontSize:12, fontWeight:600, borderRadius:8, border:'none',
@@ -243,6 +241,13 @@ export function GanttTab({ routing, zp, globalLookups, wcSchedule, subZP, fwdZP,
         <input type="text" placeholder="Kod produktu..." value={filterProd} onChange={e => setFilterProd(e.target.value)}
           style={{ padding:'5px 10px', fontSize:12, borderRadius:6, border:`1px solid ${T.border2}`,
             background:T.surface2, color:T.text, outline:'none', width:200 }}/>
+        {selectedZp && (
+          <button onClick={() => setSelectedZp(null)}
+            style={{ padding:'5px 10px', fontSize:12, borderRadius:6, border:`1px solid ${T.accent}`,
+              background:T.accentBg, color:T.accent, cursor:'pointer', fontWeight:600 }}>
+            ✕ {selectedZp} — pokaż wszystkie
+          </button>
+        )}
         {(filterZS||filterProd) && <button onClick={() => { setFilterZS(''); setFilterProd(''); }}
           style={{ padding:'5px 10px', fontSize:12, borderRadius:6, border:`1px solid ${T.border2}`,
             background:'transparent', color:T.text3, cursor:'pointer' }}>✕ Wyczyść</button>}
@@ -358,28 +363,32 @@ export function GanttTab({ routing, zp, globalLookups, wcSchedule, subZP, fwdZP,
                       </g>;
                     })}
                     {displayZP.map(s2 => {
-                      const wi = wcIndexMap[s2.workcenter];
-                      if (wi === undefined) return null;
+                      const wi = allWC.indexOf(s2.workcenter);
+                      if (wi<0) return null;
                       const col = globalLookups.zpColorMap[s2.parent_zp] || globalLookups.zpColorMap[s2.zp_id] || T.text3;
                       const y = TOP+wi*LANE_H+5, bH = LANE_H-10;
                       return (s2.segments||[]).map((seg,si) => {
                         const x   = xOf(seg.segStart);
                         const x2  = xOf(seg.segEnd);
                         const wpx = Math.max(x2-x, 2);
-                        // Viewport culling — pomiń segmenty poza ekranem
-                        const viewLeft  = -panX;
-                        const viewRight = viewLeft + (containerRef.current?.offsetWidth || 1200);
-                        if (x2 < viewLeft - 20 || x > viewRight + 20) return null;
                         const dueDtLocal = allDues[dates.indexOf(s2.due_date)];
                         const isOver = dueDtLocal && new Date(seg.segEnd) > dueDtLocal;
                         const isLast = si===s2.segments.length-1;
-                        const zpSt = zpStatusMap[s2.parent_zp || s2.zp_id];
+                        const zpSt = zpStatus && zpStatus.find(st => st.zp_id === (s2.parent_zp || s2.zp_id));
                         const tocZone = zpSt ? (zpSt.toc && zpSt.toc.zone) : (isOver ? 'black' : 'green');
                         const borderCol = tocZone==='black'?T.bn:tocZone==='red'?T.bn:tocZone==='yellow'?T.warn:'transparent';
                         const borderW   = tocZone==='green'||!tocZone ? 0 : 2.5;
                         return <g key={`${s2.sub_id}-${si}`}>
                           <rect x={x} y={y} width={wpx} height={bH} rx="4"
-                            fill={col} opacity={0.9} stroke={borderCol} strokeWidth={borderW}/>
+                            fill={col}
+                            opacity={selectedZp && selectedZp !== (s2.parent_zp || s2.zp_id) ? 0.25 : 0.9}
+                            stroke={selectedZp === (s2.parent_zp || s2.zp_id) ? '#fff' : borderCol}
+                            strokeWidth={selectedZp === (s2.parent_zp || s2.zp_id) ? 2 : borderW}
+                            style={{cursor:'pointer'}}
+                            onClick={() => setSelectedZp(prev => prev === (s2.parent_zp || s2.zp_id) ? null : (s2.parent_zp || s2.zp_id))}
+                            onMouseEnter={e => setTooltip({ x: e.clientX, y: e.clientY, op: s2 })}
+                            onMouseLeave={() => setTooltip(null)}
+                          />
                           {isLast && wpx>30 && <text x={x+Math.min(wpx/2,38)} y={y+bH/2-4}
                             fontSize={wpx>52?10:9} fontWeight="600" fill="white"
                             textAnchor="middle" style={{pointerEvents:'none'}}>{s2.zs_id || s2.zp_id}</text>}
@@ -398,26 +407,7 @@ export function GanttTab({ routing, zp, globalLookups, wcSchedule, subZP, fwdZP,
                   </g>
                 </g>
 
-                {/* Tooltip */}
-                {tooltip && (
-                  <g style={{pointerEvents:'none'}}>
-                    <rect x={tooltip.x} y={tooltip.y} width="220" height="80" rx="6"
-                      fill={T.surface3} stroke={T.border2} strokeWidth="1"
-                      style={{filter:'drop-shadow(0 2px 8px rgba(0,0,0,0.4))'}}/>
-                    <text x={tooltip.x+10} y={tooltip.y+14} fontSize="11" fontWeight="700" fill={T.text}>
-                      {tooltip.s2.zs_id || tooltip.s2.zp_id} · {tooltip.s2.workcenter}
-                    </text>
-                    <text x={tooltip.x+10} y={tooltip.y+40} fontSize="10" fill={T.text2}>
-                      {tooltip.s2.product} · {tooltip.s2.volume} szt
-                    </text>
-                    <text x={tooltip.x+10} y={tooltip.y+53} fontSize="10" fill={T.text3}>
-                      {tooltip.s2.operation}
-                    </text>
-                    <text x={tooltip.x+10} y={tooltip.y+66} fontSize="10" fill={T.text3} fontFamily="monospace">
-                      {fmtDt(tooltip.s2.start_dt)} → {fmtDt(tooltip.s2.end_dt)} ({tooltip.s2.durH.toFixed(1)}h)
-                    </text>
-                  </g>
-                )}
+
 
                 {/* STAŁA lewa kolumna — przesuwa się tylko w Y razem z panY */}
                 <rect x="0" y="0" width={LABEL_W} height="10000" fill={T.ganttBg}/>
@@ -568,5 +558,6 @@ export function GanttTab({ routing, zp, globalLookups, wcSchedule, subZP, fwdZP,
         </div>
       )}
     </div>
+    </>
   );
 }

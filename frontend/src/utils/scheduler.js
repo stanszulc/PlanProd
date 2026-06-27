@@ -700,7 +700,10 @@ export function parseZPFromERP(text) {
         volume_actual: Math.max(0, decimal(get(r, 'wyprod_', 'wyprod'))),
         due_date:      trimDate(get(r, 'data_zak', 'due_date', 'data')),
         ship_date:     trimDate(get(r, 'data_wys', 'ship_date')),
-        priority:      parseInt(get(r, 'priority', 'priorytet') || '1'),
+        priority:      parseInt(get(r, 'priority', 'priorytet') || '0') ||
+                       // VIP wykrywany z nazwy klienta gdy brak kolumny priority
+                       (['S261010','871915'].some(tag =>
+                         get(r, 'klient_zam', 'klient', 'client').includes(tag)) ? 1 : 2),
         ops: [],
       });
     }
@@ -732,17 +735,21 @@ export function parseZPFromERP(text) {
     });
   }
 
-  const result = [];
+  const result    = [];
+  const wcToWc2   = {};  // { machine_id → wc2_name } — budowane z TSV, nie z demoData
+
   for (const zp of zpGroups.values()) {
     if (!zp.product || !zp.due_date || zp.ops.length === 0) continue;
     zp.ops.sort((a, b) => a.sequence - b.sequence);
-    // Sekwencja liniowa: każda operacja poprzedzona poprzednią
-    // TODO: zastąpić gdy ERP doda kolumnę predecessors
     zp.ops.forEach((op, i) => {
       op.predecessors = i > 0 ? [zp.ops[i - 1].sequence] : [];
+      // Zbierz mapę machine_id → wc2 z każdej operacji
+      if (op.machine_id && op.workcenter) wcToWc2[op.machine_id] = op.workcenter;
     });
     result.push(zp);
   }
+  // Zwróć wynik + mapę wc2 — App.jsx zapisze ją do state zamiast importować z demoData
+  result.wcToWc2 = wcToWc2;
   return result;
 }
 

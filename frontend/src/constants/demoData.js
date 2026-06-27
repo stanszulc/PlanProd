@@ -302,55 +302,35 @@ export const DEMO_ERP_ZP = `Numer ZP	Klient/zam	Numer ZS	Data zak	Data wys	Kod	N
 7310930520	SMAY REKLAMACJE	0901011826	2026-06-23 00:00	2026-06-24 00:00	95001	Naprawa kielichów NSDZ	1	0	020	30052	Ślusarnia - iSWAY	iSWAY	16	16`;
 
 // ─── CAPACITY PER MASZYNA [rbh/dzień, pon-pt] ────────────────────────────────
-// Źródło: rzeczywiste dane produkcyjne, 2 zmiany, pełna obsada
-// Formuła: capacity brygady / liczba maszyn w brygadzie
+// Capacity per WC [rbh/dzień] = capacity_brygady / liczba_maszyn_w_brygadzie
+// Suma maszyn gniazda = pełna capacity brygady (BRIGADE_CAPACITY)
 export const WC_DAILY_CAPACITY = {
-  // Gniazdo KTM/KTS: 84.9h / 4 maszyn = 21.2h
-  '20074': 21.2, '30042': 21.2, '30043': 21.2, '30045': 21.2,
-  // Gniazdo montażu SN: 32h / 1
-  '30017': 32.0,
-  // Gniazdo NSDZ: 16h / 1
-  '30020': 16.0,
-  // Gniazdo ZS: 16h / 1
-  '30057': 16.0,
-  // Heager: 8h / 1
-  '20049': 8.0,
-  // iSWAY: 48h / 1
-  '30052': 48.0,
-  // Kanały: 180.4h / 2 = 90.2h
-  '30003': 90.2, '30031': 90.2,
-  // Klinczarka: 8h / 1
-  '20065': 8.0,
-  // Kratki Aluminium: 140h / 3 = 46.7h
-  '30002': 46.7, '30022': 46.7, '30023': 46.7,
-  // Kratki Stalowe: 156.7h / 7 = 22.4h
+  '20074': 21.2, '30042': 21.2, '30043': 21.2, '30045': 21.2,  // Gniazdo KTM/KTS
+  '30020': 16.0,  // Gniazdo NSDZ
+  '30057': 16.0,  // Gniazdo ZS
+  '30017': 32.0,  // Gniazdo montażu SN
+  '20049':  8.0,  // Heager
+  '30052': 48.0,  // iSWAY
+  '30003': 90.2, '30031': 90.2,  // Kanały
+  '20065':  8.0,  // Klinczarka
+  '30002': 46.7, '30022': 46.7, '30023': 46.7,  // Kratki Aluminium
   '30001': 22.4, '30012': 22.4, '30014': 22.4, '30016': 22.4,
-  '30021': 22.4, '30056': 22.4, '30060': 22.4,
-  // Linia KWP/KWP-L: 54.9h / 1
-  '30040': 54.9,
-  // Linia WKP: 73.4h / 3 = 24.5h
-  '30053': 24.5, '30054': 24.5, '30055': 24.5,
-  // Maszyny: 202.6h / 12 = 16.9h
+  '30021': 22.4, '30056': 22.4, '30060': 22.4,  // Kratki Stalowe
+  '30040': 54.9,  // Linia KWP/KWP-L
+  '30053': 24.5, '30054': 24.5, '30055': 24.5,  // Linia WKP
   '20017': 16.9, '20043': 16.9, '20045': 16.9, '20047': 16.9,
   '20048': 16.9, '20050': 16.9, '20058': 16.9, '20059': 16.9,
-  '20067': 16.9, '20068': 16.9, '30009': 16.9, '30025': 16.9,
-  // Montaż Podzespołów: 60.1h / 3 = 20h
-  '20007': 20.0, '20034': 20.0, '30013': 20.0,
-  // Pilarnia Aluminium: 80h / 9 = 8.9h
-  '20025': 8.9, '20035': 8.9, '20051': 8.9, '20055': 8.9,
-  '20056': 8.9, '20063': 8.9, '30081': 8.9, '30083': 8.9, '30084': 8.9,
-  // Pilarnia Stalowa: 72h / 6 = 12h
+  '20067': 16.9, '20068': 16.9, '30009': 16.9, '30025': 16.9,  // Maszyny
+  '20007': 20.0, '20034': 20.0, '30013': 20.0,  // Montaż Podzespołów
+  '20025':  8.9, '20035':  8.9, '20051':  8.9, '20055':  8.9,
+  '20056':  8.9, '20063':  8.9, '30081':  8.9, '30083':  8.9, '30084':  8.9,  // Pilarnia Aluminium
   '20005': 12.0, '20011': 12.0, '20012': 12.0, '20040': 12.0,
-  '30008': 12.0, '30019': 12.0,
-  // Przepustnice: 92.4h / 3 = 30.8h
-  '30005': 30.8, '30050': 30.8, '30051': 30.8,
-  // Regulatory VAV/NSDZ: 124.6h / 6 = 20.8h
+  '30008': 12.0, '30019': 12.0,  // Pilarnia Stalowa
+  '30005': 30.8, '30050': 30.8, '30051': 30.8,  // Przepustnice
   '20072': 20.8, '30006': 20.8, '30061': 20.8, '30062': 20.8,
-  '30068': 20.8, '30069': 20.8,
-  // Spawalnia: 56h / 2 = 28h
-  '30011': 28.0, '30026': 28.0,
-  // Szlifiernia Stal: 8h / 1
-  '30015': 8.0,
+  '30068': 20.8, '30069': 20.8,  // Regulatory VAV/NSDZ
+  '30011': 28.0, '30026': 28.0,  // Spawalnia
+  '30015':  8.0,  // Szlifiernia Stal
 };
 
 // Buduje wcSchedule z WC_DAILY_CAPACITY — pon-pt = capacity, sob-nd = 0

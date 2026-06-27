@@ -1,52 +1,16 @@
-import { useState } from 'react';
+import { useState, useMemo } from 'react';
 import { T, s } from '../../constants/theme.js';
-import { WC_DAILY_CAPACITY } from '../../constants/demoData.js';
 
 const DAY_NAMES = ['Pon', 'Wt', 'Śr', 'Czw', 'Pt', 'Sob', 'Nd'];
 
-// Demo capacity brygad [rbh/dzień przy pełnej obsadzie 2 zmian]
-const BRIGADE_DEMO = {
-  'Maszyny':             202.6,
-  'Kanały':              180.4,
-  'Kratki Stalowe':      156.7,
-  'Kratki Aluminium':    140.0,
-  'Regulatory VAV/NSDZ': 124.6,
-  'Przepustnice':         92.4,
-  'Gniazdo KTM/KTS':      84.9,
-  'Pilarnia Aluminium':   80.0,
-  'Linia WKP':            73.4,
-  'Pilarnia Stalowa':     72.0,
-  'iSWAY':                48.0,
-  'Spawalnia':            56.0,
-  'Montaż Podzespołów':   60.1,
-  'Linia KWP/KWP-L':      54.9,
-  'Gniazdo montażu SN':   32.0,
-  'Gniazdo NSDZ':         16.0,
-  'Gniazdo ZS':           16.0,
-  'Heager':                8.0,
-  'Klinczarka':            8.0,
-  'Szlifiernia Stal':      8.0,
-};
-
-// Domyślny grafik brygady: pon-pt = capacity, sob-nd = 0
-function defaultBrigadeSchedule(capH) {
-  return [capH, capH, capH, capH, capH, 0, 0];
-}
-
-// Inicjalizuj grafik brygad z demo danych
+// initBrigadeSchedule — eksportowana do App.jsx (scheduleConfig init)
+// Bez danych zwraca pusty obiekt — wypełni się po pierwszym imporcie ERP
 export function initBrigadeSchedule() {
-  const sched = {};
-  for (const [br, cap] of Object.entries(BRIGADE_DEMO)) {
-    sched[br] = defaultBrigadeSchedule(cap);
-  }
-  return sched;
+  return {};
 }
 
-export function SettingsTab({ config, onConfigChange }) {
-  const [localConfig, setLocalConfig] = useState(() => ({
-    ...config,
-    brigadeSchedule: config.brigadeSchedule || initBrigadeSchedule(),
-  }));
+export function SettingsTab({ config, onConfigChange, wcCapacity = {}, onWcCapacityChange, wcToWc2 = {} }) {
+  const [localConfig, setLocalConfig] = useState(() => ({ ...config }));
   const [expandedBrigade, setExpandedBrigade] = useState(null);
 
   function update(key, value) {
@@ -55,12 +19,28 @@ export function SettingsTab({ config, onConfigChange }) {
     onConfigChange(next);
   }
 
-  function updateBrigadeDay(brigade, dayIdx, value) {
-    const prev = localConfig.brigadeSchedule || {};
-    const arr  = [...(prev[brigade] || defaultBrigadeSchedule(BRIGADE_DEMO[brigade] || 0))];
-    arr[dayIdx] = Math.max(0, value);
-    const next = { ...prev, [brigade]: arr };
-    update('brigadeSchedule', next);
+  // Buduj mapę brygad dynamicznie z wcToWc2 (z importu ERP)
+  // brigadeToWc: { wc2 → [wc, ...] }
+  const brigadeToWc = useMemo(() => {
+    const map = {};
+    Object.entries(wcToWc2).forEach(([wc, wc2]) => {
+      if (!map[wc2]) map[wc2] = [];
+      if (!map[wc2].includes(wc)) map[wc2].push(wc);
+    });
+    // Uzupełnij z routingu przez wcCapacity — maszyny które mają capacity ale nie ma ich w wcToWc2
+    return map;
+  }, [wcToWc2]);
+
+  // Capacity brygady = suma capacity jej maszyn z wcCapacity
+  function getBrigadeCapH(wc2) {
+    const wcs = brigadeToWc[wc2] || [];
+    if (!wcs.length) return 0;
+    return wcs.reduce((s, wc) => s + (wcCapacity[wc] ?? 8), 0);
+  }
+
+  function updateWcCapacity(wc, value) {
+    if (!onWcCapacityChange) return;
+    onWcCapacityChange(prev => ({ ...prev, [wc]: Math.max(0, value) }));
   }
 
   const SectionHeader = ({ icon, label }) => (
@@ -97,7 +77,7 @@ export function SettingsTab({ config, onConfigChange }) {
     </div>
   );
 
-  const brigadeSchedule = localConfig.brigadeSchedule || initBrigadeSchedule();
+  const brigades = Object.keys(brigadeToWc).sort();
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: 28, maxWidth: 760 }}>
@@ -128,128 +108,96 @@ export function SettingsTab({ config, onConfigChange }) {
         </Row>
       </section>
 
-      {/* ── GRAFIK PRACY BRYGAD ── */}
+      {/* ── CAPACITY MASZYN ── */}
       <section>
-        <SectionHeader icon="👷" label="Grafik pracy brygad" />
+        <SectionHeader icon="⚙️" label="Capacity maszyn / stanowisk [rbh/dzień]" />
         <p style={{ fontSize: 12, color: T.text3, marginBottom: 12 }}>
-          Dostępny czas pracy per brygada per dzień tygodnia [rbh/dzień].
-          Kliknij brygadę aby edytować. Scheduler używa tych wartości jako capacity.
+          Domyślna dostępność per maszyna/stanowisko w dni robocze.
+          Zmiana dotyczy nowych importów — nie nadpisuje ręcznych edycji w Heatmapie.
+          Maszyny (2xxxx): max 24h. Stanowiska (3xxxx): liczba_pracowników × zmiany × 8h.
         </p>
-
-        <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
-          {/* Nagłówek */}
-          <div style={{ display: 'grid', gridTemplateColumns: '200px repeat(7, 1fr) 80px',
-            gap: 4, padding: '6px 8px', background: T.surface2, borderRadius: 6,
-            fontSize: 10, fontWeight: 700, color: T.text3, textTransform: 'uppercase' }}>
-            <div>Brygada</div>
-            {DAY_NAMES.map(d => <div key={d} style={{ textAlign: 'center' }}>{d}</div>)}
-            <div style={{ textAlign: 'center' }}>Suma/tydz</div>
+        {!brigades.length && (
+          <div style={{ fontSize: 12, color: T.text3, padding: '12px 0' }}>
+            Brak danych — załaduj plik ERP aby zobaczyć maszyny.
           </div>
-
-          {Object.entries(brigadeSchedule).map(([br, arr]) => {
-            const isOpen  = expandedBrigade === br;
-            const weekSum = arr.reduce((s, v) => s + v, 0);
-            const demoRef = BRIGADE_DEMO[br] ?? 0;
-
-            return (
-              <div key={br} style={{ border: `1px solid ${T.border}`, borderRadius: 6,
-                overflow: 'hidden' }}>
-
-                {/* Wiersz brygady */}
-                <div style={{ display: 'grid',
-                  gridTemplateColumns: '200px repeat(7, 1fr) 80px',
-                  gap: 4, padding: '6px 8px',
-                  background: isOpen ? T.surface2 : T.surface,
-                  cursor: 'pointer', alignItems: 'center' }}
-                  onClick={() => setExpandedBrigade(isOpen ? null : br)}>
-                  <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
-                    <span style={{ fontSize: 9, color: T.text3,
-                      transform: isOpen ? 'rotate(90deg)' : 'none',
-                      transition: 'transform .15s', display: 'inline-block' }}>▶</span>
-                    <span style={{ fontSize: 12, fontWeight: 600, color: T.text }}>{br}</span>
-                  </div>
-                  {arr.map((h, i) => (
-                    <div key={i} style={{ textAlign: 'center', fontSize: 12,
-                      fontWeight: 600, fontFamily: 'monospace',
-                      color: i >= 5 ? T.text3 : h === 0 ? T.bn : T.ok }}>
-                      {h > 0 ? h + 'h' : '–'}
-                    </div>
-                  ))}
-                  <div style={{ textAlign: 'center', fontSize: 12, fontWeight: 700,
-                    fontFamily: 'monospace', color: T.accent }}>
-                    {weekSum}h
-                  </div>
-                </div>
-
-                {/* Edycja — rozwinięta */}
-                {isOpen && (
-                  <div style={{ padding: '12px 16px', background: T.surface2,
-                    borderTop: `1px solid ${T.border}` }}>
-                    <div style={{ fontSize: 11, color: T.text3, marginBottom: 10 }}>
-                      Ref. pełna obsada: <strong style={{ color: T.accent }}>{demoRef}h/dzień</strong>
-                      &nbsp;·&nbsp; Zmień godziny per dzień tygodnia:
-                    </div>
-                    <div style={{ display: 'grid',
-                      gridTemplateColumns: 'repeat(7, 1fr)', gap: 8 }}>
-                      {DAY_NAMES.map((day, i) => (
-                        <div key={i} style={{ display: 'flex', flexDirection: 'column',
-                          alignItems: 'center', gap: 4 }}>
-                          <div style={{ fontSize: 10, fontWeight: 600, color: T.text3 }}>{day}</div>
-                          <div style={{ display: 'flex', alignItems: 'center', gap: 3 }}>
-                            <button onClick={() => updateBrigadeDay(br, i, (arr[i] || 0) - 8)}
-                              style={{ width: 22, height: 22, borderRadius: 4, border: `1px solid ${T.border2}`,
-                                background: T.surface3, color: T.bn, cursor: 'pointer',
-                                fontSize: 14, lineHeight: 1, display: 'flex',
-                                alignItems: 'center', justifyContent: 'center' }}>−</button>
-                            <input
-                              type="number" min="0" step="8"
-                              value={arr[i] || 0}
-                              onChange={e => updateBrigadeDay(br, i, parseFloat(e.target.value) || 0)}
-                              style={{ width: 52, textAlign: 'center', fontSize: 13,
-                                fontWeight: 600, fontFamily: 'monospace',
-                                padding: '3px 4px', borderRadius: 4,
-                                border: `1px solid ${T.border2}`,
-                                background: T.surface, color: T.text }}
-                            />
-                            <button onClick={() => updateBrigadeDay(br, i, (arr[i] || 0) + 8)}
-                              style={{ width: 22, height: 22, borderRadius: 4, border: `1px solid ${T.border2}`,
-                                background: T.surface3, color: T.ok, cursor: 'pointer',
-                                fontSize: 14, lineHeight: 1, display: 'flex',
-                                alignItems: 'center', justifyContent: 'center' }}>+</button>
-                          </div>
-                          <div style={{ fontSize: 9, color: T.text3 }}>
-                            {i < 5 ? (arr[i] > 0 ? `${Math.round(arr[i]/8)} zm.` : 'wolne') : 'weekend'}
-                          </div>
-                        </div>
-                      ))}
-                    </div>
-                    <div style={{ display: 'flex', gap: 8, marginTop: 12 }}>
-                      <button onClick={() => {
-                        DAY_NAMES.forEach((_, i) => {
-                          if (i < 5) updateBrigadeDay(br, i, demoRef);
-                        });
-                      }} style={{ ...s.btn(false), fontSize: 11 }}>
-                        ↺ Przywróć domyślne ({demoRef}h)
-                      </button>
-                      <button onClick={() => {
-                        DAY_NAMES.forEach((_, i) => updateBrigadeDay(br, i, 0));
-                      }} style={{ ...s.btn(false), fontSize: 11, color: T.bn }}>
-                        Wyzeruj
-                      </button>
-                    </div>
-                  </div>
-                )}
+        )}
+        {brigades.map(wc2 => {
+          const wcs      = brigadeToWc[wc2] || [];
+          const capTotal = getBrigadeCapH(wc2);
+          const isOpen   = expandedBrigade === wc2;
+          return (
+            <div key={wc2} style={{ border: `1px solid ${T.border}`, borderRadius: 6,
+              overflow: 'hidden', marginBottom: 4 }}>
+              <div style={{ display: 'flex', alignItems: 'center', gap: 10,
+                padding: '8px 12px', background: isOpen ? T.surface2 : T.surface,
+                cursor: 'pointer' }}
+                onClick={() => setExpandedBrigade(isOpen ? null : wc2)}>
+                <span style={{ fontSize: 9, color: T.text3, display: 'inline-block',
+                  transform: isOpen ? 'rotate(90deg)' : 'none', transition: 'transform .15s' }}>▶</span>
+                <span style={{ fontSize: 13, fontWeight: 600, color: T.text, flex: 1 }}>{wc2}</span>
+                <span style={{ fontSize: 11, color: T.text3 }}>{wcs.length} maszyn/stanowisk</span>
+                <span style={{ fontSize: 12, fontWeight: 700, color: T.accent,
+                  fontFamily: 'monospace', minWidth: 60, textAlign: 'right' }}>
+                  Σ {Math.round(capTotal * 10) / 10}h/d
+                </span>
               </div>
-            );
-          })}
-        </div>
+              {isOpen && (
+                <div style={{ padding: '10px 16px', background: T.surface2,
+                  borderTop: `1px solid ${T.border}`, display: 'flex',
+                  flexDirection: 'column', gap: 8 }}>
+                  {wcs.sort().map(wc => {
+                    const cap     = wcCapacity[wc] ?? 8;
+                    const isMach  = String(wc).startsWith('2');
+                    const maxCap  = isMach ? 24 : 240;
+                    return (
+                      <div key={wc} style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+                        <span style={{ fontFamily: 'monospace', fontSize: 11,
+                          color: T.text3, minWidth: 52 }}>{wc}</span>
+                        <span style={{ fontSize: 11, color: T.text2, flex: 1 }}>
+                          {isMach ? '🔧 maszyna' : '👷 stanowisko'}
+                        </span>
+                        <div style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
+                          {[8, 16, 24].map(h => (
+                            <button key={h} onClick={() => updateWcCapacity(wc, h)}
+                              style={{ fontSize: 10, padding: '2px 7px', borderRadius: 5,
+                                border: `1px solid ${cap === h ? T.accent : T.border2}`,
+                                background: cap === h ? T.accentBg : T.surface3,
+                                color: cap === h ? T.accent : T.text3, cursor: 'pointer' }}>
+                              {h}h
+                            </button>
+                          ))}
+                          {!isMach && [32, 48].map(h => (
+                            <button key={h} onClick={() => updateWcCapacity(wc, h)}
+                              style={{ fontSize: 10, padding: '2px 7px', borderRadius: 5,
+                                border: `1px solid ${cap === h ? T.accent : T.border2}`,
+                                background: cap === h ? T.accentBg : T.surface3,
+                                color: cap === h ? T.accent : T.text3, cursor: 'pointer' }}>
+                              {h}h
+                            </button>
+                          ))}
+                          <input type="number" min={0} max={maxCap} step={8} value={cap}
+                            onChange={e => updateWcCapacity(wc, parseFloat(e.target.value) || 0)}
+                            style={{ width: 52, textAlign: 'center', fontSize: 12,
+                              fontWeight: 600, fontFamily: 'monospace', padding: '2px 4px',
+                              borderRadius: 4, border: `1px solid ${T.border2}`,
+                              background: T.surface, color: T.text }} />
+                          <span style={{ fontSize: 10, color: T.text3 }}>h/d</span>
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
+              )}
+            </div>
+          );
+        })}
       </section>
 
-      {/* ── GRAFIK DOMYŚLNY MASZYN ── */}
+      {/* ── GRAFIK DOMYŚLNY (fallback) ── */}
       <section>
         <SectionHeader icon="📅" label="Domyślny grafik maszyn (fallback)" />
         <p style={{ fontSize: 12, color: T.text3, marginBottom: 12 }}>
-          Stosowany gdy maszyna nie ma grafiku w pliku CSV.
+          Stosowany gdy maszyna nie ma grafiku w harmonogramie.
         </p>
         {DAY_NAMES.map((day, i) => (
           <Row key={day} label={day} desc={i < 5 ? 'Dzień roboczy' : 'Weekend'}>
@@ -296,7 +244,7 @@ export function SettingsTab({ config, onConfigChange }) {
 
       <div style={{ fontSize: 11, color: T.text3, padding: '10px 14px',
         background: T.surface, border: `1px solid ${T.border}`, borderRadius: 8 }}>
-        Zmiany są stosowane natychmiast. Ustawienia przechowywane lokalnie w tej sesji.
+        Zmiany capacity są stosowane przy następnym imporcie ERP. Ustawienia przechowywane w tej sesji.
       </div>
     </div>
   );
