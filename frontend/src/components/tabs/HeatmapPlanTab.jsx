@@ -100,6 +100,17 @@ export function HeatmapPlanTab({ fwdZP = [], routing = [], wcSchedule = {}, onSc
       if (!loadMap[wc]) loadMap[wc] = {};
     });
 
+    const dates_raw = [...dateSet].sort();
+    // Wypełnij wszystkie dni w zakresie (włącznie z weekendami)
+    if (dates_raw.length > 0) {
+      const cur = new Date(dates_raw[0] + 'T12:00:00');
+      const end = new Date(dates_raw[dates_raw.length - 1] + 'T12:00:00');
+      while (cur <= end) {
+        const dk = `${cur.getFullYear()}-${String(cur.getMonth()+1).padStart(2,'0')}-${String(cur.getDate()).padStart(2,'0')}`;
+        dateSet.add(dk);
+        cur.setDate(cur.getDate() + 1);
+      }
+    }
     const dates = [...dateSet].sort();
 
     const weekendSet = new Set();
@@ -150,18 +161,15 @@ export function HeatmapPlanTab({ fwdZP = [], routing = [], wcSchedule = {}, onSc
 
     let filteredZpIds;
     if (filterCell) {
-      // Filtr komórki: ZP które mają segment w danym gnieździe w danym dniu
-      const cellWcs = new Set(
-        Object.entries(wcMeta).filter(([, m]) => m.group === filterCell.wc2).map(([wc]) => wc)
-      );
+      const cellWcs = filterCell.wc
+        ? new Set([filterCell.wc])
+        : new Set(Object.entries(wcMeta).filter(([, m]) => m.group === filterCell.wc2).map(([wc]) => wc));
       filteredZpIds = new Set(
         fwdZP.filter(op => {
           if (!cellWcs.has(op.workcenter)) return false;
           return (op.segments || []).some(seg => seg.segStart && localDateStr(seg.segStart) === filterCell.date);
         }).map(op => op.parent_zp || op.zp_id)
       );
-      console.log('filteredZpIds:', [...filteredZpIds]);
-      console.log('relatedWc2s:', [...new Set(fwdZP.filter(op => filteredZpIds.has(op.parent_zp || op.zp_id)).map(op => wcMeta[op.workcenter]?.group || op.workcenter))]);
     } else {
       // Filtr gniazda
       const filterWcs = new Set(
@@ -184,9 +192,9 @@ export function HeatmapPlanTab({ fwdZP = [], routing = [], wcSchedule = {}, onSc
     if (!filterWc2 && !filterCell) return null;
     let filteredZpIds;
     if (filterCell) {
-      const cellWcs = new Set(
-        Object.entries(wcMeta).filter(([, m]) => m.group === filterCell.wc2).map(([wc]) => wc)
-      );
+      const cellWcs = filterCell.wc
+        ? new Set([filterCell.wc])  // konkretna maszyna
+        : new Set(Object.entries(wcMeta).filter(([, m]) => m.group === filterCell.wc2).map(([wc]) => wc));
       filteredZpIds = new Set(
         fwdZP.filter(op => {
           if (!cellWcs.has(op.workcenter)) return false;
@@ -236,7 +244,7 @@ export function HeatmapPlanTab({ fwdZP = [], routing = [], wcSchedule = {}, onSc
       const id = op.parent_zp || op.zp_id;
       if (seen.has(id)) return;
       seen.add(id);
-      zps.push({ id, klient: op.klient || op.zp_id, durH: op.durH });
+      zps.push({ id, klient: op.klient || op.zp_id, durH: op.durH, due_date: op.due_date });
     });
     return zps;
   }
@@ -359,6 +367,7 @@ export function HeatmapPlanTab({ fwdZP = [], routing = [], wcSchedule = {}, onSc
             padding: '2px 0', borderBottom: `1px solid ${T.border2}`, color: T.text }}>
             <span style={{ color: T.text2, fontFamily: 'monospace', fontSize: 10 }}>{z.id}</span>
             <span style={{ color: T.text3, whiteSpace: 'nowrap' }}>{z.klient}</span>
+            <span style={{ color: T.bn, fontFamily: 'monospace', fontSize: 10 }}>{z.due_date?.slice(5)}</span>
             <span style={{ color: T.accent, fontWeight: 600, whiteSpace: 'nowrap' }}>{z.durH?.toFixed(1)}h</span>
           </div>
         ))
@@ -516,7 +525,7 @@ export function HeatmapPlanTab({ fwdZP = [], routing = [], wcSchedule = {}, onSc
                         <td key={i} style={{ padding: 3, textAlign: 'center' }}>
                           {(() => {
                             const isDimmed = activeMap && !(activeMap[wc2]?.has(dates[i]));
-                            const isActive = filterCell?.wc2 === wc2 && filterCell?.date === dates[i];
+                            const isActive = filterCell?.wc2 === wc2 && filterCell?.date === dates[i] && !filterCell?.wc;
                             return (
                               <div
                                 onClick={() => load > 0 && setFilterCell(fc => fc?.wc2 === wc2 && fc?.date === dates[i] ? null : { wc2, date: dates[i] })}
@@ -560,19 +569,21 @@ export function HeatmapPlanTab({ fwdZP = [], routing = [], wcSchedule = {}, onSc
                           const isLate   = lateKeys.has(`${m.wc}|${dates[i]}`);
                           const mWc2     = wcMeta[m.wc]?.group || m.wc;
                           const isDimmed = activeMap && !(activeMap[mWc2]?.has(dates[i]));
+                          const isMActive = filterCell?.wc === m.wc && filterCell?.date === dates[i];
                           return (
                             <td key={i} style={{ padding: 3, textAlign: 'center' }}>
                               <div
                                 onMouseEnter={e => { if (load > 0) { const r = e.currentTarget.getBoundingClientRect(); setTooltip({ wc2: `${m.wc} ${m.name}`, date: dates[i], x: r.right, y: r.top, zps: getZpsForCell(mWc2, dates[i], m.wc) }); }}}
                                 onMouseLeave={() => setTooltip(null)}
+                                onClick={() => load > 0 && setFilterCell(fc => fc?.wc === m.wc && fc?.date === dates[i] ? null : { wc2: mWc2, wc: m.wc, date: dates[i] })}
                                 style={{ display: 'inline-flex', alignItems: 'center', justifyContent: 'center',
                                 minWidth: 52, height: 22, borderRadius: 4,
                                 background: isDimmed ? T.surface2 : hs.bg,
                                 color: isDimmed ? T.text3 : hs.color,
                                 opacity: isDimmed ? 0.3 : 1,
                                 fontSize: 10, fontWeight: 500, fontFamily: 'monospace',
-                                cursor: load > 0 && !isDimmed ? 'default' : 'default',
-                                boxShadow: isLate && !isDimmed ? 'inset 0 0 0 2px #ef4444' : 'none' }}>
+                                cursor: load > 0 ? 'pointer' : 'default',
+                                boxShadow: isMActive ? 'inset 0 0 0 2px #fff' : isLate && !isDimmed ? 'inset 0 0 0 2px #ef4444' : 'none' }}>
                                 {isDimmed ? '–' : hs.text}
                               </div>
                             </td>
@@ -632,11 +643,11 @@ export function HeatmapPlanTab({ fwdZP = [], routing = [], wcSchedule = {}, onSc
                         <td key={d} style={{ padding: 3, textAlign: 'center' }}>
                           <div style={{ display: 'inline-flex', flexDirection: 'column',
                             alignItems: 'center', justifyContent: 'center',
-                            minWidth: 52, height: isWe ? 24 : 34, borderRadius: 4,
-                            background: isWe ? T.surface2 : cap > 0 ? 'rgba(34,197,94,0.08)' : T.surface2,
-                            color: isWe ? T.text3 : cap > 0 ? '#22c55e' : T.text3,
+                            minWidth: 52, height: 34, borderRadius: 4,
+                            background: cap > 0 ? 'rgba(34,197,94,0.08)' : T.surface2,
+                            color: cap > 0 ? '#22c55e' : T.text3,
                             fontFamily: 'monospace', fontSize: 11, fontWeight: 600 }}>
-                            {isWe ? '—' : <>{Math.round(cap * 10) / 10}h
+                            <>{Math.round(cap * 10) / 10}h
                               {onScheduleChange && (
                                 <span style={{ display: 'flex', gap: 2, marginTop: 2 }}>
                                   <button onClick={() => adjustBrigade(br, d, +8)}
@@ -650,7 +661,7 @@ export function HeatmapPlanTab({ fwdZP = [], routing = [], wcSchedule = {}, onSc
                                       border: `1px solid ${T.border2}`, background: T.surface3, color: T.text3, cursor: 'pointer' }}>0</button>
                                 </span>
                               )}
-                            </>}
+                            </>
                           </div>
                         </td>
                       );
@@ -676,16 +687,15 @@ export function HeatmapPlanTab({ fwdZP = [], routing = [], wcSchedule = {}, onSc
                       </td>
                       {dates.map(d => {
                         const h    = getWcH(m.wc, d);
-                        const isWe = weekendSet.has(d);
                         return (
                           <td key={d} style={{ padding: 3, textAlign: 'center' }}>
                             <div style={{ display: 'inline-flex', flexDirection: 'column',
                               alignItems: 'center', justifyContent: 'center',
-                              minWidth: 52, height: isWe ? 24 : 34, borderRadius: 4,
-                              background: isWe ? T.surface2 : h > 0 ? 'rgba(34,197,94,0.06)' : T.surface2,
-                              color: isWe ? T.text3 : h > 0 ? '#22c55e' : T.text3,
+                              minWidth: 52, height: 34, borderRadius: 4,
+                              background: h > 0 ? 'rgba(34,197,94,0.06)' : T.surface2,
+                              color: h > 0 ? '#22c55e' : T.text3,
                               fontFamily: 'monospace', fontSize: 10, fontWeight: 500 }}>
-                              {isWe ? '—' : <>{Math.round(h * 10) / 10}h
+                              <>{Math.round(h * 10) / 10}h
                                 <span style={{ display: 'flex', gap: 2, marginTop: 2 }}>
                                   <button onClick={() => adjustMachine(m.wc, d, +8)}
                                     style={{ fontSize: 8, padding: '0 3px', borderRadius: 3, lineHeight: 1.5,
@@ -694,7 +704,7 @@ export function HeatmapPlanTab({ fwdZP = [], routing = [], wcSchedule = {}, onSc
                                     style={{ fontSize: 8, padding: '0 3px', borderRadius: 3, lineHeight: 1.5,
                                       border: `1px solid ${T.border2}`, background: T.surface3, color: T.bn, cursor: 'pointer' }}>-8</button>
                                 </span>
-                              </>}
+                              </>
                             </div>
                           </td>
                         );

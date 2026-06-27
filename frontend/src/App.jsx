@@ -201,6 +201,7 @@ export default function App() {
     horizonDays:     14,
     brigadeSchedule: initBrigadeSchedule(),
     schedulingMode:  'asap',
+    safetyBufferDays: 1,
   });
 
   const [historyData, setHistoryData]         = useState([]);
@@ -226,11 +227,14 @@ export default function App() {
 
   useEffect(() => {
     if (routing.length > 0) {
-      const wcs = [...new Set(routing.map(r => r.workcenter))].sort();
+      const wcs = [...new Set([
+        ...routing.map(r => r.workcenter),
+        ...Object.keys(wcToWc2)
+      ])].sort();
       setWcSchedule(prev => buildWcSchedule(wcs, planStart, zp, scheduleConfig.horizonDays, prev, wcCapacity));
       setGanttDirty(true);
     }
-  }, [routing.length, planStart, zp.length]);
+  }, [routing.length, planStart, zp.length, JSON.stringify(Object.keys(wcToWc2).sort())]);
 
   const globalLookups = useMemo(() => {
     const routingByProduct = {};
@@ -305,6 +309,8 @@ export default function App() {
         setGanttDirty(false);
         setIsScheduling(false);
         workerRef.current = null;
+        // Debug export dla optimizer.py
+        window.__FLOWOPS_DEBUG__ = { zp, routing: rl, wcSchedule: wcs, planStart, scheduleConfig, wcToWc2 };
       } else if (type === 'ERROR') {
         console.error('Worker error:', payload.message);
         setIsScheduling(false);
@@ -320,7 +326,7 @@ export default function App() {
 
     worker.postMessage({
       type: 'SCHEDULE',
-      payload: { zpList: zp, routingByProduct: rl, wcSchedule: wcs, planStart, config: scheduleConfig }
+      payload: { zpList: zp, routingByProduct: rl, wcSchedule: wcs, planStart, config: scheduleConfig, wcToWc2 }
     });
   }
 
@@ -526,7 +532,7 @@ export default function App() {
         {tab === 'buffer'     && <BufferTab zpStatusData={zpStatusData} />}
         {tab === 'buffer_zs'  && <BufferZSTab zpStatusData={zpStatusData} />}
         {tab === 'late_zs'    && <LateZSTab zpStatus={activeZpStatus} />}
-        {tab === 'schedule_debug' && <ScheduleDebugTab fwdZP={fwdZP} zpStatus={zpStatus} planStart={planStart} />}
+        {tab === 'schedule_debug' && <ScheduleDebugTab fwdZP={fwdZP} zpStatus={zpStatus} planStart={planStart} scheduleConfig={scheduleConfig} zpList={zp} routingByProduct={globalLookups.routingByProduct} wcSchedule={wcSchedule} />}
         {tab === 'settings'       && <SettingsTab config={scheduleConfig} onConfigChange={cfg => { setScheduleConfig(cfg); setGanttDirty(true); }} wcCapacity={wcCapacity} onWcCapacityChange={setWcCapacity} wcToWc2={wcToWc2} />}
         {tab === 'analysis'   && <AnalysisTab historyData={historyData} routing={routing} wcSchedule={wcSchedule} zpStatusData={zpStatusData} zpStatusHeaders={zpStatusHeaders} />}
       </main>

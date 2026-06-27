@@ -3,8 +3,6 @@ import { T, s } from '../../constants/theme.js';
 
 const DAY_NAMES = ['Pon', 'Wt', 'Śr', 'Czw', 'Pt', 'Sob', 'Nd'];
 
-// initBrigadeSchedule — eksportowana do App.jsx (scheduleConfig init)
-// Bez danych zwraca pusty obiekt — wypełni się po pierwszym imporcie ERP
 export function initBrigadeSchedule() {
   return {};
 }
@@ -19,19 +17,15 @@ export function SettingsTab({ config, onConfigChange, wcCapacity = {}, onWcCapac
     onConfigChange(next);
   }
 
-  // Buduj mapę brygad dynamicznie z wcToWc2 (z importu ERP)
-  // brigadeToWc: { wc2 → [wc, ...] }
   const brigadeToWc = useMemo(() => {
     const map = {};
     Object.entries(wcToWc2).forEach(([wc, wc2]) => {
       if (!map[wc2]) map[wc2] = [];
       if (!map[wc2].includes(wc)) map[wc2].push(wc);
     });
-    // Uzupełnij z routingu przez wcCapacity — maszyny które mają capacity ale nie ma ich w wcToWc2
     return map;
   }, [wcToWc2]);
 
-  // Capacity brygady = suma capacity jej maszyn z wcCapacity
   function getBrigadeCapH(wc2) {
     const wcs = brigadeToWc[wc2] || [];
     if (!wcs.length) return 0;
@@ -90,6 +84,11 @@ export function SettingsTab({ config, onConfigChange, wcCapacity = {}, onWcCapac
           <NumInput value={localConfig.vipBufferDays}
             onChange={v => update('vipBufferDays', v)} min={0} max={14} unit="dni" />
         </Row>
+        <Row label="Bufor bezpieczeństwa (wszystkie ZP)"
+          desc="ALAP: planuj jakby termin był wcześniejszy o X dni. Zabezpiecza przed przekroczeniem terminu.">
+          <NumInput value={localConfig.safetyBufferDays ?? 1}
+            onChange={v => update('safetyBufferDays', v)} min={0} max={14} unit="dni" />
+        </Row>
         <Row label="Horyzont planowania"
           desc="Planuj tylko ZP z terminem do N dni od planStart.">
           <NumInput value={localConfig.horizonDays || 14}
@@ -104,6 +103,7 @@ export function SettingsTab({ config, onConfigChange, wcCapacity = {}, onWcCapac
             <option value="cr">Critical Ratio (zalecane)</option>
             <option value="due_date">Due date (najprostsze)</option>
             <option value="slack">Slack czasowy</option>
+            <option value="atc">ATC — Apparent Tardiness Cost</option>
           </select>
         </Row>
       </section>
@@ -193,7 +193,7 @@ export function SettingsTab({ config, onConfigChange, wcCapacity = {}, onWcCapac
         })}
       </section>
 
-      {/* ── GRAFIK DOMYŚLNY (fallback) ── */}
+      {/* ── GRAFIK DOMYŚLNY ── */}
       <section>
         <SectionHeader icon="📅" label="Domyślny grafik maszyn (fallback)" />
         <p style={{ fontSize: 12, color: T.text3, marginBottom: 12 }}>
