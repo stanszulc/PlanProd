@@ -767,6 +767,7 @@ export function erpZpToSchedulerInput(erpZpList) {
       zs_id:     zp.zs_id,
       klient:    zp.klient,
       product:   zp.product,
+      product_name: zp.product_name || '',
       volume:    1,           // durH już jest całkowity — nie mnożymy
       due_date:  zp.due_date,
       ship_date: zp.ship_date,

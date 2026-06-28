@@ -27,6 +27,7 @@ import { BufferZSTab }   from './components/tabs/BufferZSTab.jsx';
 import { ScheduleDebugTab }  from './components/tabs/ScheduleDebugTab.jsx';
 import { HeatmapPlanTab }   from './components/tabs/HeatmapPlanTab.jsx';
 import { SettingsTab }      from './components/tabs/SettingsTab.jsx';
+import { FlowMatrixTab }    from './components/tabs/FlowMatrixTab.jsx';
 import './App.css';
 import { WC_DAILY_CAPACITY } from './constants/demoData.js';
 import { initBrigadeSchedule } from './components/tabs/SettingsTab.jsx';
@@ -82,13 +83,14 @@ function buildWcSchedule(wcList, planStartStr, zpList, horizonDays = 14, prev = 
 const MENU = [
   { id: 'dashboard', label: '🏠 Dashboard' },
   { label: '📋 Planowanie', items: [
-    { id: 'plan',       label: 'Harmonogram' },
-    { id: 'bottleneck', label: 'Wąskie gardła' },
+    { id: 'plan',         label: 'Harmonogram' },
+    { id: 'bottleneck',   label: 'Wąskie gardła' },
     { id: 'heatmap',      label: 'Heatmapa obciążeń' },
     { id: 'heatmap_plan', label: 'Heatmapa planu' },
-    { id: 'swimlane',   label: 'Swimlane' },
-    { id: 'sankey',     label: 'Przepływ (Sankey)' },
-    { id: 'routing',    label: 'Routing' },
+    { id: 'flow_matrix',  label: 'Przepływy (macierz)' },
+    { id: 'swimlane',     label: 'Swimlane' },
+    { id: 'sankey',       label: 'Przepływ (Sankey)' },
+    { id: 'routing',      label: 'Routing' },
   ]},
   { label: '🏭 Realizacja', items: [
     { id: 'realizacja', label: 'Raport OTIF'  },
@@ -186,7 +188,6 @@ export default function App() {
   const [zp, setZP]                 = useState([]);
   const [wcSchedule, setWcSchedule] = useState({});
   const [wcToWc2, setWcToWc2]       = useState({});
-  // wcCapacity inicjalizowane z WC_DAILY_CAPACITY — edytowalne przez użytkownika
   const [wcCapacity, setWcCapacity] = useState(WC_DAILY_CAPACITY);
   const [subZP, setSubZP]           = useState([]);
   const [fwdZP, setFwdZP]           = useState([]);
@@ -310,7 +311,6 @@ export default function App() {
         setGanttDirty(false);
         setIsScheduling(false);
         workerRef.current = null;
-        // Debug export dla optimizer.py
         window.__FLOWOPS_DEBUG__ = { zp, routing: rl, wcSchedule: wcs, planStart, scheduleConfig, wcToWc2 };
       } else if (type === 'ERROR') {
         console.error('Worker error:', payload.message);
@@ -337,8 +337,6 @@ export default function App() {
 
   function handleOptimize() {
     if (!fwdZP.length || !zp.length) return;
-    console.log('⚡ handleOptimize start, fwdZP:', fwdZP.length, 'zpStatus:', zpStatus.length);
-    console.log('⚡ lateZP:', zpStatus.filter(z => z.late).length);
     setIsOptimizing(true);
     const worker = new Worker(new URL('./utils/scheduler.worker.js', import.meta.url), { type: 'module' });
     worker.onerror = (err) => {
@@ -347,10 +345,6 @@ export default function App() {
       worker.terminate();
     };
     worker.onmessage = ({ data: { type, payload } }) => {
-      console.log('⚡ Worker message:', type, payload);
-      if (type === 'PROGRESS') {
-        console.log('⚡ PROGRESS:', payload.label);
-      }
       if (type === 'DONE') {
         setFwdZP(payload.fwdZP || []);
         setZpStatus(payload.zpStatus || []);
@@ -362,7 +356,7 @@ export default function App() {
           if (s.skipped) {
             alert('✅ Brak spóźnionych ZP — plan jest już optymalny.');
           } else {
-            alert(`⚡ Optymalizacja zakończona:\nByło spóźnionych: ${s.lateStart}\nJest spóźnionych: ${s.lateEnd}\nPoprawiono: ${s.moved} ZP`);
+            alert(`⚡ Optymalizacja zakończona (${s.iterations} iter.):\nByło spóźnionych: ${s.lateStart}\nJest spóźnionych: ${s.lateEnd}\nPoprawiono: ${s.moved} ZP`);
           }
         }
       }
@@ -372,14 +366,10 @@ export default function App() {
         worker.terminate();
       }
     };
-    console.log('⚡ Posting OPTIMIZE_INSERT to worker...');
     worker.postMessage({
       type: 'OPTIMIZE_INSERT',
-      payload: {
-        wcSchedule, planStart, fwdZP, zpStatus,
-      }
+      payload: { wcSchedule, planStart, fwdZP, zpStatus, wcToWc2 },
     });
-    console.log('⚡ Message posted.');
   }
 
   const activeZpStatus = useMemo(() => {
@@ -560,7 +550,7 @@ export default function App() {
       </nav>
 
       <main className="flowops-main">
-        {tab === 'dashboard'  && <DashboardTab routing={routing} zp={zp} zpStatus={activeZpStatus} wcSchedule={wcSchedule} historyData={historyData} zpStatusHeaders={zpStatusHeaders} globalLookups={globalLookups} onTabChange={setTab} hybridMode={hybridMode} />}
+        {tab === 'dashboard'    && <DashboardTab routing={routing} zp={zp} zpStatus={activeZpStatus} wcSchedule={wcSchedule} historyData={historyData} zpStatusHeaders={zpStatusHeaders} globalLookups={globalLookups} onTabChange={setTab} hybridMode={hybridMode} />}
         {isScheduling && (
           <div style={{ position:'fixed', inset:0, background:'rgba(0,0,0,0.45)', display:'flex', flexDirection:'column', alignItems:'center', justifyContent:'center', zIndex:9999 }}>
             <div style={{ width:48, height:48, border:'4px solid rgba(255,255,255,0.2)', borderTop:'4px solid #4d94ff', borderRadius:'50%', animation:'spin 0.8s linear infinite' }}/>
@@ -568,21 +558,22 @@ export default function App() {
             <style>{`@keyframes spin{to{transform:rotate(360deg)}}`}</style>
           </div>
         )}
-        {tab === 'import'     && <ImportTab erpZp={erpZp} zpStatusData={zpStatusData} onLoad={handleLoad} onExportZpStatus={handleExportZpStatus} hybridMode={hybridMode} onHybridModeChange={setHybridMode} />}
-        {tab === 'plan'       && <PlanTab routing={routing} zp={zp} globalLookups={globalLookups} wcSchedule={wcSchedule} subZP={subZP} fwdZP={fwdZP} zpStatus={activeZpStatus} ganttDirty={ganttDirty} onRecalc={() => recalcGantt(wcSchedule)} onScheduleChange={updateSchedule} planStart={planStart} onPlanStartChange={setPlanStart} />}
-        {tab === 'bottleneck' && <BottleneckTab routing={routing} zp={filteredZP} globalLookups={globalLookups} wcSchedule={wcSchedule} subZP={subZP} />}
-        {tab === 'routing'    && <RoutingTab routing={routing} zp={zp} globalLookups={globalLookups} />}
+        {tab === 'import'       && <ImportTab erpZp={erpZp} zpStatusData={zpStatusData} onLoad={handleLoad} onExportZpStatus={handleExportZpStatus} hybridMode={hybridMode} onHybridModeChange={setHybridMode} />}
+        {tab === 'plan'         && <PlanTab routing={routing} zp={zp} globalLookups={globalLookups} wcSchedule={wcSchedule} subZP={subZP} fwdZP={fwdZP} zpStatus={activeZpStatus} ganttDirty={ganttDirty} onRecalc={() => recalcGantt(wcSchedule)} onScheduleChange={updateSchedule} planStart={planStart} onPlanStartChange={setPlanStart} />}
+        {tab === 'bottleneck'   && <BottleneckTab routing={routing} zp={filteredZP} globalLookups={globalLookups} wcSchedule={wcSchedule} subZP={subZP} />}
+        {tab === 'routing'      && <RoutingTab routing={routing} zp={zp} globalLookups={globalLookups} />}
         {tab === 'heatmap'      && <HeatmapTab routing={routing} zp={filteredZP} globalLookups={globalLookups} wcSchedule={wcSchedule} />}
         {tab === 'heatmap_plan' && <HeatmapPlanTab fwdZP={fwdZP} routing={routing} wcSchedule={wcSchedule} wcToWc2={wcToWc2} wcCapacity={wcCapacity} onScheduleChange={updateSchedule} onRecalc={() => recalcGantt(wcSchedule)} onOptimize={handleOptimize} isOptimizing={isOptimizing} ganttDirty={ganttDirty} isScheduling={isScheduling} planStart={planStart} onPlanStartChange={setPlanStart} schedulingMode={scheduleConfig.schedulingMode} onSchedulingModeChange={mode => { setScheduleConfig(c => ({ ...c, schedulingMode: mode })); setGanttDirty(true); }} />}
-        {tab === 'swimlane'   && <SwimlaneTab routing={routing} zp={filteredZP} globalLookups={globalLookups} wcSchedule={wcSchedule} />}
-        {tab === 'sankey'     && <SankeyTab routing={routing} zp={filteredZP} globalLookups={globalLookups} wcSchedule={wcSchedule} />}
-        {tab === 'realizacja' && <RealizacjaTab zpStatusData={zpStatusData} />}
-        {tab === 'buffer'     && <BufferTab zpStatusData={zpStatusData} />}
-        {tab === 'buffer_zs'  && <BufferZSTab zpStatusData={zpStatusData} />}
-        {tab === 'late_zs'    && <LateZSTab zpStatus={activeZpStatus} />}
+        {tab === 'flow_matrix'  && <FlowMatrixTab fwdZP={fwdZP} routing={routing} wcToWc2={wcToWc2} wcSchedule={wcSchedule} />}
+        {tab === 'swimlane'     && <SwimlaneTab routing={routing} zp={filteredZP} globalLookups={globalLookups} wcSchedule={wcSchedule} />}
+        {tab === 'sankey'       && <SankeyTab routing={routing} zp={filteredZP} globalLookups={globalLookups} wcSchedule={wcSchedule} />}
+        {tab === 'realizacja'   && <RealizacjaTab zpStatusData={zpStatusData} />}
+        {tab === 'buffer'       && <BufferTab zpStatusData={zpStatusData} />}
+        {tab === 'buffer_zs'    && <BufferZSTab zpStatusData={zpStatusData} />}
+        {tab === 'late_zs'      && <LateZSTab zpStatus={activeZpStatus} />}
         {tab === 'schedule_debug' && <ScheduleDebugTab fwdZP={fwdZP} zpStatus={zpStatus} planStart={planStart} scheduleConfig={scheduleConfig} zpList={zp} routingByProduct={globalLookups.routingByProduct} wcSchedule={wcSchedule} />}
         {tab === 'settings'       && <SettingsTab config={scheduleConfig} onConfigChange={cfg => { setScheduleConfig(cfg); setGanttDirty(true); }} wcCapacity={wcCapacity} onWcCapacityChange={setWcCapacity} wcToWc2={wcToWc2} />}
-        {tab === 'analysis'   && <AnalysisTab historyData={historyData} routing={routing} wcSchedule={wcSchedule} zpStatusData={zpStatusData} zpStatusHeaders={zpStatusHeaders} />}
+        {tab === 'analysis'     && <AnalysisTab historyData={historyData} routing={routing} wcSchedule={wcSchedule} zpStatusData={zpStatusData} zpStatusHeaders={zpStatusHeaders} />}
       </main>
     </div>
   );

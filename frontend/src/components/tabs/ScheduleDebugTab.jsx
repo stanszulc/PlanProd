@@ -12,12 +12,13 @@ export function ScheduleDebugTab({ fwdZP = [], zpStatus = [], planStart, schedul
   const [sortAsc,    setSortAsc]    = useState(true);
 
   // ── PORÓWNANIE METOD ─────────────────────────────────────────────────────
-  const [comparing,    setComparing]    = useState(false);
+  const [comparing,       setComparing]       = useState(false);
   const [orToolsRunning,  setOrToolsRunning]  = useState(false);
   const [greedyRunning,   setGreedyRunning]   = useState(false);
   const [saRunning,       setSaRunning]       = useState(false);
-  const [orToolsAvailable, setOrToolsAvailable] = useState(null); // null=nieznany, true/false
-  const [compareResults, setCompareResults] = useState(null);
+  const [tardyRunning,    setTardyRunning]    = useState(false);
+  const [orToolsAvailable, setOrToolsAvailable] = useState(null);
+  const [compareResults,  setCompareResults]  = useState(null);
   const workersRef = useRef([]);
 
   function runComparison() {
@@ -33,7 +34,6 @@ export function ScheduleDebugTab({ fwdZP = [], zpStatus = [], planStart, schedul
     const results = {};
     let done = 0;
 
-    // Terminate poprzednie workery
     workersRef.current.forEach(w => w.terminate());
     workersRef.current = [];
 
@@ -50,20 +50,22 @@ export function ScheduleDebugTab({ fwdZP = [], zpStatus = [], planStart, schedul
         if (e.data.type === 'DONE') {
           clearTimeout(timer);
           const { zpStatus: zps } = e.data.payload;
-          const lateCount = new Set(zps.filter(z => z.late || z.delayH > 0).map(z => z.zp_id)).size;
+          const lateCount  = new Set(zps.filter(z => z.late || z.delayH > 0).map(z => z.zp_id)).size;
           const totalDelay = zps.reduce((s, z) => s + (z.delayH || 0), 0);
           const maxDelay   = Math.max(...zps.map(z => z.delayH || 0));
           const key = `${cfg.urgencyMethod}_${cfg.schedulingMode}`;
-          results[key] = { lateCount, totalDelay, maxDelay, method: cfg.urgencyMethod, mode: cfg.schedulingMode };
+          results[key] = { lateCount, totalDelay, maxDelay, method: cfg.urgencyMethod, mode: cfg.schedulingMode, elapsed: null };
           done++;
           worker.terminate();
-          if (done === configs.length) {
-            setCompareResults({ ...results });
-            setComparing(false);
-          }
+          if (done === configs.length) { setCompareResults({ ...results }); setComparing(false); }
         }
       };
-      worker.onerror = () => { clearTimeout(timer); done++; worker.terminate(); if (done === configs.length) { setCompareResults({ ...results }); setComparing(false); } };
+      worker.onerror = () => {
+        clearTimeout(timer);
+        done++;
+        worker.terminate();
+        if (done === configs.length) { setCompareResults({ ...results }); setComparing(false); }
+      };
 
       timer = setTimeout(() => {
         done++;
@@ -78,9 +80,9 @@ export function ScheduleDebugTab({ fwdZP = [], zpStatus = [], planStart, schedul
           zpList,
           routingByProduct,
           wcSchedule,
-          planStart: planStart || new Date().toISOString().slice(0,10),
+          planStart: planStart || new Date().toISOString().slice(0, 10),
           config: { ...scheduleConfig, ...cfg },
-        }
+        },
       });
     });
   }
@@ -89,19 +91,32 @@ export function ScheduleDebugTab({ fwdZP = [], zpStatus = [], planStart, schedul
     return () => workersRef.current.forEach(w => w.terminate());
   }, []);
 
+  // Endpointy — własny URL lub method w config
+  const ENDPOINT_MAP = {
+    'cpsat-tardiness': '/optimize/cpsat-tardiness',
+    'greedy':          '/optimize/greedy',
+    'sa':              '/optimize/sa',
+    'cpsat':           '/optimize',
+  };
+
   async function runPythonMethod(method, key, setRunning, label) {
     if (!zpList.length || !Object.keys(routingByProduct).length) return;
     setRunning(true);
+
+    const url      = `http://localhost:8765${ENDPOINT_MAP[method] || '/optimize'}`;
+    // /optimize (stary) potrzebuje method w config; pozostałe mają własne ścieżki
+    const cfgExtra = method === 'cpsat' ? { method: 'cpsat' } : {};
+
     try {
-      const res = await fetch('http://localhost:8765/optimize', {
+      const res = await fetch(url, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           zpList,
           routingByProduct,
           wcSchedule,
-          planStart: planStart || new Date().toISOString().slice(0,10),
-          config: { ...scheduleConfig, cpSatTimeLimitSeconds: 30, method },
+          planStart: planStart || new Date().toISOString().slice(0, 10),
+          config: { ...scheduleConfig, cpSatTimeLimitSeconds: 60, ...cfgExtra },
         }),
       });
       const data = await res.json();
@@ -114,28 +129,29 @@ export function ScheduleDebugTab({ fwdZP = [], zpStatus = [], planStart, schedul
           lateCount:  data.lateCount,
           totalDelay: data.totalDelay,
           maxDelay:   data.maxDelay,
+          vipLate:    data.vipLate ?? null,
           method:     key,
           mode:       label,
-          elapsed:    data.elapsed || 0,
+          elapsed:    data.elapsed ?? null,
         },
       }));
-    } catch(e) {
+    } catch (e) {
       console.error(`${label} fetch error:`, e);
     } finally {
       setRunning(false);
     }
   }
 
-  // Sprawdź czy serwer OR-Tools jest dostępny
+  async function runOrTools() {
+    await runPythonMethod('cpsat', 'ortools_cpsat', setOrToolsRunning, 'CP-SAT');
+  }
+
+  // Sprawdź dostępność serwera
   useEffect(() => {
     fetch('http://localhost:8765/health', { signal: AbortSignal.timeout(2000) })
       .then(r => r.ok ? setOrToolsAvailable(true) : setOrToolsAvailable(false))
       .catch(() => setOrToolsAvailable(false));
   }, []);
-
-  async function runOrTools() {
-    await runPythonMethod('/optimize', 'ortools_cpsat', setOrToolsRunning, 'CP-SAT');
-  }
 
   // ── GŁÓWNA TABELA ────────────────────────────────────────────────────────
   const lateSet = useMemo(() =>
@@ -154,9 +170,9 @@ export function ScheduleDebugTab({ fwdZP = [], zpStatus = [], planStart, schedul
       });
       segs.sort((a, b) => a.from - b.from);
       for (let i = 1; i < segs.length; i++) {
-        if (segs[i].from < segs[i-1].to) {
+        if (segs[i].from < segs[i - 1].to) {
           conflicts.add(segs[i].parent_zp);
-          conflicts.add(segs[i-1].parent_zp);
+          conflicts.add(segs[i - 1].parent_zp);
         }
       }
     }
@@ -165,18 +181,18 @@ export function ScheduleDebugTab({ fwdZP = [], zpStatus = [], planStart, schedul
 
   const ops = useMemo(() => fwdZP.map(op => ({
     ...op,
-    _late: lateSet.has(op.parent_zp) ||
-           (op.end_dt && op.due_date && new Date(op.end_dt) > new Date(op.due_date + 'T23:59:59')),
+    _late:     lateSet.has(op.parent_zp) ||
+               (op.end_dt && op.due_date && new Date(op.end_dt) > new Date(op.due_date + 'T23:59:59')),
     _conflict: segConflicts.has(op.parent_zp),
   })), [fwdZP, lateSet, segConflicts]);
 
   const filtered = useMemo(() => {
     let rows = ops;
     if (filterZP.trim()) rows = rows.filter(r =>
-      (r.parent_zp||'').toLowerCase().includes(filterZP.toLowerCase()) ||
-      (r.klient||'').toLowerCase().includes(filterZP.toLowerCase()));
+      (r.parent_zp || '').toLowerCase().includes(filterZP.toLowerCase()) ||
+      (r.klient || '').toLowerCase().includes(filterZP.toLowerCase()));
     if (filterWC.trim()) rows = rows.filter(r =>
-      (r.workcenter||'').toLowerCase().includes(filterWC.toLowerCase()));
+      (r.workcenter || '').toLowerCase().includes(filterWC.toLowerCase()));
     if (filterLate === 'late') rows = rows.filter(r => r._late);
     if (filterLate === 'ok')   rows = rows.filter(r => !r._late);
     return rows;
@@ -199,10 +215,10 @@ export function ScheduleDebugTab({ fwdZP = [], zpStatus = [], planStart, schedul
   const planStartDt = planStart ? new Date(planStart + 'T00:00:00') : null;
 
   const stats = useMemo(() => ({
-    ops:    filtered.length,
-    zp:     new Set(filtered.map(r => r.parent_zp || r.zp_id)).size,
-    wc:     new Set(filtered.map(r => r.workcenter)).size,
-    late:   new Set(ops.filter(r => r._late).map(r => r.parent_zp || r.zp_id)).size,
+    ops:        filtered.length,
+    zp:         new Set(filtered.map(r => r.parent_zp || r.zp_id)).size,
+    wc:         new Set(filtered.map(r => r.workcenter)).size,
+    late:       new Set(ops.filter(r => r._late).map(r => r.parent_zp || r.zp_id)).size,
     beforePlan: filtered.filter(r => planStartDt && r.start_dt && new Date(r.start_dt) < planStartDt).length,
   }), [filtered, ops, planStartDt]);
 
@@ -218,19 +234,29 @@ export function ScheduleDebugTab({ fwdZP = [], zpStatus = [], planStart, schedul
   const mono = { fontFamily: 'monospace' };
 
   if (!fwdZP.length) return (
-    <div style={{ display:'flex', flexDirection:'column', alignItems:'center', padding: 48, color: T.text3, gap: 12 }}>
+    <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', padding: 48, color: T.text3, gap: 12 }}>
       <div style={{ fontSize: 32 }}>📋</div>
       <div style={{ fontSize: 14, fontWeight: 500, color: T.text2 }}>Brak danych harmonogramu</div>
     </div>
   );
 
-  const methodLabel = { cr: 'CR', due_date: 'Due date', slack: 'Slack', atc: 'ATC', ortools: 'OR-Tools CP-SAT', ortools_cpsat: 'OR-Tools CP-SAT', greedy_ls: 'Greedy LS', sa: 'Simul. Annealing' };
-  const modeLabel   = { asap: '⏩ ASAP', alap: '⏪ ALAP', OPTIMAL: '✅ OPTIMAL', FEASIBLE: '🔶 FEASIBLE', UNKNOWN: '❓ UNKNOWN' };
+  const methodLabel = {
+    cr: 'CR', due_date: 'Due date', slack: 'Slack', atc: 'ATC',
+    ortools_cpsat: 'CP-SAT (stary)', greedy_ls: 'Greedy LS',
+    sa: 'Simul. Annealing', cpsat_tardy: 'CP-SAT Tardiness',
+  };
+  const modeLabel = {
+    asap: '⏩ ASAP', alap: '⏪ ALAP',
+    OPTIMAL: '✅ OPTIMAL', FEASIBLE: '🔶 FEASIBLE', UNKNOWN: '❓ UNKNOWN',
+    'CP-SAT': '🧮 CP-SAT', 'CP-SAT Tardiness': '⏱️ Tardiness',
+    'Greedy LS': '🔀 Greedy', 'SA': '🌡️ SA',
+  };
 
-  // Znajdź najlepszy wynik (min lateCount)
   const bestLate = compareResults
     ? Math.min(...Object.values(compareResults).map(r => r.lateCount))
     : null;
+
+  const serverOffline = orToolsAvailable === false;
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: 12, padding: '0 0 16px' }}>
@@ -239,8 +265,7 @@ export function ScheduleDebugTab({ fwdZP = [], zpStatus = [], planStart, schedul
       <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', padding: '10px 14px',
         background: T.surface2, borderRadius: 8, border: `1px solid ${T.border}`,
         alignItems: 'center', fontSize: 12 }}>
-        <span style={{ color: T.text3, fontWeight: 600, fontSize: 11, letterSpacing: '.06em',
-          textTransform: 'uppercase' }}>⚙️ Ustawienia</span>
+        <span style={{ color: T.text3, fontWeight: 600, fontSize: 11, letterSpacing: '.06em', textTransform: 'uppercase' }}>⚙️ Ustawienia</span>
         <div style={{ width: 1, height: 16, background: T.border, margin: '0 4px' }} />
         <span style={{ color: T.text3 }}>Tryb:</span>
         <span style={{ fontWeight: 700, color: T.accent, background: T.accentBg, padding: '2px 8px', borderRadius: 4 }}>
@@ -261,40 +286,61 @@ export function ScheduleDebugTab({ fwdZP = [], zpStatus = [], planStart, schedul
         <div style={{ width: 1, height: 16, background: T.border, margin: '0 4px' }} />
         <span style={{ color: T.text3 }}>Sortowanie:</span>
         <span style={{ fontWeight: 700, color: T.text }}>{scheduleConfig.urgencyMethod || 'cr'}</span>
-        <div style={{ marginLeft: 'auto', display: 'flex', gap: 8 }}>
+
+        <div style={{ marginLeft: 'auto', display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+          {/* Porównaj JS metody */}
           <button onClick={runComparison} disabled={comparing || !zpList.length}
-            style={{ padding: '5px 14px', fontSize: 12, fontWeight: 600,
-              borderRadius: 7, border: 'none', cursor: comparing ? 'wait' : 'pointer',
+            style={{ padding: '5px 14px', fontSize: 12, fontWeight: 600, borderRadius: 7, border: 'none',
+              cursor: comparing ? 'wait' : 'pointer',
               background: comparing ? T.surface3 : T.accent,
               color: comparing ? T.text3 : '#fff', opacity: !zpList.length ? 0.5 : 1 }}>
-            {comparing ? '⏳ Liczę 6 scenariuszy...' : '⚖️ Porównaj metody'}
+            {comparing ? '⏳ Liczę 8 scenariuszy...' : '⚖️ Porównaj metody'}
           </button>
+
+          {/* CP-SAT stary */}
           <button onClick={runOrTools}
-            disabled={orToolsRunning || !zpList.length || orToolsAvailable === false}
-            title={orToolsAvailable === false ? 'Uruchom: py server.py' : 'OR-Tools CP-SAT'}
-            style={{ padding: '5px 14px', fontSize: 12, fontWeight: 600,
-              borderRadius: 7, border: `1px solid ${orToolsAvailable === false ? T.border2 : '#7c3aed'}`,
-              cursor: orToolsRunning ? 'wait' : orToolsAvailable === false ? 'not-allowed' : 'pointer',
-              background: orToolsRunning ? T.surface3 : orToolsAvailable === false ? T.surface2 : 'rgba(124,58,237,0.15)',
-              color: orToolsAvailable === false ? T.text3 : '#a78bfa', opacity: !zpList.length ? 0.5 : 1 }}>
-            {orToolsRunning ? '⏳ OR-Tools...' : orToolsAvailable === false ? '🔌 OR-Tools offline' : '🧮 CP-SAT'}
+            disabled={orToolsRunning || !zpList.length || serverOffline}
+            title={serverOffline ? 'Uruchom: py server.py' : 'OR-Tools CP-SAT (stary — terminy twarde)'}
+            style={{ padding: '5px 14px', fontSize: 12, fontWeight: 600, borderRadius: 7,
+              border: `1px solid ${serverOffline ? T.border2 : '#7c3aed'}`,
+              cursor: orToolsRunning ? 'wait' : serverOffline ? 'not-allowed' : 'pointer',
+              background: orToolsRunning ? T.surface3 : serverOffline ? T.surface2 : 'rgba(124,58,237,0.15)',
+              color: serverOffline ? T.text3 : '#a78bfa', opacity: !zpList.length ? 0.5 : 1 }}>
+            {orToolsRunning ? '⏳ CP-SAT...' : serverOffline ? '🔌 OR-Tools offline' : '🧮 CP-SAT'}
           </button>
+
+          {/* CP-SAT Tardiness — nowy */}
+          <button
+            onClick={() => runPythonMethod('cpsat-tardiness', 'cpsat_tardy', setTardyRunning, 'CP-SAT Tardiness')}
+            disabled={tardyRunning || !zpList.length || serverOffline}
+            title={serverOffline ? 'Uruchom: py server.py' : 'CP-SAT z ważonym kosztem spóźnienia (miękkie terminy, VIP×5)'}
+            style={{ padding: '5px 14px', fontSize: 12, fontWeight: 600, borderRadius: 7,
+              border: `1px solid ${serverOffline ? T.border2 : '#0ea5e9'}`,
+              cursor: tardyRunning ? 'wait' : serverOffline ? 'not-allowed' : 'pointer',
+              background: tardyRunning ? T.surface3 : serverOffline ? T.surface2 : 'rgba(14,165,233,0.15)',
+              color: serverOffline ? T.text3 : '#38bdf8', opacity: !zpList.length ? 0.5 : 1 }}>
+            {tardyRunning ? '⏳ Tardiness...' : serverOffline ? '🔌 offline' : '⏱️ CP-SAT Tardiness'}
+          </button>
+
+          {/* Greedy LS */}
           <button onClick={() => runPythonMethod('greedy', 'greedy_ls', setGreedyRunning, 'Greedy LS')}
-            disabled={greedyRunning || !zpList.length || orToolsAvailable === false}
-            style={{ padding: '5px 14px', fontSize: 12, fontWeight: 600,
-              borderRadius: 7, border: `1px solid ${orToolsAvailable === false ? T.border2 : '#059669'}`,
+            disabled={greedyRunning || !zpList.length || serverOffline}
+            style={{ padding: '5px 14px', fontSize: 12, fontWeight: 600, borderRadius: 7,
+              border: `1px solid ${serverOffline ? T.border2 : '#059669'}`,
               cursor: greedyRunning ? 'wait' : 'pointer',
               background: greedyRunning ? T.surface3 : 'rgba(5,150,105,0.15)',
-              color: orToolsAvailable === false ? T.text3 : '#34d399', opacity: !zpList.length ? 0.5 : 1 }}>
+              color: serverOffline ? T.text3 : '#34d399', opacity: !zpList.length ? 0.5 : 1 }}>
             {greedyRunning ? '⏳ Greedy...' : '🔀 Greedy LS'}
           </button>
+
+          {/* Simulated Annealing */}
           <button onClick={() => runPythonMethod('sa', 'sa', setSaRunning, 'SA')}
-            disabled={saRunning || !zpList.length || orToolsAvailable === false}
-            style={{ padding: '5px 14px', fontSize: 12, fontWeight: 600,
-              borderRadius: 7, border: `1px solid ${orToolsAvailable === false ? T.border2 : '#d97706'}`,
+            disabled={saRunning || !zpList.length || serverOffline}
+            style={{ padding: '5px 14px', fontSize: 12, fontWeight: 600, borderRadius: 7,
+              border: `1px solid ${serverOffline ? T.border2 : '#d97706'}`,
               cursor: saRunning ? 'wait' : 'pointer',
               background: saRunning ? T.surface3 : 'rgba(217,119,6,0.15)',
-              color: orToolsAvailable === false ? T.text3 : '#fbbf24', opacity: !zpList.length ? 0.5 : 1 }}>
+              color: serverOffline ? T.text3 : '#fbbf24', opacity: !zpList.length ? 0.5 : 1 }}>
             {saRunning ? '⏳ SA...' : '🌡️ Simul. Annealing'}
           </button>
         </div>
@@ -309,7 +355,7 @@ export function ScheduleDebugTab({ fwdZP = [], zpStatus = [], planStart, schedul
           <table style={{ borderCollapse: 'collapse', fontSize: 12, width: '100%' }}>
             <thead>
               <tr>
-                {['Metoda', 'Tryb', 'Spóźnione ZP', 'Suma opóźnień [h]', 'Max opóźnienie [h]'].map(h => (
+                {['Metoda', 'Tryb', 'Spóźnione ZP', 'VIP spóźn.', 'Suma opóźnień [h]', 'Max opóźnienie [h]', 'Czas [s]'].map(h => (
                   <th key={h} style={{ padding: '6px 12px', textAlign: 'left', fontSize: 10,
                     fontWeight: 600, color: T.text3, borderBottom: `1px solid ${T.border}`,
                     textTransform: 'uppercase', letterSpacing: '.06em' }}>{h}</th>
@@ -320,16 +366,13 @@ export function ScheduleDebugTab({ fwdZP = [], zpStatus = [], planStart, schedul
               {Object.values(compareResults)
                 .sort((a, b) => a.lateCount - b.lateCount)
                 .map((r, i) => {
-                  const isBest = r.lateCount === bestLate;
+                  const isBest    = r.lateCount === bestLate;
                   const isCurrent = r.method === scheduleConfig.urgencyMethod &&
-                                   r.mode === scheduleConfig.schedulingMode;
+                                    r.mode   === scheduleConfig.schedulingMode;
                   return (
-                    <tr key={i} style={{
-                      background: isBest ? 'rgba(34,197,94,0.06)' : 'transparent',
-                    }}>
-                      <td style={{ padding: '7px 12px', borderBottom: `1px solid ${T.border}`,
-                        fontWeight: 600, color: T.text }}>
-                        {isBest && <span style={{ marginRight: 6 }}>🏆</span>}
+                    <tr key={i} style={{ background: isBest ? 'rgba(34,197,94,0.06)' : 'transparent' }}>
+                      <td style={{ padding: '7px 12px', borderBottom: `1px solid ${T.border}`, fontWeight: 600, color: T.text }}>
+                        {isBest    && <span style={{ marginRight: 6 }}>🏆</span>}
                         {isCurrent && <span style={{ marginRight: 6, color: T.accent }}>●</span>}
                         {methodLabel[r.method] || r.method}
                       </td>
@@ -342,12 +385,17 @@ export function ScheduleDebugTab({ fwdZP = [], zpStatus = [], planStart, schedul
                         {r.lateCount}
                       </td>
                       <td style={{ padding: '7px 12px', borderBottom: `1px solid ${T.border}`,
-                        fontFamily: 'monospace', color: T.text2 }}>
-                        {r.totalDelay.toFixed(1)}h
+                        fontFamily: 'monospace', color: r.vipLate > 0 ? T.bn : T.text3 }}>
+                        {r.vipLate != null ? r.vipLate : '—'}
                       </td>
-                      <td style={{ padding: '7px 12px', borderBottom: `1px solid ${T.border}`,
-                        fontFamily: 'monospace', color: T.text3 }}>
-                        {r.maxDelay.toFixed(1)}h
+                      <td style={{ padding: '7px 12px', borderBottom: `1px solid ${T.border}`, fontFamily: 'monospace', color: T.text2 }}>
+                        {typeof r.totalDelay === 'number' ? r.totalDelay.toFixed(1) + 'h' : '—'}
+                      </td>
+                      <td style={{ padding: '7px 12px', borderBottom: `1px solid ${T.border}`, fontFamily: 'monospace', color: T.text3 }}>
+                        {typeof r.maxDelay === 'number' ? r.maxDelay.toFixed(1) + 'h' : '—'}
+                      </td>
+                      <td style={{ padding: '7px 12px', borderBottom: `1px solid ${T.border}`, fontFamily: 'monospace', color: T.text3 }}>
+                        {r.elapsed != null ? `${r.elapsed.toFixed(1)}s` : '—'}
                       </td>
                     </tr>
                   );
@@ -355,7 +403,7 @@ export function ScheduleDebugTab({ fwdZP = [], zpStatus = [], planStart, schedul
             </tbody>
           </table>
           <div style={{ fontSize: 11, color: T.text3, marginTop: 8 }}>
-            🏆 = najlepsza metoda · ● = aktualnie wybrana
+            🏆 = najlepsza metoda · ● = aktualnie wybrana · ⏱️ CP-SAT Tardiness = miękkie terminy, VIP×5
           </div>
         </div>
       )}
@@ -407,7 +455,7 @@ export function ScheduleDebugTab({ fwdZP = [], zpStatus = [], planStart, schedul
         </span>
       </div>
 
-      {/* Tabela */}
+      {/* Tabela operacji */}
       <div style={{ overflowX: 'auto', overflowY: 'auto', maxHeight: 'calc(100vh - 420px)',
         border: `1px solid ${T.border}`, borderRadius: 8 }}>
         <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 11 }}>
@@ -434,7 +482,7 @@ export function ScheduleDebugTab({ fwdZP = [], zpStatus = [], planStart, schedul
           </thead>
           <tbody>
             {sorted.map((op, i) => {
-              const late = op._late;
+              const late       = op._late;
               const beforePlan = planStartDt && op.start_dt && new Date(op.start_dt) < planStartDt;
               const endAfterDue = op.end_dt && op.due_date &&
                 new Date(op.end_dt) > new Date(op.due_date + 'T23:59:59');
@@ -461,7 +509,11 @@ export function ScheduleDebugTab({ fwdZP = [], zpStatus = [], planStart, schedul
                   <td style={{ ...tdStyle, ...mono, color: beforePlan ? T.warn : T.text }}>
                     {op.start_dt ? fmtDt(op.start_dt) : '—'}
                     {beforePlan && <span style={{ marginLeft: 4, color: T.warn }}>⚠</span>}
-                    {(op.segments||[]).length > 1 && <span style={{ marginLeft: 4, fontSize: 9, color: T.text3 }}>×{(op.segments||[]).length}</span>}
+                    {(op.segments || []).length > 1 && (
+                      <span style={{ marginLeft: 4, fontSize: 9, color: T.text3 }}>
+                        ×{(op.segments || []).length}
+                      </span>
+                    )}
                   </td>
                   <td style={{ ...tdStyle, ...mono, color: endAfterDue ? T.bn : T.text, fontWeight: endAfterDue ? 600 : 400 }}>
                     {op.end_dt ? fmtDt(op.end_dt) : '—'}
@@ -477,7 +529,9 @@ export function ScheduleDebugTab({ fwdZP = [], zpStatus = [], planStart, schedul
                       color: late ? T.bn : T.ok }}>
                       {late ? 'SPÓŹNIONE' : 'OK'}
                     </span>
-                    {op._conflict && <span style={{ marginLeft: 4, fontSize: 10, color: T.bn, fontWeight: 600 }}>⚡ NAKŁ</span>}
+                    {op._conflict && (
+                      <span style={{ marginLeft: 4, fontSize: 10, color: T.bn, fontWeight: 600 }}>⚡ NAKŁ</span>
+                    )}
                   </td>
                 </tr>
               );

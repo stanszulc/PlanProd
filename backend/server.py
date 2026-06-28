@@ -14,8 +14,10 @@ from pydantic import BaseModel
 from typing import Any
 import uvicorn
 from ortools.sat.python import cp_model
+from cpsat_tardiness import solve_tardiness
 
 app = FastAPI()
+print(">>> LOADED server.py v2 — cpsat-tardiness registered")
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["http://localhost:5173", "http://localhost:3000"],
@@ -255,7 +257,7 @@ async def optimize(req: OptimizeRequest):
             return {'fwdZP': fwd, 'zpStatus': status_list, 'lateCount': late, 'totalDelay': total, 'maxDelay': mx, 'method': 'sa', 'elapsed': 0}
 
         # Domyślnie CP-SAT
-        result, status, elapsed = solve(
+        result, status, elapsed = solve_tardiness(
             req.zpList, req.routingByProduct, req.wcSchedule, plan_start, req.config
         )
         if result is None:
@@ -712,5 +714,60 @@ def _sa_run(zp_list, routing, wc_sched, plan_start, cfg, time_limit):
     return fwd, status_list
 
 if __name__ == '__main__':
+    
     print('FlowOps Optimizer — http://localhost:8765')
     uvicorn.run(app, host='127.0.0.1', port=8765)
+
+@app.post('/optimize/cpsat-tardiness')
+async def optimize_cpsat_tardiness(req: OptimizeRequest):
+    """
+    CP-SAT z ważonym kosztem spóźnienia jako funkcją celu.
+
+    Kluczowe różnice vs /optimize (stary CP-SAT):
+      - terminy jako MIĘKKIE (tardiness = max(0, end - due)) — brak INFEASIBLE
+      - wagi: VIP x5, normalne x1 — solver priorytetyzuje VIP
+      - AddCumulative dla gniazd pool (3xxxx), AddNoOverlap dla maszyn 1:1
+      - pre-check obciążenia gniazd w logu
+      - zwraca wcUtilization per gniazdo
+
+    Dodatkowe parametry w config:
+      cpSatTimeLimitSeconds — domyślnie 60
+      cpSatMaxJobs          — domyślnie 800
+      cpSatDebug            — True = pełny log solvera
+      vipWeight             — waga VIP (domyślnie 5)
+      normalWeight          — waga normalnych (domyślnie 1)
+    """
+    try:
+        plan_start = datetime.strptime(req.planStart, '%Y-%m-%d')
+        result, status, elapsed = solve_tardiness(
+            req.zpList, req.routingByProduct, req.wcSchedule, plan_start, req.config
+        )
+        if result is None:
+            return {
+                'error':    f'Brak rozwiązania: {status}',
+                'cpStatus': status,
+                'hint':     (
+                    'INFEASIBLE przy miękkich terminach oznacza sprzecznosc '
+                    'w sekwencji operacji (cykl w routingu?) lub brak danych.'
+                ),
+            }
+
+        zps         = result['zpStatus']
+        late_count  = sum(1 for z in zps if z['late'])
+        total_delay = round(sum(z['delayH'] for z in zps), 1)
+        max_delay   = round(max((z['delayH'] for z in zps), default=0), 1)
+        vip_late    = sum(1 for z in zps if z['late'] and z.get('priority', 0) == 1)
+
+        return {
+            **result,
+            'elapsed':    round(elapsed, 2),
+            'lateCount':  late_count,
+            'vipLate':    vip_late,
+            'totalDelay': total_delay,
+            'maxDelay':   max_delay,
+            'method':     'cpsat-tardiness',
+        }
+    except Exception as ex:
+        import traceback
+        traceback.print_exc()
+        return {'error': str(ex)}
