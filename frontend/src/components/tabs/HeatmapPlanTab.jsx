@@ -29,11 +29,11 @@ const BRIGADE_CAPACITY = {
   'Szlifiernia Stal':      8.0,
 };
 
-export function HeatmapPlanTab({ fwdZP = [], routing = [], wcSchedule = {}, onScheduleChange, onRecalc, ganttDirty, isScheduling, planStart, onPlanStartChange, schedulingMode = 'asap', onSchedulingModeChange }) {
+export function HeatmapPlanTab({ fwdZP = [], routing = [], wcSchedule = {}, onScheduleChange, onRecalc, onOptimize, isOptimizing, ganttDirty, isScheduling, planStart, onPlanStartChange, schedulingMode = 'asap', onSchedulingModeChange }) {
 
   const [showDetail, setShowDetail] = useState(false);
   const [expanded,   setExpanded]   = useState(new Set());
-  const [mode,       setMode]       = useState('pct');
+  const [mode,       setMode]       = useState('h');
   const [groupBy,       setGroupBy]       = useState('plan');
   const [expandedBr,    setExpandedBr]    = useState(new Set());
   const [filterWc2,     setFilterWc2]     = useState(null); // aktywny filtr gniazda
@@ -276,6 +276,9 @@ export function HeatmapPlanTab({ fwdZP = [], routing = [], wcSchedule = {}, onSc
     return defaultH;
   }
 
+  const [editingCapBr, setEditingCapBr] = useState(null);
+  const [editingCapVal, setEditingCapVal] = useState('');
+
   // Capacity brygady = suma godzin jej maszyn z wcSchedule
   // Fallback do BRIGADE_CAPACITY gdy maszyny nie mają danych
   function getBrigadeCapH(wc2, dateStr) {
@@ -302,6 +305,26 @@ export function HeatmapPlanTab({ fwdZP = [], routing = [], wcSchedule = {}, onSc
       next[m.wc] = { ...sc, [dateStr]: Math.max(0, cur + delta / nMachines) };
     });
     onScheduleChange(next);
+  }
+
+  // +8h/-8h → zapisuje per-date do wcSchedule
+  function applyCapH(br, newH) {
+    if (!onScheduleChange) return;
+    const grp = groups.find(g => g.wc2 === br);
+    if (!grp || !grp.machines.length) return;
+    const nMachines = grp.machines.length;
+    const hPerMachine = newH / nMachines;
+    const next = { ...wcSchedule };
+    grp.machines.forEach(m => {
+      const sc = typeof next[m.wc] === 'object' && !Array.isArray(next[m.wc]) ? { ...next[m.wc] } : {};
+      // Zaktualizuj wszystkie dni robocze w zakresie dat
+      dates.forEach(d => {
+        if (!weekendSet.has(d)) sc[d] = hPerMachine;
+      });
+      next[m.wc] = sc;
+    });
+    onScheduleChange(next);
+    setEditingCapBr(null);
   }
 
   function adjustMachine(wc, dateStr, delta) {
@@ -359,6 +382,11 @@ export function HeatmapPlanTab({ fwdZP = [], routing = [], wcSchedule = {}, onSc
     }}>
       <div style={{ fontWeight: 700, color: T.accent, marginBottom: 6, fontSize: 12 }}>
         {tooltip.wc2} × {tooltip.date}
+        {tooltip.zps.length > 0 && (
+          <span style={{ marginLeft: 8, fontSize: 11, color: T.text3, fontWeight: 400 }}>
+            — {tooltip.zps.reduce((s, z) => s + (z.durH || 0), 0).toFixed(1)}h łącznie
+          </span>
+        )}
       </div>
       {tooltip.zps.length === 0
         ? <div style={{ color: T.text3 }}>Brak operacji</div>
@@ -436,6 +464,23 @@ export function HeatmapPlanTab({ fwdZP = [], routing = [], wcSchedule = {}, onSc
           <option value="pct">%</option>
           <option value="h">godz.</option>
         </select>
+        {(() => {
+          const lateCount = [...new Set(fwdZP.filter(op => {
+            const due = op.due_date ? new Date(op.due_date + 'T23:59:59').getTime() : null;
+            return due && op.realEnd && new Date(op.realEnd).getTime() > due;
+          }).map(op => op.parent_zp || op.zp_id))].length;
+          return lateCount > 0 ? (
+            <span style={{ padding: '3px 10px', borderRadius: 6, fontSize: 11, fontWeight: 700,
+              background: 'rgba(239,68,68,0.15)', color: '#ef4444', border: '1px solid rgba(239,68,68,0.3)' }}>
+              🔴 {lateCount} spóźnionych ZP
+            </span>
+          ) : (
+            <span style={{ padding: '3px 10px', borderRadius: 6, fontSize: 11, fontWeight: 700,
+              background: 'rgba(34,197,94,0.12)', color: '#22c55e', border: '1px solid rgba(34,197,94,0.3)' }}>
+              ✅ 0 spóźnionych
+            </span>
+          );
+        })()}
         <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
           {legend.map(l => (
             <span key={l.label} style={{ display: 'flex', alignItems: 'center', gap: 4, fontSize: 11, color: T.text3 }}>
@@ -466,6 +511,17 @@ export function HeatmapPlanTab({ fwdZP = [], routing = [], wcSchedule = {}, onSc
               background: ganttDirty ? T.accent : T.surface3,
               color: ganttDirty ? '#fff' : T.text3, opacity: isScheduling ? 0.6 : 1 }}>
             {isScheduling ? '⏳ Liczę...' : ganttDirty ? '⟳ Przelicz' : '✓ OK'}
+          </button>
+        )}
+        {onOptimize && (
+          <button onClick={onOptimize} disabled={isOptimizing || isScheduling || !fwdZP.length}
+            title="Faza 2: Local Search — przesuwa spóźnione ZP wcześniej w kolejce"
+            style={{ padding: '4px 14px', fontSize: 12, fontWeight: 600,
+              borderRadius: 8, border: `1px solid #10b981`, cursor: isOptimizing ? 'wait' : 'pointer',
+              background: isOptimizing ? T.surface3 : 'rgba(16,185,129,0.15)',
+              color: isOptimizing ? T.text3 : '#34d399',
+              opacity: (!fwdZP.length || isScheduling) ? 0.4 : 1 }}>
+            {isOptimizing ? '⏳ Optymalizuję...' : '⚡ Optymalizuj'}
           </button>
         )}
       </div>
@@ -634,7 +690,30 @@ export function HeatmapPlanTab({ fwdZP = [], routing = [], wcSchedule = {}, onSc
                       {grp && <span style={{ fontSize: 10, color: T.text3, fontWeight: 400, marginLeft: 4 }}>({grp.machines.length})</span>}
                     </td>
                     <td style={{ padding: '5px 8px', textAlign: 'center', fontSize: 11, fontFamily: 'monospace', color: T.accent, fontWeight: 600 }}>
-                      {capH > 0 ? capH + 'h' : '—'}
+                      {editingCapBr === br ? (
+                        <input
+                          autoFocus
+                          type="number" min="0" step="0.5"
+                          value={editingCapVal}
+                          onChange={e => setEditingCapVal(e.target.value)}
+                          onKeyDown={e => {
+                            if (e.key === 'Enter') { const v = parseFloat(editingCapVal); if (!isNaN(v) && v >= 0) applyCapH(br, v); else setEditingCapBr(null); }
+                            if (e.key === 'Escape') setEditingCapBr(null);
+                          }}
+                          onBlur={() => { const v = parseFloat(editingCapVal); if (!isNaN(v) && v >= 0) applyCapH(br, v); else setEditingCapBr(null); }}
+                          style={{ width: 52, fontSize: 11, fontFamily: 'monospace', fontWeight: 600,
+                            textAlign: 'center', borderRadius: 4, border: `1px solid ${T.accent}`,
+                            background: T.surface3, color: T.accent, padding: '1px 4px', outline: 'none' }}
+                        />
+                      ) : (
+                        <span
+                          onClick={() => { if (onScheduleChange) { setEditingCapBr(br); setEditingCapVal(String(getBrigadeCapH(br, dates.find(d => !weekendSet.has(d)) || ''))); }}}
+                          title="Kliknij aby edytować capacity wszystkich dni"
+                          style={{ cursor: onScheduleChange ? 'pointer' : 'default',
+                            borderBottom: onScheduleChange ? `1px dashed ${T.accent}` : 'none', paddingBottom: 1 }}>
+                          {capH > 0 ? getBrigadeCapH(br, dates.find(d => !weekendSet.has(d)) || '') + 'h' : '—'}
+                        </span>
+                      )}
                     </td>
                     {dates.map(d => {
                       const cap  = getBrigadeCapH(br, d);

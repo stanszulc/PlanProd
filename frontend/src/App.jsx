@@ -179,6 +179,7 @@ export default function App() {
   const [tab, setTab]               = useState('dashboard');
   const [erpZp, setErpZp]           = useState([]);
   const [isScheduling, setIsScheduling] = useState(false);
+  const [isOptimizing, setIsOptimizing] = useState(false);
   const workerRef    = useRef(null);
   const workerSeqRef = useRef(0);
   const [routing, setRouting]       = useState([]);
@@ -333,6 +334,53 @@ export default function App() {
   useEffect(() => {
     return () => { if (workerRef.current) workerRef.current.terminate(); };
   }, []);
+
+  function handleOptimize() {
+    if (!fwdZP.length || !zp.length) return;
+    console.log('⚡ handleOptimize start, fwdZP:', fwdZP.length, 'zpStatus:', zpStatus.length);
+    console.log('⚡ lateZP:', zpStatus.filter(z => z.late).length);
+    setIsOptimizing(true);
+    const worker = new Worker(new URL('./utils/scheduler.worker.js', import.meta.url), { type: 'module' });
+    worker.onerror = (err) => {
+      console.error('⚡ Worker onerror:', err.message, err);
+      setIsOptimizing(false);
+      worker.terminate();
+    };
+    worker.onmessage = ({ data: { type, payload } }) => {
+      console.log('⚡ Worker message:', type, payload);
+      if (type === 'PROGRESS') {
+        console.log('⚡ PROGRESS:', payload.label);
+      }
+      if (type === 'DONE') {
+        setFwdZP(payload.fwdZP || []);
+        setZpStatus(payload.zpStatus || []);
+        setGanttDirty(false);
+        setIsOptimizing(false);
+        worker.terminate();
+        const s = payload.optimizeStats;
+        if (s) {
+          if (s.skipped) {
+            alert('✅ Brak spóźnionych ZP — plan jest już optymalny.');
+          } else {
+            alert(`⚡ Optymalizacja zakończona:\nByło spóźnionych: ${s.lateStart}\nJest spóźnionych: ${s.lateEnd}\nPoprawiono: ${s.moved} ZP`);
+          }
+        }
+      }
+      if (type === 'ERROR') {
+        console.error('⚡ INSERT LS error:', payload.message, payload.stack);
+        setIsOptimizing(false);
+        worker.terminate();
+      }
+    };
+    console.log('⚡ Posting OPTIMIZE_INSERT to worker...');
+    worker.postMessage({
+      type: 'OPTIMIZE_INSERT',
+      payload: {
+        wcSchedule, planStart, fwdZP, zpStatus,
+      }
+    });
+    console.log('⚡ Message posted.');
+  }
 
   const activeZpStatus = useMemo(() => {
     if (!hybridMode || !zpStatusData.length) return zpStatus;
@@ -525,7 +573,7 @@ export default function App() {
         {tab === 'bottleneck' && <BottleneckTab routing={routing} zp={filteredZP} globalLookups={globalLookups} wcSchedule={wcSchedule} subZP={subZP} />}
         {tab === 'routing'    && <RoutingTab routing={routing} zp={zp} globalLookups={globalLookups} />}
         {tab === 'heatmap'      && <HeatmapTab routing={routing} zp={filteredZP} globalLookups={globalLookups} wcSchedule={wcSchedule} />}
-        {tab === 'heatmap_plan' && <HeatmapPlanTab fwdZP={fwdZP} routing={routing} wcSchedule={wcSchedule} wcToWc2={wcToWc2} wcCapacity={wcCapacity} onScheduleChange={updateSchedule} onRecalc={() => recalcGantt(wcSchedule)} ganttDirty={ganttDirty} isScheduling={isScheduling} planStart={planStart} onPlanStartChange={setPlanStart} schedulingMode={scheduleConfig.schedulingMode} onSchedulingModeChange={mode => { setScheduleConfig(c => ({ ...c, schedulingMode: mode })); setGanttDirty(true); }} />}
+        {tab === 'heatmap_plan' && <HeatmapPlanTab fwdZP={fwdZP} routing={routing} wcSchedule={wcSchedule} wcToWc2={wcToWc2} wcCapacity={wcCapacity} onScheduleChange={updateSchedule} onRecalc={() => recalcGantt(wcSchedule)} onOptimize={handleOptimize} isOptimizing={isOptimizing} ganttDirty={ganttDirty} isScheduling={isScheduling} planStart={planStart} onPlanStartChange={setPlanStart} schedulingMode={scheduleConfig.schedulingMode} onSchedulingModeChange={mode => { setScheduleConfig(c => ({ ...c, schedulingMode: mode })); setGanttDirty(true); }} />}
         {tab === 'swimlane'   && <SwimlaneTab routing={routing} zp={filteredZP} globalLookups={globalLookups} wcSchedule={wcSchedule} />}
         {tab === 'sankey'     && <SankeyTab routing={routing} zp={filteredZP} globalLookups={globalLookups} wcSchedule={wcSchedule} />}
         {tab === 'realizacja' && <RealizacjaTab zpStatusData={zpStatusData} />}
