@@ -1,4 +1,11 @@
-// ─── scheduler.worker.js ──────────────────────────────────────────────────────
+// ─── scheduler.worker.js ─────────────────────────────────────────────────────
+// Sesja 9: pool capacity fix (3xxxx)
+//   - findSlotForward: nowy parametr poolUsed, logika pool vs maszyna rozdzielona
+//   - makePoolUsed / addPoolUsed / getPoolUsedToday — osobny licznik dla 3xxxx
+//   - scheduleAll: przekazuje poolUsed
+//   - OPTIMIZE_INSERT: buildOcc ujednolicony, wcToWc2 przekazywane z App.jsx
+// ─────────────────────────────────────────────────────────────────────────────
+
 const MS            = 3_600_000;
 const DEFAULT_AVAIL = 16;
 const EPSILON       = 0.0001;
@@ -39,6 +46,7 @@ function tocBuffer(backStart, planStart, dueDate, realEnd) {
   return                            { zone:'black',  consumed, label:'SPÓŹNIONE' };
 }
 
+// ─── Occupancy (maszyny 2xxxx) ────────────────────────────────────────────────
 function makeOccupancy() { return Object.create(null); }
 
 function addSlotToOcc(occ, wc, from, to) {
@@ -82,8 +90,27 @@ function nextSlotAfter(slots, windowStart) {
   return null;
 }
 
-function findSlotForward(fromDt, needH, wc, wcSchedule, occ, getOccKey, getPoolAvail) {
+// ─── Pool used (kanały / montaż 3xxxx) ───────────────────────────────────────
+// Zamiast blokować przedział czasowy, liczymy zużyte godziny per dzień.
+// Wiele ZP może wchodzić w ten sam dzień dopóki usedH < avail.
+function makePoolUsed() { return Object.create(null); }  // occKey → {dateStr → usedH}
+
+function addPoolUsed(poolUsed, occKey, dateStr, durH) {
+  if (!poolUsed[occKey]) poolUsed[occKey] = Object.create(null);
+  poolUsed[occKey][dateStr] = (poolUsed[occKey][dateStr] || 0) + durH;
+}
+
+function getPoolUsedToday(poolUsed, occKey, dateStr) {
+  return poolUsed?.[occKey]?.[dateStr] || 0;
+}
+
+// ─── findSlotForward ──────────────────────────────────────────────────────────
+// poolUsed: Object z makePoolUsed() — tylko dla 3xxxx (isPool)
+// Maszyny 2xxxx: oryginalna logika slot-based (occ [{from,to}])
+// Pool   3xxxx: nowa logika capacity-based (poolUsed {dateStr→usedH})
+function findSlotForward(fromDt, needH, wc, wcSchedule, occ, getOccKey, getPoolAvail, poolUsed) {
   const occKey  = getOccKey    ? getOccKey(wc)         : wc;
+  const isPool  = occKey !== wc;                        // 3xxxx: POOL_<wc2> ≠ wc
   const availFn = getPoolAvail ? (dt) => getPoolAvail(wc, dt) : (dt) => getAvail(wc, dt, wcSchedule);
 
   let cursor    = new Date(fromDt);
@@ -98,9 +125,46 @@ function findSlotForward(fromDt, needH, wc, wcSchedule, occ, getOccKey, getPoolA
       cursor.setHours(0, 0, 0, 0);
       continue;
     }
-    const dayStart  = new Date(cursor); dayStart.setHours(0, 0, 0, 0);
-    const midnight  = new Date(dayStart); midnight.setHours(24, 0, 0, 0);
-    const dayEnd    = new Date(Math.min(dayStart.getTime() + avail * MS, midnight.getTime()));
+
+    const dayStart = new Date(cursor); dayStart.setHours(0, 0, 0, 0);
+    const dateStr  = localDateStr(dayStart);
+    const midnight = new Date(dayStart); midnight.setHours(24, 0, 0, 0);
+
+    // ── POOL (3xxxx): capacity dzienna = suma maszyn, współdzielona przez wiele ZP ──
+    if (isPool) {
+      const usedToday = getPoolUsedToday(poolUsed, occKey, dateStr);
+      const freeToday = avail - usedToday;
+
+      if (freeToday <= EPSILON) {
+        // Dzień pełny — następny
+        cursor.setDate(cursor.getDate() + 1);
+        cursor.setHours(0, 0, 0, 0);
+        continue;
+      }
+
+      const take   = Math.min(remaining, freeToday);
+      remaining   -= take;
+
+      // Slot czasowy: od cursor (lub początku dnia) przez take*MS, max do midnight
+      const segStart = new Date(Math.max(cursor.getTime(), dayStart.getTime()));
+      const segEnd   = new Date(Math.min(segStart.getTime() + take * MS, midnight.getTime()));
+
+      segs.push({ segStart: new Date(segStart), segEnd: new Date(segEnd), durH: take });
+      addPoolUsed(poolUsed, occKey, dateStr, take);
+      // Pool NIE dodaje do occ (brak bloków czasowych per-segment — zasoby wymienne)
+      cursor = new Date(segEnd);
+
+      if (cursor >= midnight) {
+        cursor.setDate(cursor.getDate() + 1);
+        cursor.setHours(0, 0, 0, 0);
+      }
+      continue;
+    }
+
+    // ── MASZYNA (2xxxx): slot-based, max 24h/dobę ────────────────────────────
+    const dayCapH = Math.min(avail, 24);                // hard cap: 1 maszyna max 24h
+    const dayEnd  = new Date(Math.min(dayStart.getTime() + dayCapH * MS, midnight.getTime()));
+
     if (cursor >= dayEnd) {
       cursor.setDate(cursor.getDate() + 1);
       cursor.setHours(0, 0, 0, 0);
@@ -135,28 +199,22 @@ function findSlotForward(fromDt, needH, wc, wcSchedule, occ, getOccKey, getPoolA
   };
 }
 
-// ─── ALAP: oblicz najwcześniejszy możliwy start JIT ──────────────────────────
-// Szacuje ile dni roboczych potrzeba dla ZP i cofa od due_date
+// ─── ALAP: szacowany najpóźniejszy start (bez occupancy) ─────────────────────
 function calcAlapStart(zp, ops, wcSchedule, planStartDt, safetyBufferDays = 1) {
-  // Oblicz daysNeeded per operacja używając rzeczywistej capacity maszyny
-  // Bierzemy typową capacity z wcSchedule (pierwszy wpis per-date lub fallback)
   function getTypicalCapH(wc) {
     const sc = wcSchedule[wc];
     if (!sc) return 16;
     if (Array.isArray(sc)) {
-      // Średnia dni roboczych (pon-pt)
       const workDays = [sc[0], sc[1], sc[2], sc[3], sc[4]].filter(h => h > 0);
       return workDays.length ? workDays.reduce((s, h) => s + h, 0) / workDays.length : 16;
     }
     if (typeof sc === 'object') {
-      // Weź kilka pierwszych wartości roboczych
       const vals = Object.values(sc).filter(h => h > 0).slice(0, 5);
       return vals.length ? vals.reduce((s, h) => s + h, 0) / vals.length : 16;
     }
     return 16;
   }
 
-  // Suma dni potrzebnych per operacja (z rzeczywistą capacity maszyny)
   let totalDays = 0;
   for (const op of ops) {
     const h = op.ct_min > 0 ? zp.volume * op.ct_min / 60 : (op._durH ?? 0);
@@ -164,9 +222,8 @@ function calcAlapStart(zp, ops, wcSchedule, planStartDt, safetyBufferDays = 1) {
     const capH = getTypicalCapH(op.workcenter);
     totalDays += Math.ceil(h / capH);
   }
-  if (totalDays === 0) totalDays = 1; // minimum 1 dzień bufora
+  if (totalDays === 0) totalDays = 1;
 
-  // Cofaj od due_date - safetyBuffer licząc dni robocze
   const dueDate = new Date(zp.due_date + 'T00:00:00');
   dueDate.setDate(dueDate.getDate() - safetyBufferDays);
 
@@ -182,30 +239,31 @@ function calcAlapStart(zp, ops, wcSchedule, planStartDt, safetyBufferDays = 1) {
   return cursor;
 }
 
+// ─── scheduleAll ──────────────────────────────────────────────────────────────
 function scheduleAll(zpList, routingByProduct, wcSchedule, planStartDt, onProgress, config, wcToWc2 = {}) {
   const VIP_BUFFER_DAYS    = config?.vipBufferDays ?? 2;
   const SAFETY_BUFFER_DAYS = config?.safetyBufferDays ?? 1;
   const MODE               = config?.schedulingMode ?? 'asap';
   const URGENCY_METHOD     = config?.urgencyMethod ?? 'cr';
-  const occ    = makeOccupancy();
-  const result = [];
+  const occ      = makeOccupancy();
+  const poolUsed = makePoolUsed();                      // sesja 9: pool capacity
+  const result   = [];
   const zpStatus = [];
 
-  // Buduj mapę brygad dla 3xxxx — pool capacity
-  // wc2ToWcs['Maszyny'] = ['30042', '30043', ...] — tylko 3xxxx
+  // Mapa brygad: wc2 → [wc, ...] (tylko 3xxxx)
   const wc2ToWcs = {};
   Object.entries(wcToWc2).forEach(([wc, wc2]) => {
     if (!String(wc).startsWith('3')) return;
     if (!wc2ToWcs[wc2]) wc2ToWcs[wc2] = [];
     wc2ToWcs[wc2].push(wc);
   });
-  // Klucz pool dla 3xxxx: 'POOL_<wc2>'
+
   function getOccKey(wc) {
-    if (!String(wc).startsWith('3')) return wc; // 2xxxx → osobny klucz
+    if (!String(wc).startsWith('3')) return wc;
     const wc2 = wcToWc2[wc];
     return wc2 ? `POOL_${wc2}` : wc;
   }
-  // Capacity pool = suma wcSchedule wszystkich 3xxxx w brygadzie
+
   function getPoolAvail(wc, dt) {
     if (!String(wc).startsWith('3')) return getAvail(wc, dt, wcSchedule);
     const wc2 = wcToWc2[wc];
@@ -221,41 +279,28 @@ function scheduleAll(zpList, routingByProduct, wcSchedule, planStartDt, onProgre
     }, 0);
   }
 
-  // ATC: oblicz p_avg raz przed sortowaniem
   const allTotalH = zpList.map(zp => totalH(zp));
   const p_avg = allTotalH.reduce((s, h) => s + h, 0) / Math.max(1, allTotalH.length);
-  const ATC_K = config?.atcK ?? 2.5; // parametr strojenia
+  const ATC_K = config?.atcK ?? 2.5;
 
-  function urgency(zp) {
+  function urgencyDynamic(zp, tMs) {
     const th = totalH(zp);
-    const bufferMs    = (zp.priority === 1 ? VIP_BUFFER_DAYS : 0) * 24 * MS;
+    const bufferMs     = (zp.priority === 1 ? VIP_BUFFER_DAYS : 0) * 24 * MS;
     const effectiveDue = new Date(zp.due_date + 'T23:59:59').getTime() - bufferMs;
-    const dueMs  = effectiveDue - planStartDt.getTime();
-    const totalMs = th * MS;
+    const dueMs        = effectiveDue - planStartDt.getTime();
+    const totalMs      = th * MS;
+    const remainMs     = dueMs - tMs;
 
-    if (URGENCY_METHOD === 'due_date') {
-      return effectiveDue;
-    }
-    if (URGENCY_METHOD === 'slack') {
-      return dueMs - totalMs;
-    }
+    if (URGENCY_METHOD === 'due_date') return effectiveDue;
+    if (URGENCY_METHOD === 'slack')    return remainMs - totalMs;
     if (URGENCY_METHOD === 'atc') {
-      // ATC = (w/p) × exp(-max(0, d - p - t) / (k × p_avg))
-      // Większa wartość = pilniejsze → negujemy dla sort rosnącego
-      const w = zp.priority === 1 ? 2 : 1;
-      const p = th || 0.001;
-      const t = 0; // planujemy od planStart → t=0
-      const slack = Math.max(0, dueMs - totalMs) / MS; // w godzinach
-      const atc = (w / p) * Math.exp(-slack / (ATC_K * Math.max(p_avg, 0.001)));
-      return -atc; // negacja bo sort rosnący = malejący ATC
+      const w     = zp.priority === 1 ? 2 : 1;
+      const p     = th || 0.001;
+      const slack = Math.max(0, remainMs - totalMs) / MS;
+      return -(w / p) * Math.exp(-slack / (ATC_K * Math.max(p_avg, 0.001)));
     }
-    // CR (domyślne)
-    return totalMs > 0 ? dueMs / totalMs : 999;
+    return totalMs > 0 ? remainMs / totalMs : 999;
   }
-
-  // ── DYNAMICZNE DISPATCHING Z MINHEAP ──────────────────────────────────────
-  // Zamiast sortować raz — przy każdym kroku wybierz ZP z najlepszym CR
-  // uwzględniając aktualny czas (cursor per ZP)
 
   class MinHeap {
     constructor(cmp) { this.data = []; this.cmp = cmp; }
@@ -289,29 +334,7 @@ function scheduleAll(zpList, routingByProduct, wcSchedule, planStartDt, onProgre
     get size() { return this.data.length; }
   }
 
-  // Dynamiczne urgency — obliczane w czasie t (ms od planStart)
-  function urgencyDynamic(zp, tMs) {
-    const th = totalH(zp);
-    const bufferMs     = (zp.priority === 1 ? VIP_BUFFER_DAYS : 0) * 24 * MS;
-    const effectiveDue = new Date(zp.due_date + 'T23:59:59').getTime() - bufferMs;
-    const dueMs        = effectiveDue - planStartDt.getTime();
-    const totalMs      = th * MS;
-    const remainMs     = dueMs - tMs; // ile czasu zostało od teraz do terminu
-
-    if (URGENCY_METHOD === 'due_date') return effectiveDue;
-    if (URGENCY_METHOD === 'slack')    return remainMs - totalMs;
-    if (URGENCY_METHOD === 'atc') {
-      const w     = zp.priority === 1 ? 2 : 1;
-      const p     = th || 0.001;
-      const slack = Math.max(0, remainMs - totalMs) / MS;
-      return -(w / p) * Math.exp(-slack / (ATC_K * Math.max(p_avg, 0.001)));
-    }
-    // CR — dynamiczne: remainMs / totalMs (im mniejsze tym pilniejsze)
-    return totalMs > 0 ? remainMs / totalMs : 999;
-  }
-
-  // Stan per ZP
-  const zpState = new Map(); // zp_id → { zp, ops, opIdx, cursor, opResults }
+  const zpState = new Map();
   for (const zp of zpList) {
     const ops = (routingByProduct[zp.product] || [])
       .slice().sort((a, b) => a.sequence - b.sequence)
@@ -320,7 +343,6 @@ function scheduleAll(zpList, routingByProduct, wcSchedule, planStartDt, onProgre
         return h > 0;
       });
     if (!ops.length) {
-      // ZP bez operacji — od razu do statusu
       const dueDate = new Date(zp.due_date + 'T23:59:59');
       zpStatus.push({
         zp_id: zp.zp_id, zs_id: zp.zs_id || '', pozycja: zp.pozycja || '',
@@ -341,14 +363,10 @@ function scheduleAll(zpList, routingByProduct, wcSchedule, planStartDt, onProgre
     });
   }
 
-  // Inicjalizuj heap — wszystkie ZP z pierwszą operacją gotową od planStart
   const heap = new MinHeap((a, b) => {
     const tA = a.cursor.getTime() - planStartDt.getTime();
     const tB = b.cursor.getTime() - planStartDt.getTime();
-    // Klucz: urgency dynamiczne w momencie cursor danego ZP
-    const uA = urgencyDynamic(a.zp, tA);
-    const uB = urgencyDynamic(b.zp, tB);
-    return uA - uB;
+    return urgencyDynamic(a.zp, tA) - urgencyDynamic(b.zp, tB);
   });
 
   for (const state of zpState.values()) heap.push(state);
@@ -368,7 +386,7 @@ function scheduleAll(zpList, routingByProduct, wcSchedule, planStartDt, onProgre
     const durH = op.ct_min > 0 ? zp.volume * op.ct_min / 60 : (op._durH ?? 0);
 
     const { startDt, endDt, segs } = findSlotForward(
-      cursor, durH, op.workcenter, wcSchedule, occ, getOccKey, getPoolAvail
+      cursor, durH, op.workcenter, wcSchedule, occ, getOccKey, getPoolAvail, poolUsed
     );
 
     state.opResults.push({ op, startDt, endDt, segs, durH });
@@ -376,10 +394,8 @@ function scheduleAll(zpList, routingByProduct, wcSchedule, planStartDt, onProgre
     state.cursor = new Date(endDt);
 
     if (state.opIdx < ops.length) {
-      // Jeszcze są operacje — wróć do heap z nowym cursorem
       heap.push(state);
     } else {
-      // Wszystkie operacje zaplanowane — zapisz wynik
       done++;
       const opResults = state.opResults;
       const dueDate   = new Date(zp.due_date + 'T23:59:59');
@@ -429,9 +445,11 @@ function scheduleAll(zpList, routingByProduct, wcSchedule, planStartDt, onProgre
   return { fwdZP: result, zpStatus };
 }
 
+// ─── Worker message handler ───────────────────────────────────────────────────
 self.onmessage = function(e) {
   const { type, payload } = e.data;
 
+  // ── SCHEDULE ───────────────────────────────────────────────────────────────
   if (type === 'SCHEDULE') {
     try {
       const { zpList, routingByProduct, wcSchedule, planStart, config, wcToWc2 } = payload;
@@ -448,13 +466,35 @@ self.onmessage = function(e) {
     }
   }
 
-
+  // ── OPTIMIZE_INSERT ────────────────────────────────────────────────────────
   if (type === 'OPTIMIZE_INSERT') {
     try {
-      const { wcSchedule, planStart, fwdZP, zpStatus } = payload;
+      const { wcSchedule, planStart, fwdZP, zpStatus, wcToWc2: wcToWc2Payload } = payload;
       const t0 = Date.now();
 
       console.log('[Worker] OPTIMIZE_INSERT start, fwdZP:', fwdZP?.length, 'zpStatus:', zpStatus?.length);
+
+      // Lokalne mapy brygad dla OPTIMIZE_INSERT
+      const wcToWc2Local = wcToWc2Payload || {};
+      const wc2ToWcsLocal = {};
+      Object.entries(wcToWc2Local).forEach(([wc, wc2]) => {
+        if (!String(wc).startsWith('3')) return;
+        if (!wc2ToWcsLocal[wc2]) wc2ToWcsLocal[wc2] = [];
+        wc2ToWcsLocal[wc2].push(wc);
+      });
+
+      // getOccKey / getPoolAvail lokalne (mirror scheduleAll)
+      function localGetOccKey(wc) {
+        if (!String(wc).startsWith('3')) return String(wc);
+        const wc2 = wcToWc2Local[wc];
+        return wc2 ? `POOL_${wc2}` : String(wc);
+      }
+      function localGetPoolAvail(wc, dt) {
+        if (!String(wc).startsWith('3')) return getAvail(wc, dt, wcSchedule);
+        const wc2 = wcToWc2Local[wc];
+        if (!wc2 || !wc2ToWcsLocal[wc2]) return getAvail(wc, dt, wcSchedule);
+        return wc2ToWcsLocal[wc2].reduce((s, m) => s + getAvail(m, dt, wcSchedule), 0);
+      }
 
       const lateList = zpStatus
         .filter(z => z.late)
@@ -473,25 +513,36 @@ self.onmessage = function(e) {
 
       const lateStart = lateList.length;
 
-      // Buduj occ w tym samym formacie co główny scheduler: { [wc]: [[startMs, endMs], ...] }
+      // buildOcc — ujednolicony format: {from,to} dla maszyn, poolUsed dla 3xxxx
       function buildOcc(ops) {
-        const occ = makeOccupancy();
+        const occ      = makeOccupancy();
+        const poolUsed = makePoolUsed();
         for (const op of ops) {
-          const wc = op.workcenter;
+          const wc     = String(op.workcenter);
+          const isPool = wc.startsWith('3');
           for (const seg of (op.segments || [])) {
             if (!seg.segStart || !seg.segEnd) continue;
-            addSlotToOcc(occ, wc,
-              new Date(typeof seg.segStart === 'number' ? seg.segStart : seg.segStart),
-              new Date(typeof seg.segEnd   === 'number' ? seg.segEnd   : seg.segEnd)
-            );
+            const segStart = new Date(typeof seg.segStart === 'number' ? seg.segStart : seg.segStart);
+            const segEnd   = new Date(typeof seg.segEnd   === 'number' ? seg.segEnd   : seg.segEnd);
+            if (isPool) {
+              const occKey  = localGetOccKey(wc);
+              const dateStr = localDateStr(segStart);
+              addPoolUsed(poolUsed, occKey, dateStr, seg.durH || 0);
+            } else {
+              addSlotToOcc(occ, wc, segStart, segEnd);
+            }
           }
         }
-        return occ;
+        return { occ, poolUsed };
       }
 
-      // Użyj głównej funkcji findSlotForward — identyczna logika, te same weekendy
-      function findEarliestSlot(wc, fromDt, durH, occ) {
-        const result = findSlotForward(fromDt, durH, wc, wcSchedule, occ, null, null);
+      function findEarliestSlot(wc, fromDt, durH, occ, poolUsed) {
+        const result = findSlotForward(
+          fromDt, durH, wc, wcSchedule, occ,
+          localGetOccKey,
+          localGetPoolAvail,
+          poolUsed
+        );
         if (!result.segs.length) return null;
         return {
           start: result.startDt,
@@ -506,16 +557,30 @@ self.onmessage = function(e) {
 
       let workOps    = fwdZP.map(op => ({ ...op, segments: op.segments ? [...op.segments] : [] }));
       let workStatus = zpStatus.map(z => ({ ...z }));
-      let occ        = buildOcc(workOps);
+      let { occ, poolUsed } = buildOcc(workOps);
       let moved      = 0;
+      let iterations = 0;
+      const MAX_ITER = 20;
       const planStartDt = new Date(planStart + 'T00:00:00');
 
-      for (let li = 0; li < lateList.length; li++) {
-        const zpId = lateList[li].zp_id;
+      let improved = true;
+      while (improved && iterations < MAX_ITER) {
+        improved = false;
+        iterations++;
+
+        // Odśwież lateList na podstawie aktualnego workStatus — kolejność może się zmieniać
+        const currentLate = workStatus
+          .filter(z => z.late)
+          .sort((a, b) => (b.delayH || 0) - (a.delayH || 0));
+
+        if (!currentLate.length) break;
+
+      for (let li = 0; li < currentLate.length; li++) {
+        const zpId = currentLate[li].zp_id;
 
         self.postMessage({ type: 'PROGRESS', payload: {
-          pct:   Math.round((li / lateList.length) * 100),
-          label: `Przesuwam ${li + 1}/${lateList.length}: ZP ${zpId} (opóźnienie: ${lateList[li].delayH?.toFixed(1)}h)`
+          pct:   Math.round((li / currentLate.length) * 100),
+          label: `Iter ${iterations}: przesuwam ${li + 1}/${currentLate.length} ZP (opóźnienie: ${currentLate[li].delayH?.toFixed(1)}h)`
         }});
 
         const zpOps = workOps
@@ -524,13 +589,32 @@ self.onmessage = function(e) {
 
         if (!zpOps.length) continue;
 
-        // Usuń obecne occupancy tego ZP
+        // Usuń occupancy tego ZP
         for (const op of zpOps) {
-          const wc = op.workcenter;
-          if (!occ[wc]) occ[wc] = {};
+          const wc     = String(op.workcenter);
+          const isPool = wc.startsWith('3');
           for (const seg of (op.segments || [])) {
-            const dk = localDateStr(new Date(seg.segStart));
-            occ[wc][dk] = Math.max(0, (occ[wc][dk] || 0) - (seg.durH || 0));
+            if (!seg.segStart) continue;
+            if (isPool) {
+              const occKey  = localGetOccKey(wc);
+              const segStart = new Date(typeof seg.segStart === 'number' ? seg.segStart : seg.segStart);
+              const dateStr  = localDateStr(segStart);
+              if (poolUsed[occKey]) {
+                poolUsed[occKey][dateStr] = Math.max(0, (poolUsed[occKey][dateStr] || 0) - (seg.durH || 0));
+              }
+            } else {
+              // Maszyny: usuń slot z occ
+              const slots = occ[wc];
+              if (slots) {
+                const segStart = new Date(typeof seg.segStart === 'number' ? seg.segStart : seg.segStart);
+                const segEnd   = new Date(typeof seg.segEnd   === 'number' ? seg.segEnd   : seg.segEnd);
+                const idx = slots.findIndex(s =>
+                  Math.abs(s.from.getTime() - segStart.getTime()) < 1000 &&
+                  Math.abs(s.to.getTime()   - segEnd.getTime())   < 1000
+                );
+                if (idx >= 0) slots.splice(idx, 1);
+              }
+            }
           }
         }
 
@@ -540,59 +624,84 @@ self.onmessage = function(e) {
         const newSlots = [];
 
         for (const op of zpOps) {
-          const slot = findEarliestSlot(op.workcenter, cursor, op.durH, occ);
+          const slot = findEarliestSlot(op.workcenter, cursor, op.durH, occ, poolUsed);
           if (!slot) { ok = false; break; }
           newSlots.push({ op, slot });
           cursor = slot.end;
         }
 
-        const oldStatus = workStatus.find(z => z.zp_id === zpId);
+        const oldStatus  = workStatus.find(z => z.zp_id === zpId);
         const newRealEnd = ok ? newSlots[newSlots.length - 1].slot.end : null;
         const oldRealEnd = oldStatus ? new Date(oldStatus.realEnd) : null;
 
         if (!ok || (oldRealEnd && newRealEnd >= oldRealEnd)) {
           // Nie poprawia — przywróć occupancy
           for (const op of zpOps) {
-            const wc = op.workcenter;
+            const wc     = String(op.workcenter);
+            const isPool = wc.startsWith('3');
             for (const seg of (op.segments || [])) {
-              const dk = localDateStr(new Date(seg.segStart));
-              if (!occ[wc]) occ[wc] = {};
-              occ[wc][dk] = (occ[wc][dk] || 0) + (seg.durH || 0);
+              if (!seg.segStart) continue;
+              if (isPool) {
+                const occKey   = localGetOccKey(wc);
+                const segStart = new Date(typeof seg.segStart === 'number' ? seg.segStart : seg.segStart);
+                const dateStr  = localDateStr(segStart);
+                addPoolUsed(poolUsed, occKey, dateStr, seg.durH || 0);
+              } else {
+                const segStart = new Date(typeof seg.segStart === 'number' ? seg.segStart : seg.segStart);
+                const segEnd   = new Date(typeof seg.segEnd   === 'number' ? seg.segEnd   : seg.segEnd);
+                addSlotToOcc(occ, wc, segStart, segEnd);
+              }
             }
           }
           continue;
         }
 
-        // Zaakceptuj — zaktualizuj workOps
+        // Zaakceptuj — zaktualizuj workOps i occupancy
         for (const { op, slot } of newSlots) {
-          const wc = op.workcenter;
-          const idx = workOps.findIndex(o => o.zp_id === op.zp_id);
+          const wc     = String(op.workcenter);
+          const isPool = wc.startsWith('3');
+          const idx    = workOps.findIndex(o => o.zp_id === op.zp_id);
           if (idx >= 0) {
             workOps[idx] = { ...workOps[idx], start_dt: slot.start, end_dt: slot.end, segments: slot.segs, realEnd: newRealEnd };
           }
           for (const seg of slot.segs) {
-            const dk = localDateStr(new Date(seg.segStart));
-            if (!occ[wc]) occ[wc] = {};
-            occ[wc][dk] = (occ[wc][dk] || 0) + (seg.durH || 0);
+            if (isPool) {
+              const occKey   = localGetOccKey(wc);
+              const segStart = new Date(typeof seg.segStart === 'number' ? seg.segStart : seg.segStart);
+              const dateStr  = localDateStr(segStart);
+              addPoolUsed(poolUsed, occKey, dateStr, seg.durH || 0);
+            } else {
+              const segStart = new Date(typeof seg.segStart === 'number' ? seg.segStart : seg.segStart);
+              const segEnd   = new Date(typeof seg.segEnd   === 'number' ? seg.segEnd   : seg.segEnd);
+              addSlotToOcc(occ, wc, segStart, segEnd);
+            }
           }
         }
 
         // Zaktualizuj zpStatus
         if (oldStatus) {
-          const dueMs   = new Date(oldStatus.due_date + 'T23:59:59').getTime();
-          const delayH  = Math.max(0, newRealEnd.getTime() - dueMs) / MS;
+          const dueMs     = new Date(oldStatus.due_date + 'T23:59:59').getTime();
+          const delayH    = Math.max(0, newRealEnd.getTime() - dueMs) / MS;
           const statusIdx = workStatus.findIndex(z => z.zp_id === zpId);
           if (statusIdx >= 0) {
-            workStatus[statusIdx] = { ...workStatus[statusIdx], realEnd: newRealEnd, delayH, delayDays: +(delayH / 16).toFixed(1), late: delayH > 0 };
+            workStatus[statusIdx] = {
+              ...workStatus[statusIdx],
+              realEnd:   newRealEnd,
+              delayH,
+              delayDays: +(delayH / 16).toFixed(1),
+              late:      delayH > 0,
+            };
           }
         }
         moved++;
+        improved = true;          // przynajmniej jedno ZP poprawione — iteruj dalej
       }
+      }                           // koniec while (improved)
 
       const lateEnd = workStatus.filter(z => z.late).length;
       self.postMessage({ type: 'DONE', payload: {
         fwdZP: workOps, zpStatus: workStatus, elapsed: Date.now() - t0,
-        optimizeStats: { lateStart, lateEnd, moved }
+        optimizeStats: { lateStart, lateEnd, moved, iterations }
       }});
 
     } catch (err) {
