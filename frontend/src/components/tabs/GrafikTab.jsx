@@ -27,7 +27,7 @@ const BRIGADE_DEMO_CAPACITY = {
   'Szlifiernia Stal':       8.0,
 };
 
-export function GrafikTab({ routing, zp, wcSchedule, onScheduleChange, subZP, slavePanX, slaveScaleIdx, slaveHourW, slaveScrollY, wcOrder, planStart, embedded }) {
+export function GrafikTab({ routing, zp, wcSchedule, onScheduleChange, subZP, slavePanX, slaveScaleIdx, slaveHourW, slaveScrollY, wcOrder, planStart, embedded, selectedWC, onWCSelect, selectedDate, onDateSelect }) {
   const [viewMode, setViewMode] = useState('machines'); // 'machines' | 'brigades'
   const [brigadeCapacity, setBrigadeCapacity] = useState(BRIGADE_DEMO_CAPACITY);
   const [editingBrigade, setEditingBrigade] = useState(null); // {name, value}
@@ -340,7 +340,7 @@ export function GrafikTab({ routing, zp, wcSchedule, onScheduleChange, subZP, sl
                   const isWe = jsDay===0||jsDay===6;
                   const isDue = dueDates.has(d);
                   return (
-                    <g key={`hdr${d}`}>
+                    <g key={`hdr${d}`} style={{cursor:'pointer'}} onClick={() => onDateSelect && onDateSelect(d === selectedDate ? null : d)}>
                       {isWe && <rect x={x} y={TOP_H} width={DAY_W} height={WCS.length*ROW_H} fill="rgba(0,0,0,0.18)"/>}
                       <line x1={x} y1={0} x2={x} y2={topH} stroke={T.border} strokeWidth="0.5"/>
                       <text x={x+DAY_W/2} y={TOP_H-18} textAnchor="middle"
@@ -351,6 +351,7 @@ export function GrafikTab({ routing, zp, wcSchedule, onScheduleChange, subZP, sl
                         {DAY_NAMES[jsDay]}
                       </text>
                       {isDue && <rect x={x} y={0} width={DAY_W} height={4} rx="1" fill={T.bn} opacity="0.7"/>}
+                      {d === selectedDate && <rect x={x} y={0} width={DAY_W} height={TOP_H} fill={T.accentBg} opacity="0.35" style={{pointerEvents:'none'}}/>}
                     </g>
                   );
                 })}
@@ -472,10 +473,13 @@ export function GrafikTab({ routing, zp, wcSchedule, onScheduleChange, subZP, sl
                 const totalAvail = dateRange.reduce((sum,d)=>sum+getH(wc,d),0);
                 const ratio = totalAvail>0 ? totalNeed/totalAvail : 0;
                 const col = ratio>1?T.crit:ratio>0.85?T.warn:totalNeed>0?T.ok:T.text3;
+                const isSel = wc === selectedWC;
                 return (
-                  <g key={`lbl${wc}`}>
-                    <rect x="0" y={TOP_H+wi*ROW_H} width={LABEL_W} height={ROW_H} fill={T.surface2}/>
-                    <text x="12" y={TOP_H+wi*ROW_H+ROW_H/2-5} fontSize="12" fontWeight="700" fill={T.text}>{wc}</text>
+                  <g key={`lbl${wc}`} style={{cursor:'pointer'}}
+                    onClick={() => { onWCSelect && onWCSelect(isSel ? null : wc); onDateSelect && onDateSelect(null); }}>
+                    <rect x="0" y={TOP_H+wi*ROW_H} width={LABEL_W} height={ROW_H} fill={isSel ? T.accentBg : T.surface2}/>
+                    {isSel && <rect x="0" y={TOP_H+wi*ROW_H} width={3} height={ROW_H} fill={T.accent}/>}
+                    <text x="12" y={TOP_H+wi*ROW_H+ROW_H/2-5} fontSize="12" fontWeight="700" fill={isSel ? T.accent : T.text}>{wc}</text>
                     <text x="12" y={TOP_H+wi*ROW_H+ROW_H/2+10} fontSize="10" fill={col}>{Math.round(ratio*100)}%</text>
                   </g>
                 );

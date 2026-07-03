@@ -1,14 +1,15 @@
 import { useState, useMemo, useEffect, useRef } from 'react';
-import { T, s, tocColor } from '../../constants/theme.js';
-import { fmtDt, computeLoads, getAvail } from '../../utils/scheduler.js';
+import { T, s } from '../../constants/theme.js';
+import { fmtDt, computeLoads } from '../../utils/scheduler.js';
 import { DAY_NAMES } from '../../constants/theme.js';
 import { Dot } from '../common/Dot.jsx';
 import { EmptyState } from '../common/EmptyState.jsx';
 
-export function GanttTab({ routing, zp, globalLookups, wcSchedule, subZP, fwdZP, zpStatus, onRecalc, ganttDirty, onViewChange, slaveMode, planStart, onPlanStartChange, embedded }) {
+export function GanttTab({ routing, zp, globalLookups, wcSchedule, subZP, fwdZP, zpStatus, onRecalc, ganttDirty, onViewChange, slaveMode, planStart, onPlanStartChange, embedded, selectedWC: selectedWCProp, onWCSelect, selectedDate, onDateSelect, heatmapFilter, onHeatmapFilterChange }) {
 
   const wcNameMap = useMemo(() => { const m = {}; routing.forEach(r => { if (!m[r.workcenter]) m[r.workcenter] = r.operation; }); return m; }, [routing]);
   const allWCFull = useMemo(() => { const wcSeq = {}; routing.forEach(r => { const seq = parseInt(r.sequence)||999; if (wcSeq[r.workcenter]===undefined||seq<wcSeq[r.workcenter]) wcSeq[r.workcenter]=seq; }); return [...new Set(routing.map(r=>r.workcenter))].sort((a,b)=>(wcSeq[a]||999)-(wcSeq[b]||999)); }, [routing]);
+  const wcToWc2GM = useMemo(() => { const m = {}; routing.forEach(r => { if (r.workcenter && r.wc_group) m[r.workcenter] = r.wc_group; }); return m; }, [routing]);
   const dates  = useMemo(() => [...new Set(zp.map(z => z.due_date))].sort(), [zp]);
   const [filterZS,   setFilterZS]  = useState('');
   const [filterProd, setFilterProd] = useState('');
@@ -33,8 +34,38 @@ export function GanttTab({ routing, zp, globalLookups, wcSchedule, subZP, fwdZP,
   const [panX,       setPanX]      = useState(0);
   const [isPan,      setIsPan]     = useState(false);
   const [tableOpen,  setTableOpen] = useState(false);
-  const [tooltip,    setTooltip]   = useState(null); // { x, y, op }
+  // Debounced planStart: input wyświetla localPlanStart (natychmiastowo),
+  // ciężkie memo używają committedPlanStart (aktualizuje się 300ms po ostatnim keystroku)
+  const [localPlanStart,     setLocalPlanStart]     = useState(planStart || '2026-05-22');
+  const [committedPlanStart, setCommittedPlanStart] = useState(planStart || '2026-05-22');
+  const debPlanRef = useRef(null);
+  useEffect(() => {
+    if (planStart && planStart !== localPlanStart) {
+      setLocalPlanStart(planStart);
+      setCommittedPlanStart(planStart);
+    }
+  }, [planStart]);
+  const tooltipRef  = useRef(null);
+  function showTooltip(e, op) {
+    const el = tooltipRef.current; if (!el) return;
+    el.style.left = (e.clientX + 14) + 'px';
+    el.style.top  = (e.clientY - 8)  + 'px';
+    el.style.display = 'block';
+    el.querySelector('[data-tt="title"]').textContent  = op.zs_id || op.parent_zp || op.zp_id || '';
+    el.querySelector('[data-tt="client"]').textContent = op.klient || '—';
+    el.querySelector('[data-tt="op"]').textContent     = op.operation || '';
+    el.querySelector('[data-tt="wc"]').textContent     = op.workcenter || '';
+    el.querySelector('[data-tt="dur"]').textContent    = (op.durH != null ? op.durH.toFixed(1) : '') + 'h';
+    el.querySelector('[data-tt="start"]').textContent  = fmtDt(op.start_dt);
+    el.querySelector('[data-tt="end"]').textContent    = fmtDt(op.end_dt);
+    el.querySelector('[data-tt="due"]').textContent    = op.due_date || '';
+  }
+  function hideTooltip() { if (tooltipRef.current) tooltipRef.current.style.display = 'none'; }
   const [selectedZp,  setSelectedZp]  = useState(null); // kliknięty zp_id → filtr
+  const [selectedWCLocal, setSelectedWCLocal] = useState(null); // lokalny fallback gdy brak propa
+  // jeśli GanttTab jest używany standalone (bez PlanTab), używa lokalnego stanu
+  const selectedWC = selectedWCProp !== undefined ? selectedWCProp : selectedWCLocal;
+  const setSelectedWC = onWCSelect || setSelectedWCLocal;
   const svgRef       = useRef(null);
   const panRef       = useRef(null);
   const containerRef = useRef(null);
@@ -49,49 +80,105 @@ export function GanttTab({ routing, zp, globalLookups, wcSchedule, subZP, fwdZP,
 
   const displayZP = useMemo(() => {
     const base = (fwdZP && fwdZP.length) ? fwdZP : subZP;
-    if (selectedZp) return base.filter(s => (s.parent_zp || s.zp_id) === selectedZp);
-    if (!filterZS.trim() && !filterProd.trim()) return base;
-    return base.filter(s => filteredZpIds.has(s.parent_zp || s.zp_id));
-  }, [fwdZP, subZP, filteredZpIds, filterZS, filterProd, selectedZp]);
+    // L0: heatmapFilter — filtr z zakładki Heatmapa Planu (brygada lub komórka × data)
+    const hmBase = heatmapFilter
+      ? (() => {
+          const targetWcSet = heatmapFilter.wc
+            ? new Set([heatmapFilter.wc])
+            : new Set(Object.entries(wcToWc2GM).filter(([, v]) => v === heatmapFilter.wc2).map(([k]) => k));
+          const zpIds = new Set(
+            base.filter(op => {
+              if (!targetWcSet.has(op.workcenter)) return false;
+              if (!heatmapFilter.date) return true;
+              return (op.segments||[]).some(seg => seg.segStart && new Date(seg.segStart).toISOString().slice(0,10) === heatmapFilter.date);
+            }).map(op => op.parent_zp || op.zp_id.split('/')[0])
+          );
+          return base.filter(s => zpIds.has(s.parent_zp || s.zp_id.split('/')[0]));
+        })()
+      : base;
+    // L2: pojedyncze ZP — pełna ścieżka operacji
+    if (selectedZp) return hmBase.filter(s => (s.parent_zp || s.zp_id.split('/')[0]) === selectedZp);
+    // L1: filtr po gnieździe — znajdź ZP mające op na tym WC, pokaż ich pełne ścieżki
+    const wcBase = selectedWC
+      ? (() => {
+          const zpIds = new Set(
+            hmBase.filter(s => s.workcenter === selectedWC)
+                  .map(s => s.parent_zp || s.zp_id.split('/')[0])
+          );
+          return hmBase.filter(s => zpIds.has(s.parent_zp || s.zp_id.split('/')[0]));
+        })()
+      : hmBase;
+    // L1.5: filtr po dacie — znajdź ZP mające segment w danym dniu, pokaż ich pełne ścieżki
+    const dateBase = selectedDate
+      ? (() => {
+          const zpIds = new Set(
+            wcBase.filter(s => (s.segments||[]).some(seg => seg.segStart && new Date(seg.segStart).toISOString().slice(0,10) === selectedDate))
+                  .map(s => s.parent_zp || s.zp_id.split('/')[0])
+          );
+          return wcBase.filter(s => zpIds.has(s.parent_zp || s.zp_id.split('/')[0]));
+        })()
+      : wcBase;
+    if (!filterZS.trim() && !filterProd.trim()) return dateBase;
+    return dateBase.filter(s => filteredZpIds.has(s.parent_zp || s.zp_id));
+  }, [fwdZP, subZP, filteredZpIds, filterZS, filterProd, selectedZp, selectedWC, selectedDate, heatmapFilter, wcToWc2GM]);
 
   const allWC = useMemo(() => {
-    if (!filterZS.trim() && !filterProd.trim() && !selectedZp) return allWCFull;
+    // Jeśli jakikolwiek filtr jest aktywny → pokaż tylko WC które mają bary w displayZP
+    const anyFilter = filterZS.trim() || filterProd.trim() || selectedZp || selectedWC || selectedDate || heatmapFilter;
+    if (!anyFilter) return allWCFull;
+    // L1 (WC selected, no date/ZP filter): pokaż wszystkie gniazda — widać pełną ścieżkę ZP
+    if (selectedWC && !selectedZp && !selectedDate && !heatmapFilter) return allWCFull;
     const usedWC = new Set(displayZP.map(s => s.workcenter));
-    return allWCFull.filter(w => usedWC.has(w));
-  }, [allWCFull, displayZP, filterZS, filterProd, selectedZp]);
+    const firstStart = new Map();
+    displayZP.forEach(s => {
+      const t = s.segments?.[0]?.segStart;
+      if (!t) return;
+      const ms = new Date(t).getTime();
+      if (!firstStart.has(s.workcenter) || ms < firstStart.get(s.workcenter))
+        firstStart.set(s.workcenter, ms);
+    });
+    return allWCFull
+      .filter(w => usedWC.has(w))
+      .sort((a, b) => (firstStart.get(a) ?? Infinity) - (firstStart.get(b) ?? Infinity));
+  }, [allWCFull, displayZP, filterZS, filterProd, selectedZp, selectedWC, selectedDate, heatmapFilter]);
 
   const planStartDt = useMemo(
-    () => new Date((planStart || '2026-05-22') + 'T00:00:00'),
-    [planStart]
+    () => new Date((committedPlanStart || '2026-05-22') + 'T00:00:00'),
+    [committedPlanStart]
   );
 
   const LABEL_W = 110, LANE_H = 54, TOP = 56;
+
+  // Warstwa 1 — pełny plan (nigdy nie filtrowany): oś, ticks
+  const planBase = useMemo(
+    () => (fwdZP && fwdZP.length) ? fwdZP : subZP,
+    [fwdZP, subZP]
+  );
 
   const layout = useMemo(() => {
     if (!dates.length) {
       return { contentW: 800, axisStart: planStartDt, axisEnd: planStartDt, allDues: [], svgH: TOP + 16 };
     }
-    const allSegs = displayZP.flatMap(s => s.segments || []);
-    const allEnds  = allSegs.map(s => s.segEnd).filter(Boolean);
-    const allStarts = allSegs.map(s => s.segStart).filter(Boolean);
+    // Oś liczona z PEŁNEGO planu — filtrowanie widoku nie zmienia osi
+    // Bez spread Math.min/max (crash stack dla 100k elementów) — reduce po planBase bezpośrednio
     const allDues = dates.map(d => new Date(d + 'T23:59:59'));
-    const maxDueDt = new Date(Math.max(
-      ...allDues.map(d => d.getTime()),
-      ...(allEnds.length ? allEnds.map(d => new Date(d).getTime()) : [0]),
-      planStartDt.getTime() + 7 * 24 * 3600000
-    ));
-    // axisStart = min(planStart, najwcześniejszy segment) — spóźnione ZP mogą zaczynać się przed planStart
-    const earliestSeg = allStarts.length
-      ? new Date(Math.min(...allStarts.map(d => new Date(d).getTime())))
-      : planStartDt;
-    const axisStart = new Date(Math.min(planStartDt.getTime(), earliestSeg.getTime()));
+    const maxDue  = allDues.reduce((m, d) => Math.max(m, d.getTime()), planStartDt.getTime() + 7 * 24 * 3600000);
+    let minSegStart = Infinity, maxSegEnd = -Infinity;
+    planBase.forEach(s => {
+      (s.segments || []).forEach(seg => {
+        if (seg.segStart) { const t = new Date(seg.segStart).getTime(); if (t < minSegStart) minSegStart = t; }
+        if (seg.segEnd)   { const t = new Date(seg.segEnd).getTime();   if (t > maxSegEnd)   maxSegEnd   = t; }
+      });
+    });
+    const maxDueDt  = new Date(Math.max(maxDue, maxSegEnd === -Infinity ? 0 : maxSegEnd));
+    const axisStart = new Date(Math.min(planStartDt.getTime(), minSegStart === Infinity ? planStartDt.getTime() : minSegStart));
     axisStart.setHours(0, 0, 0, 0);
-    const axisEnd   = new Date(maxDueDt);   axisEnd.setHours(24, 0, 0, 0);
-    const totalH    = Math.max((axisEnd - axisStart) / 3600000, 16);
-    const contentW  = Math.ceil(totalH) * HOUR_W;
-    const svgH      = TOP + allWC.length * LANE_H + 16;
+    const axisEnd  = new Date(maxDueDt); axisEnd.setHours(24, 0, 0, 0);
+    const totalH   = Math.max((axisEnd - axisStart) / 3600000, 16);
+    const contentW = Math.ceil(totalH) * HOUR_W;
+    const svgH     = TOP + allWC.length * LANE_H + 16;  // wiersze z filtrowanego allWC
     return { contentW, axisStart, axisEnd, allDues, svgH };
-  }, [dates, displayZP, planStartDt, HOUR_W, allWC.length]);
+  }, [dates, planBase, planStartDt, HOUR_W, allWC.length]);
 
   const { contentW, axisStart, axisEnd, allDues, svgH } = layout;
 
@@ -105,42 +192,127 @@ export function GanttTab({ routing, zp, globalLookups, wcSchedule, subZP, fwdZP,
         if (e.deltaY < 0) setScaleIdx(v => Math.max(0, v - 1));
         else              setScaleIdx(v => Math.min(SCALES.length - 1, v + 1));
       } else {
-        // scroll → pan poziomy (zawsze)
         e.preventDefault();
-        setPanX(v => Math.min(0, Math.max(-(contentW - 200), v - e.deltaY * 1.5)));
+        const newPanX = Math.min(0, Math.max(-(contentW - 200), panXRef.current - e.deltaY * 1.5));
+        panXRef.current = newPanX;
+        if (svgGroupRef.current) svgGroupRef.current.setAttribute('transform', `translate(${newPanX},0)`);
+        clearTimeout(debouncePanRef.current);
+        debouncePanRef.current = setTimeout(() => setPanX(newPanX), 80);
       }
     }
     el.addEventListener('wheel', onWheel, { passive: false });
     return () => el.removeEventListener('wheel', onWheel);
   }, [contentW, svgH, embedded]);
 
-  const TooltipEl = tooltip && (
-    <div style={{
-      position: 'fixed', zIndex: 9999, pointerEvents: 'none',
-      left: tooltip.x + 14, top: tooltip.y - 8,
-      background: '#1a2030', border: `1px solid ${T.border2}`,
-      borderRadius: 8, padding: '10px 14px', minWidth: 220,
-      boxShadow: '0 8px 24px rgba(0,0,0,0.5)', fontSize: 11,
-    }}>
-      <div style={{ fontWeight: 700, color: T.accent, marginBottom: 4, fontSize: 12 }}>
-        {tooltip.op.zs_id || tooltip.op.parent_zp || tooltip.op.zp_id}
-      </div>
-      <div style={{ color: T.text2, marginBottom: 2 }}>{tooltip.op.klient || '—'}</div>
-      <div style={{ color: T.text3, marginBottom: 6, fontSize: 10 }}>{tooltip.op.operation}</div>
-      <div style={{ display: 'grid', gridTemplateColumns: 'auto 1fr', gap: '2px 8px', fontSize: 10 }}>
-        <span style={{ color: T.text3 }}>Gniazdo</span>
-        <span style={{ color: T.text, fontFamily: 'monospace' }}>{tooltip.op.workcenter}</span>
-        <span style={{ color: T.text3 }}>Czas</span>
-        <span style={{ color: T.accent, fontWeight: 600 }}>{tooltip.op.durH?.toFixed(1)}h</span>
-        <span style={{ color: T.text3 }}>Start</span>
-        <span style={{ color: T.text, fontFamily: 'monospace' }}>{fmtDt(tooltip.op.start_dt)}</span>
-        <span style={{ color: T.text3 }}>Koniec</span>
-        <span style={{ color: T.text, fontFamily: 'monospace' }}>{fmtDt(tooltip.op.end_dt)}</span>
-        <span style={{ color: T.text3 }}>Termin</span>
-        <span style={{ color: T.bn, fontFamily: 'monospace' }}>{tooltip.op.due_date}</span>
-      </div>
-    </div>
+  // tooltip rendered via DOM ref — no React state re-render on hover
+
+  const wcIndexMap = useMemo(() => {
+    const m = new Map();
+    allWC.forEach((w, i) => m.set(w, i));
+    return m;
+  }, [allWC]);
+
+  // [VIRT] Widoczne wiersze — ResizeObserver wykrywa też przejście display:none→visible
+  const [visRows, setVisRows] = useState([0, 25]);
+  useEffect(() => {
+    const el = containerRef.current; if (!el) return;
+    const update = () => {
+      if (!el.clientHeight) return; // ukryty (display:none) — pomiń
+      const scrollTop = el.scrollTop;
+      const viewH     = el.clientHeight;
+      const BUFFER    = 3;
+      const start = Math.max(0, Math.floor((scrollTop - TOP) / LANE_H) - BUFFER);
+      const end   = Math.min(allWC.length, Math.ceil((scrollTop + viewH - TOP) / LANE_H) + BUFFER);
+      setVisRows(prev => (prev[0] === start && prev[1] === end) ? prev : [start, end]);
+    };
+    update();
+    el.addEventListener('scroll', update, { passive: true });
+    const ro = new ResizeObserver(update);
+    ro.observe(el);
+    return () => { el.removeEventListener('scroll', update); ro.disconnect(); };
+  }, [allWC.length]);
+
+  // [VIRT] Segmenty pogrupowane per wiersz WC — O(1) dostęp per row zamiast O(20k) scan
+  const wcSegments = useMemo(() => {
+    const map = new Map();
+    displayZP.forEach(s2 => {
+      const wi = wcIndexMap.get(s2.workcenter);
+      if (wi === undefined) return;
+      if (!map.has(wi)) map.set(wi, []);
+      map.get(wi).push(s2);
+    });
+    return map;
+  }, [displayZP, wcIndexMap]);
+
+  const zpStatusMap = useMemo(() => {
+    const m = new Map();
+    if (zpStatus) zpStatus.forEach(st => m.set(st.zp_id, st));
+    return m;
+  }, [zpStatus]);
+
+  const dueDateMap = useMemo(() => {
+    const m = new Map();
+    if (allDues) dates.forEach((d, i) => m.set(d, allDues[i]));
+    return m;
+  }, [dates, allDues]);
+
+  // [PERF #3] Ticki memoizowane — nie tworzyć 180 Date objects przy każdym renderze
+  const ticks = useMemo(() => {
+    if (!axisStart || !axisEnd) return [];
+    const result = [];
+    for (let t = new Date(axisStart); t <= axisEnd; t.setHours(t.getHours() + scale.tick)) {
+      result.push(new Date(t));
+    }
+    return result;
+  }, [axisStart?.getTime(), axisEnd?.getTime(), scale.tick]);
+
+  // [PERF #1] computeLoads memoizowane — nie przeliczać przy każdym hover/tooltip/render
+  const loads = useMemo(
+    () => computeLoads(globalLookups.routingByProduct, allZP, wcSchedule, dates[0]),
+    [globalLookups.routingByProduct, allZP, wcSchedule, dates[0]]
   );
+  const maxUtil = Object.values(loads).length ? Math.max(...Object.values(loads).map(v => v.util)) : 0;
+
+  // [PERF #4] Pre-compute segment pixel X positions — oblicza się raz z planBase, NIE z displayZP
+  // Zmiana filtra nie wywołuje przeliczenia; wcSegments (lekkie) decyduje co pokazać
+  const segmentPx = useMemo(() => {
+    if (!axisStart) return new Map();
+    const axisMs = axisStart.getTime();
+    const map = new Map();
+    planBase.forEach(s2 => {
+      (s2.segments || []).forEach((seg, si) => {
+        const x  = LABEL_W + Math.max(0, (new Date(seg.segStart).getTime() - axisMs) / 3600000) * HOUR_W;
+        const x2 = LABEL_W + Math.max(0, (new Date(seg.segEnd).getTime()   - axisMs) / 3600000) * HOUR_W;
+        map.set(s2.zp_id + '-' + si, { x, x2 });
+      });
+    });
+    return map;
+  }, [planBase, axisStart?.getTime(), HOUR_W]);
+
+  // [PERF #5] Pre-compute tick pixel X — eliminuje xOf(t) per 180 ticków
+  const ticksPx = useMemo(() => {
+    if (!axisStart) return [];
+    const axisMs = axisStart.getTime();
+    return ticks.map(t => ({
+      t,
+      x: LABEL_W + (t.getTime() - axisMs) / 3600000 * HOUR_W,
+      isDay: t.getHours() === 0,
+      dn: DAY_NAMES[t.getDay()],
+    }));
+  }, [ticks, axisStart?.getTime(), HOUR_W]);
+
+  // [PERF #6] Pre-compute due date and planStart pixel X
+  const planStartPx = useMemo(
+    () => axisStart ? LABEL_W + Math.max(0, (planStartDt.getTime() - axisStart.getTime()) / 3600000) * HOUR_W : 0,
+    [planStartDt, axisStart?.getTime(), HOUR_W]
+  );
+  const duesPx = useMemo(
+    () => axisStart ? allDues.map(dt => LABEL_W + Math.max(0, (dt.getTime() - axisStart.getTime()) / 3600000) * HOUR_W) : [],
+    [allDues, axisStart?.getTime(), HOUR_W]
+  );
+
+  const panXRef = useRef(0); // aktualny panX podczas drag — bez re-renderu
+  const svgGroupRef = useRef(null); // ref na scrollowaną grupę SVG
 
   if (!dates.length) return <EmptyState icon="📅" title="Brak danych" sub="Wgraj pliki CSV" />;
 
@@ -148,43 +320,29 @@ export function GanttTab({ routing, zp, globalLookups, wcSchedule, subZP, fwdZP,
     return LABEL_W + Math.max(0, (new Date(dt) - axisStart) / 3600000) * HOUR_W;
   }
 
-  // Ticki
-  const ticks = [];
-  for (let t = new Date(axisStart); t <= axisEnd; t.setHours(t.getHours() + scale.tick)) {
-    ticks.push(new Date(t));
-  }
-
-  // Niedostępne strefy
-  const unavailZones = [];
-  const dayIter = new Date(axisStart);
-  while (dayIter <= axisEnd) {
-    allWC.forEach((wc, wi) => {
-      const avail = getAvail(wc, dayIter, wcSchedule);
-      const ds = new Date(dayIter); ds.setHours(0,0,0,0);
-      const de = new Date(dayIter); de.setHours(24,0,0,0);
-      if (avail === 0) unavailZones.push({ wi, x1: xOf(ds), x2: xOf(de) });
-      else if (avail < 24) {
-        const we = new Date(dayIter); we.setHours(avail, 0, 0, 0);
-        unavailZones.push({ wi, x1: xOf(we), x2: xOf(de) });
-      }
-    });
-    dayIter.setDate(dayIter.getDate() + 1);
-  }
-
-  const loads   = computeLoads(globalLookups.routingByProduct, allZP, wcSchedule, dates[0]);
-  const maxUtil = Object.values(loads).length ? Math.max(...Object.values(loads).map(v => v.util)) : 0;
-
   function onBgMouseDown(e) {
     const tag = e.target.tagName;
     const isBg = (tag === 'rect' && (e.target.getAttribute('fill') === 'transparent' || e.target.getAttribute('data-bg') === '1')) || tag === 'svg';
-    if (isBg) { panRef.current = { startX: e.clientX, startPanX: panX }; setIsPan(true); }
+    if (isBg) { panRef.current = { startX: e.clientX, startPanX: panXRef.current }; setIsPan(true); }
   }
   function onMouseMove(e) {
     if (!panRef.current) return;
     const dx = e.clientX - panRef.current.startX;
-    setPanX(Math.min(0, Math.max(-(contentW - 200), panRef.current.startPanX + dx)));
+    const newPanX = Math.min(0, Math.max(-(contentW - 200), panRef.current.startPanX + dx));
+    panXRef.current = newPanX;
+    // Przesuń SVG przez ref — bez re-renderu React
+    if (svgGroupRef.current) {
+      svgGroupRef.current.setAttribute('transform', `translate(${newPanX},0)`);
+    }
   }
-  function onMouseUp() { panRef.current = null; setIsPan(false); }
+  function onMouseUp() {
+    if (panRef.current) {
+      // Dopiero po puszczeniu myszy aktualizuj stan — jeden re-render
+      setPanX(panXRef.current);
+    }
+    panRef.current = null;
+    setIsPan(false);
+  }
 
   // Scrollbar poziomy
   const visibleW = (containerRef.current?.offsetWidth || 900) - LABEL_W;
@@ -194,7 +352,20 @@ export function GanttTab({ routing, zp, globalLookups, wcSchedule, subZP, fwdZP,
 
   return (
     <>
-      {TooltipEl}
+      <div ref={tooltipRef} style={{display:'none',position:'fixed',zIndex:9999,pointerEvents:'none',
+        background:'#1a2030',border:`1px solid ${T.border2}`,borderRadius:8,padding:'10px 14px',
+        minWidth:220,boxShadow:'0 8px 24px rgba(0,0,0,0.5)',fontSize:11}}>
+        <div data-tt="title" style={{fontWeight:700,color:T.accent,marginBottom:4,fontSize:12}}/>
+        <div data-tt="client" style={{color:T.text2,marginBottom:2}}/>
+        <div data-tt="op" style={{color:T.text3,marginBottom:6,fontSize:10}}/>
+        <div style={{display:'grid',gridTemplateColumns:'auto 1fr',gap:'2px 8px',fontSize:10}}>
+          <span style={{color:T.text3}}>Gniazdo</span><span data-tt="wc" style={{color:T.text,fontFamily:'monospace'}}/>
+          <span style={{color:T.text3}}>Czas</span><span data-tt="dur" style={{color:T.accent,fontWeight:600}}/>
+          <span style={{color:T.text3}}>Start</span><span data-tt="start" style={{color:T.text,fontFamily:'monospace'}}/>
+          <span style={{color:T.text3}}>Koniec</span><span data-tt="end" style={{color:T.text,fontFamily:'monospace'}}/>
+          <span style={{color:T.text3}}>Termin</span><span data-tt="due" style={{color:T.bn,fontFamily:'monospace'}}/>
+        </div>
+      </div>
       <div className={embedded ? 'gantt-tab gantt-tab--embedded' : undefined} style={embedded ? {display:'flex', flexDirection:'column', height:'100%'} : undefined}>
       {/* Controls */}
       <div style={{ display:'flex', alignItems:'center', gap:8, marginBottom:12, flexWrap:'wrap' }}>
@@ -204,8 +375,16 @@ export function GanttTab({ routing, zp, globalLookups, wcSchedule, subZP, fwdZP,
         </span>
         <div style={{ display:'flex', alignItems:'center', gap:6, background:T.surface2, padding:'4px 10px', borderRadius:8, border:`1px solid ${T.border}` }}>
           <span style={{ fontSize:11, color:T.text3 }}>Planuj od:</span>
-          <input type="date" value={planStart || '2026-05-22'}
-            onChange={e => onPlanStartChange && onPlanStartChange(e.target.value)}
+          <input type="date" value={localPlanStart}
+            onChange={e => {
+              const v = e.target.value;
+              setLocalPlanStart(v);
+              clearTimeout(debPlanRef.current);
+              debPlanRef.current = setTimeout(() => {
+                setCommittedPlanStart(v);
+                onPlanStartChange && onPlanStartChange(v);
+              }, 300);
+            }}
             style={{ fontSize:11, background:'transparent', border:'none', color:T.text, cursor:'pointer', outline:'none' }}/>
         </div>
         <div style={{ display:'flex', gap:2, background:T.surface2, borderRadius:8, padding:2, marginLeft:8 }}>
@@ -241,11 +420,34 @@ export function GanttTab({ routing, zp, globalLookups, wcSchedule, subZP, fwdZP,
         <input type="text" placeholder="Kod produktu..." value={filterProd} onChange={e => setFilterProd(e.target.value)}
           style={{ padding:'5px 10px', fontSize:12, borderRadius:6, border:`1px solid ${T.border2}`,
             background:T.surface2, color:T.text, outline:'none', width:200 }}/>
+        {heatmapFilter && !selectedZp && (
+          <button onClick={() => onHeatmapFilterChange && onHeatmapFilterChange(null)}
+            style={{ display:'inline-flex', alignItems:'center', gap:6, padding:'4px 10px',
+              background:'rgba(59,130,246,0.12)', color:'#60a5fa', border:'1px solid rgba(59,130,246,0.3)', borderRadius:6,
+              fontSize:12, fontWeight:600, cursor:'pointer' }}>
+            📊 {heatmapFilter.wc2}{heatmapFilter.wc ? ` › ${heatmapFilter.wc}` : ''}{heatmapFilter.date ? ` × ${heatmapFilter.date}` : ''} — wyczyść
+          </button>
+        )}
+        {selectedDate && !selectedZp && (
+          <button onClick={() => onDateSelect && onDateSelect(null)}
+            style={{ display:'inline-flex', alignItems:'center', gap:6, padding:'4px 10px',
+              background:T.accentBg, color:T.accent, border:`1px solid ${T.accent}`, borderRadius:6,
+              fontSize:12, fontWeight:600, cursor:'pointer' }}>
+            📅 {selectedDate}{selectedWC ? ` · ${selectedWC}` : ''} — pokaż wszystkie
+          </button>
+        )}
+        {selectedWC && !selectedZp && !selectedDate && (
+          <button onClick={() => setSelectedWC(null)}
+            style={{ padding:'5px 10px', fontSize:12, borderRadius:6, border:`1px solid ${T.accent}`,
+              background:T.accentBg, color:T.accent, cursor:'pointer', fontWeight:600 }}>
+            🔧 {selectedWC} — pokaż wszystkie
+          </button>
+        )}
         {selectedZp && (
           <button onClick={() => setSelectedZp(null)}
             style={{ padding:'5px 10px', fontSize:12, borderRadius:6, border:`1px solid ${T.accent}`,
               background:T.accentBg, color:T.accent, cursor:'pointer', fontWeight:600 }}>
-            ✕ {selectedZp} — pokaż wszystkie
+            {selectedWC ? `🔧 ${selectedWC} › ` : ''}✕ {selectedZp} — wróć
           </button>
         )}
         {(filterZS||filterProd) && <button onClick={() => { setFilterZS(''); setFilterProd(''); }}
@@ -260,12 +462,15 @@ export function GanttTab({ routing, zp, globalLookups, wcSchedule, subZP, fwdZP,
       <div style={{ marginBottom:8 }}>
         <div style={{ display:'flex', gap:12, fontSize:11, color:T.text3, flexWrap:'wrap', alignItems:'center',
           maxHeight:64, overflowY:'auto', paddingBottom:2 }}>
-          {allZP.map(zp2 => {
-            const col = globalLookups.zpColorMap[zp2.zp_id] || T.text3;
-            return <span key={zp2.zp_id} style={{display:'flex',alignItems:'center',gap:4,flexShrink:0}}>
-              <Dot color={col} size={7}/>{zp2.zs_id || zp2.zp_id}
-            </span>;
-          })}
+          {allZP.length <= 80
+            ? allZP.map(zp2 => {
+                const col = globalLookups.zpColorMap[zp2.zp_id] || T.text3;
+                return <span key={zp2.zp_id} style={{display:'flex',alignItems:'center',gap:4,flexShrink:0}}>
+                  <Dot color={col} size={7}/>{zp2.zs_id || zp2.zp_id}
+                </span>;
+              })
+            : <span style={{color:T.text3,fontStyle:'italic'}}>Legenda ukryta — {allZP.length} ZP (użyj filtrów)</span>
+          }
         </div>
         <div style={{ display:'flex', gap:12, fontSize:11, color:T.text3, marginTop:4 }}>
           <span style={{display:'flex',alignItems:'center',gap:5}}>
@@ -286,8 +491,8 @@ export function GanttTab({ routing, zp, globalLookups, wcSchedule, subZP, fwdZP,
             borderRadius: embedded ? 0 : 12,
             overflowY: 'auto',
             overflowX: 'hidden',
-            height: embedded ? '100%' : 'calc(100vh - 240px)',
-            minHeight: embedded ? 0 : 380,
+            height: embedded ? '100%' : 'calc(100vh - 160px)',
+            minHeight: embedded ? 0 : 500,
             cursor: isPan ? 'grabbing' : 'default',
             userSelect: 'none',
             position: 'relative',
@@ -312,28 +517,18 @@ export function GanttTab({ routing, zp, globalLookups, wcSchedule, subZP, fwdZP,
 
                 {/* SCROLLOWANA zawartość — przesuwa się X i Y */}
                 <g clipPath="url(#ganttClip)">
-                  <g transform={`translate(${panX},0)`}>
+                  <g ref={svgGroupRef} transform={`translate(${panX},0)`}>
 
-                    {allWC.map((w,wi) => (
-                      <rect key={`bg-${w}`} x={LABEL_W} y={TOP+wi*LANE_H}
-                        width={contentW+40} height={LANE_H}
-                        fill={wi%2===0?T.surface:T.surface2}/>
-                    ))}
-                    {allWC.map((_,wi) => (
-                      <line key={`hl-${wi}`} x1={LABEL_W} y1={TOP+(wi+1)*LANE_H}
-                        x2={LABEL_W+contentW+40} y2={TOP+(wi+1)*LANE_H}
-                        stroke={T.border} strokeWidth="0.5"/>
-                    ))}
-                    {unavailZones.map((z,zi) => (
-                      <rect key={`uz${zi}`} x={z.x1} y={TOP+z.wi*LANE_H+1}
-                        width={Math.max(z.x2-z.x1,0)} height={LANE_H-2}
-                        fill="rgba(0,0,0,0.22)"/>
-                    ))}
-                    {ticks.map((t,ti) => {
-                      const x = xOf(t);
-                      const isDay = t.getHours()===0;
-                      const dn = DAY_NAMES[t.getDay()];
-                      return <g key={ti}>
+                    {allWC.slice(visRows[0], visRows[1]).map((w, li) => { const wi = visRows[0]+li; return (
+                      <g key={`bg-${w}`}>
+                        <rect x={LABEL_W} y={TOP+wi*LANE_H} width={contentW+40} height={LANE_H}
+                          fill={wi%2===0?T.surface:T.surface2}/>
+                        <line x1={LABEL_W} y1={TOP+(wi+1)*LANE_H} x2={LABEL_W+contentW+40} y2={TOP+(wi+1)*LANE_H}
+                          stroke={T.border} strokeWidth="0.5"/>
+                      </g>
+                    );})}
+                    {ticksPx.map(({t,x,isDay,dn},ti) => (
+                      <g key={ti}>
                         <line x1={x} y1={TOP-8} x2={x} y2={TOP+allWC.length*LANE_H}
                           stroke={isDay?T.border2:T.border} strokeWidth={isDay?1.5:0.5}/>
                         {isDay && <text x={x+4} y={TOP-30} fontSize="11" fontWeight="600" fill={T.text2}>
@@ -342,66 +537,64 @@ export function GanttTab({ routing, zp, globalLookups, wcSchedule, subZP, fwdZP,
                         {!isDay && <text x={x+3} y={TOP-14} fontSize="9" fill={T.text3}>
                           {String(t.getHours()).padStart(2,'0')}:00
                         </text>}
-                      </g>;
-                    })}
-                    {(() => {
-                      const px = xOf(planStartDt);
-                      return <g>
-                        <line x1={px} y1={TOP-8} x2={px} y2={TOP+allWC.length*LANE_H}
-                          stroke={T.accent} strokeWidth="2" opacity="0.9"/>
-                        <rect x={px+3} y={TOP-22} width="30" height="14" rx="3" fill={T.accentBg}/>
-                        <text x={px+6} y={TOP-12} fontSize="9" fontWeight="700" fill={T.accent}>dziś</text>
-                      </g>;
-                    })()}
-                    {allDues.map((dt,i) => {
-                      const dx = xOf(dt);
-                      return <g key={`due${i}`}>
+                      </g>
+                    ))}
+                    <g>
+                      <line x1={planStartPx} y1={TOP-8} x2={planStartPx} y2={TOP+allWC.length*LANE_H}
+                        stroke={T.accent} strokeWidth="2" opacity="0.9"/>
+                      <rect x={planStartPx+3} y={TOP-22} width="30" height="14" rx="3" fill={T.accentBg}/>
+                      <text x={planStartPx+6} y={TOP-12} fontSize="9" fontWeight="700" fill={T.accent}>dziś</text>
+                    </g>
+                    {duesPx.map((dx,i) => (
+                      <g key={'due'+i}>
                         <line x1={dx} y1={TOP-8} x2={dx} y2={TOP+allWC.length*LANE_H}
                           stroke={T.bn} strokeWidth="2" strokeDasharray="5 3" opacity="0.9"/>
                         <rect x={dx+3} y={TOP-22} width="38" height="14" rx="3" fill={T.bnBg}/>
                         <text x={dx+6} y={TOP-12} fontSize="9" fontWeight="700" fill={T.bn}>{dates[i]?.slice(5)}</text>
-                      </g>;
-                    })}
-                    {displayZP.map(s2 => {
-                      const wi = allWC.indexOf(s2.workcenter);
-                      if (wi<0) return null;
-                      const col = globalLookups.zpColorMap[s2.parent_zp] || globalLookups.zpColorMap[s2.zp_id] || T.text3;
-                      const y = TOP+wi*LANE_H+5, bH = LANE_H-10;
-                      return (s2.segments||[]).map((seg,si) => {
-                        const x   = xOf(seg.segStart);
-                        const x2  = xOf(seg.segEnd);
-                        const wpx = Math.max(x2-x, 2);
-                        const dueDtLocal = allDues[dates.indexOf(s2.due_date)];
-                        const isOver = dueDtLocal && new Date(seg.segEnd) > dueDtLocal;
-                        const isLast = si===s2.segments.length-1;
-                        const zpSt = zpStatus && zpStatus.find(st => st.zp_id === (s2.parent_zp || s2.zp_id));
-                        const tocZone = zpSt ? (zpSt.toc && zpSt.toc.zone) : (isOver ? 'black' : 'green');
-                        const borderCol = tocZone==='black'?T.bn:tocZone==='red'?T.bn:tocZone==='yellow'?T.warn:'transparent';
-                        const borderW   = tocZone==='green'||!tocZone ? 0 : 2.5;
-                        return <g key={`${s2.sub_id}-${si}`}>
-                          <rect x={x} y={y} width={wpx} height={bH} rx="4"
-                            fill={col}
-                            opacity={selectedZp && selectedZp !== (s2.parent_zp || s2.zp_id) ? 0.25 : 0.9}
-                            stroke={selectedZp === (s2.parent_zp || s2.zp_id) ? '#fff' : borderCol}
-                            strokeWidth={selectedZp === (s2.parent_zp || s2.zp_id) ? 2 : borderW}
-                            style={{cursor:'pointer'}}
-                            onClick={() => setSelectedZp(prev => prev === (s2.parent_zp || s2.zp_id) ? null : (s2.parent_zp || s2.zp_id))}
-                            onMouseEnter={e => setTooltip({ x: e.clientX, y: e.clientY, op: s2 })}
-                            onMouseLeave={() => setTooltip(null)}
-                          />
-                          {isLast && wpx>30 && <text x={x+Math.min(wpx/2,38)} y={y+bH/2-4}
-                            fontSize={wpx>52?10:9} fontWeight="600" fill="white"
-                            textAnchor="middle" style={{pointerEvents:'none'}}>{s2.zs_id || s2.zp_id}</text>}
-                          {isLast && wpx>56 && <text x={x+Math.min(wpx/2,38)} y={y+bH/2+9}
-                            fontSize="9" fill="rgba(255,255,255,0.75)"
-                            textAnchor="middle" style={{pointerEvents:'none'}}>{s2.durH.toFixed(1)}h</text>}
-                          {!isLast && (()=>{
-                            const ns=s2.segments[si+1]; if(!ns) return null;
-                            const nx=xOf(ns.segStart), cy=y+bH/2;
-                            return <line x1={x+wpx} y1={cy} x2={nx} y2={cy}
-                              stroke={col} strokeWidth="1.5" strokeDasharray="3 3" opacity="0.5"/>;
-                          })()}
-                        </g>;
+                      </g>
+                    ))}
+                    {Array.from({length: visRows[1]-visRows[0]}, (_, li) => {
+                      const wi = visRows[0]+li;
+                      const rows = wcSegments.get(wi); if (!rows) return null;
+                      return rows.map(s2 => {
+                        const col = globalLookups.zpColorMap[s2.parent_zp] || globalLookups.zpColorMap[s2.zp_id] || T.text3;
+                        const y = TOP+wi*LANE_H+5, bH = LANE_H-10;
+                        const dueDtLocal = dueDateMap.get(s2.due_date);
+                        const zpSt  = zpStatusMap.get(s2.parent_zp || s2.zp_id);
+                        const zpKey = s2.parent_zp || s2.zp_id.split('/')[0];
+                        return (s2.segments||[]).map((seg,si) => {
+                          const px  = segmentPx.get(s2.zp_id + '-' + si); if (!px) return null;
+                          const { x, x2 } = px;
+                          const wpx = Math.max(x2-x, 2);
+                          const isOver = dueDtLocal && seg.segEnd && new Date(seg.segEnd) > dueDtLocal;
+                          const isLast = si===s2.segments.length-1;
+                          const tocZone = zpSt ? (zpSt.toc && zpSt.toc.zone) : (isOver ? 'black' : 'green');
+                          const borderCol = tocZone==='black'?T.bn:tocZone==='red'?T.bn:tocZone==='yellow'?T.warn:'transparent';
+                          const borderW   = tocZone==='green'||!tocZone ? 0 : 2.5;
+                          return <g key={s2.zp_id + '-' + si}>
+                            <rect x={x} y={y} width={wpx} height={bH} rx="4"
+                              fill={col}
+                              opacity={selectedZp && selectedZp !== zpKey ? 0.25 : 0.9}
+                              stroke={selectedZp === zpKey ? '#fff' : borderCol}
+                              strokeWidth={selectedZp === zpKey ? 2 : borderW}
+                              style={{cursor:'pointer'}}
+                              onClick={() => setSelectedZp(prev => prev === zpKey ? null : zpKey)}
+                              onMouseEnter={e => showTooltip(e, s2)}
+                              onMouseLeave={hideTooltip}
+                            />
+                            {isLast && wpx>30 && <text x={x+Math.min(wpx/2,38)} y={y+bH/2-4}
+                              fontSize={wpx>52?10:9} fontWeight="600" fill="white"
+                              textAnchor="middle" style={{pointerEvents:'none'}}>{s2.zs_id || s2.zp_id}</text>}
+                            {isLast && wpx>56 && <text x={x+Math.min(wpx/2,38)} y={y+bH/2+9}
+                              fontSize="9" fill="rgba(255,255,255,0.75)"
+                              textAnchor="middle" style={{pointerEvents:'none'}}>{s2.durH.toFixed(1)}h</text>}
+                            {!isLast && (() => {
+                              const nxPx = segmentPx.get(s2.zp_id + '-' + (si+1)); if (!nxPx) return null;
+                              return <line x1={x+wpx} y1={y+bH/2} x2={nxPx.x} y2={y+bH/2}
+                                stroke={col} strokeWidth="1.5" strokeDasharray="3 3" opacity="0.5"/>;
+                            })()}
+                          </g>;
+                        });
                       });
                     })}
                   </g>
@@ -412,16 +605,20 @@ export function GanttTab({ routing, zp, globalLookups, wcSchedule, subZP, fwdZP,
                 {/* STAŁA lewa kolumna — przesuwa się tylko w Y razem z panY */}
                 <rect x="0" y="0" width={LABEL_W} height="10000" fill={T.ganttBg}/>
                 <g>
-                  {allWC.map((w,wi) => {
+                  {allWC.slice(visRows[0], visRows[1]).map((w, li) => {
+                    const wi = visRows[0]+li;
                     const ld = loads[w]||{util:0};
                     const isBn = Math.abs(ld.util-maxUtil)<0.001 && ld.util>0.85;
-                    return <g key={`lbl-${w}`}>
+                    const isSel = selectedWC === w;
+                    return <g key={`lbl-${w}`} style={{cursor:'pointer'}}
+                      onClick={() => { setSelectedWC(prev => prev === w ? null : w); setSelectedZp(null); }}>
                       <rect x="0" y={TOP+wi*LANE_H} width={LABEL_W} height={LANE_H}
-                        fill={isBn?'rgba(248,113,113,0.10)':T.surface2}/>
+                        fill={isSel ? T.accentBg : isBn ? 'rgba(248,113,113,0.10)' : T.surface2}/>
+                      {isSel && <rect x="0" y={TOP+wi*LANE_H} width={3} height={LANE_H} fill={T.accent}/>}
                       <text x="12" y={TOP+wi*LANE_H+LANE_H/2-7} fontSize="12" fontWeight="700"
-                        fill={isBn?T.bn:T.text}>{w}</text>
+                        fill={isSel ? T.accent : isBn ? T.bn : T.text}>{w}</text>
                       <text x="12" y={TOP+wi*LANE_H+LANE_H/2+9} fontSize="10"
-                        fill={isBn?T.bn:T.text3}>{wcNameMap[w] || ""}</text>
+                        fill={isSel ? T.accent : isBn ? T.bn : T.text3}>{wcNameMap[w] || ""}</text>
                     </g>;
                   })}
                 </g>
@@ -448,68 +645,6 @@ export function GanttTab({ routing, zp, globalLookups, wcSchedule, subZP, fwdZP,
           )}
         </div>
       </div>
-
-      {/* TOC Status — tylko poza PlanTab */}
-      {!embedded && zpStatus && zpStatus.length > 0 && (
-        <div style={{ ...s.card, marginTop:12 }}>
-          <div style={s.cardTitle}>Status ZP — TOC Buffer Management</div>
-          <div style={{ overflowX:'auto' }}>
-            <table style={{ width:'100%', borderCollapse:'collapse', fontSize:12 }}>
-              <thead><tr>
-                {['ZP / ZS','Produkt','Due date','Planowany koniec','Opóźnienie','Bufor %','Status'].map(h => (
-                  <th key={h} style={{ fontSize:10, fontWeight:600, letterSpacing:'.07em',
-                    textTransform:'uppercase', color:T.text3, padding:'0 8px 8px',
-                    textAlign:'left', borderBottom:`1px solid ${T.border}` }}>{h}</th>
-                ))}
-              </tr></thead>
-              <tbody>
-                {[...zpStatus].sort((a,b) => {
-                  const ord = {black:0,red:1,yellow:2,green:3};
-                  return (ord[a.toc.zone]??4) - (ord[b.toc.zone]??4);
-                }).map((st, i) => {
-                  const col = globalLookups.zpColorMap[st.zp_id] || T.text3;
-                  const tc  = tocColor(st.toc.zone);
-                  return (
-                    <tr key={i} style={{ background: ['black','red'].includes(st.toc.zone) ? 'rgba(248,113,113,0.04)' : 'transparent' }}>
-                      <td style={{ padding:'7px 8px', borderBottom:`1px solid ${T.border}` }}>
-                        <span style={{ display:'flex', flexDirection:'column', gap:2 }}>
-                          <span style={{ display:'flex', alignItems:'center', gap:5 }}>
-                            <Dot color={col} size={7}/>
-                            <strong>{st.zs_id ? `${st.zs_id}/${st.pozycja||''}` : st.zp_id}</strong>
-                          </span>
-                        </span>
-                      </td>
-                      <td style={{ padding:'7px 8px', borderBottom:`1px solid ${T.border}`, color:T.text2 }}>{st.product}</td>
-                      <td style={{ padding:'7px 8px', borderBottom:`1px solid ${T.border}`, fontFamily:'monospace', color:T.text2 }}>{st.due_date}</td>
-                      <td style={{ padding:'7px 8px', borderBottom:`1px solid ${T.border}`, fontFamily:'monospace',
-                        color: st.delayH > 0 ? T.bn : T.ok, fontWeight: st.delayH>0?600:400 }}>
-                        {st.realEnd ? fmtDt(st.realEnd) : '—'}
-                      </td>
-                      <td style={{ padding:'7px 8px', borderBottom:`1px solid ${T.border}`, fontFamily:'monospace',
-                        color: st.delayH>0 ? T.bn : T.ok, fontWeight:600 }}>
-                        {st.delayDays > 0 ? `+${st.delayDays}d` : '✓ OK'}
-                      </td>
-                      <td style={{ padding:'7px 8px', borderBottom:`1px solid ${T.border}` }}>
-                        <div style={{ height:6, background:T.surface3, borderRadius:3, width:80, overflow:'hidden' }}>
-                          <div style={{ height:'100%', width:`${Math.min(100,Math.round(st.toc.consumed*100))}%`,
-                            background: tc.border, borderRadius:3, transition:'width .3s' }}/>
-                        </div>
-                        <span style={{ fontSize:10, color:T.text3 }}>{Math.round(st.toc.consumed*100)}%</span>
-                      </td>
-                      <td style={{ padding:'7px 8px', borderBottom:`1px solid ${T.border}` }}>
-                        <span style={{ display:'inline-flex', padding:'2px 8px', borderRadius:5,
-                          fontSize:10, fontWeight:600, background:tc.bg, color:tc.text }}>
-                          {st.toc.label}
-                        </span>
-                      </td>
-                    </tr>
-                  );
-                })}
-              </tbody>
-            </table>
-          </div>
-        </div>
-      )}
 
       {/* Tabela pod-ZP */}
       {!embedded && subZP && subZP.length > 0 && (

@@ -187,6 +187,7 @@ export default function App() {
   const [routing, setRouting]       = useState([]);
   const [zp, setZP]                 = useState([]);
   const [wcSchedule, setWcSchedule] = useState({});
+  const [wcScheduleVersion, setWcScheduleVersion] = useState(0);
   const [wcToWc2, setWcToWc2]       = useState({});
   const [wcCapacity, setWcCapacity] = useState(WC_DAILY_CAPACITY);
   const [subZP, setSubZP]           = useState([]);
@@ -194,16 +195,20 @@ export default function App() {
   const [zpStatus, setZpStatus]     = useState([]);
   const [ganttDirty, setGanttDirty] = useState(true);
   const [planStart, setPlanStart]   = useState(() => new Date().toISOString().slice(0,10));
+  const [selectedWC, setSelectedWC] = useState(null);
+  const [selectedDate, setSelectedDate] = useState(null);
+  const [heatmapFilter, setHeatmapFilter] = useState(null);
   const [hybridMode, setHybridMode] = useState(false);
   const [scheduleConfig, setScheduleConfig] = useState({
     vipBufferDays:   2,
-    urgencyMethod:   'cr',
+    urgencyMethod:   'atc',
     autoPlanStart:   true,
     defaultSchedule: [16,16,16,16,16,0,0],
     horizonDays:     14,
     brigadeSchedule: initBrigadeSchedule(),
     schedulingMode:  'asap',
     safetyBufferDays: 1,
+    shiftStart:      6,
   });
 
   const [historyData, setHistoryData]         = useState([]);
@@ -224,6 +229,7 @@ export default function App() {
 
   function updateSchedule(s) {
     setWcSchedule(s);
+    setWcScheduleVersion(v => v + 1);
     setGanttDirty(true);
   }
 
@@ -234,9 +240,10 @@ export default function App() {
         ...Object.keys(wcToWc2)
       ])].sort();
       setWcSchedule(prev => buildWcSchedule(wcs, planStart, zp, scheduleConfig.horizonDays, prev, wcCapacity));
+      setWcScheduleVersion(v => v + 1);
       setGanttDirty(true);
     }
-  }, [routing.length, planStart, zp.length, JSON.stringify(Object.keys(wcToWc2).sort())]);
+  }, [routing.length, planStart, zp.length, Object.keys(wcToWc2).length]);
 
   const globalLookups = useMemo(() => {
     const routingByProduct = {};
@@ -267,7 +274,7 @@ export default function App() {
     if (zp.length > 0 && Object.keys(rl).length > 0) {
       recalcGantt(wcSchedule);
     }
-  }, [zp.length, routing.length, JSON.stringify(wcSchedule), planStart, scheduleConfig.schedulingMode]);
+  }, [zp.length, routing.length, wcScheduleVersion, planStart, scheduleConfig.schedulingMode]);
 
   function recalcGantt(currentWcSchedule) {
     const rl  = globalLookups.routingByProduct;
@@ -424,6 +431,7 @@ export default function App() {
       setZP(zpList);
       setWcToWc2(prev => ({ ...prev, ...newWcToWc2 }));
       setWcSchedule(newSched);
+      setWcScheduleVersion(v => v + 1);
       setGanttDirty(true);
       setPlanStart(ps);
       setTab('dashboard');
@@ -448,6 +456,7 @@ export default function App() {
       setZP(zpFiltered);
       setWcToWc2(prev => ({ ...prev, ...newWcToWc2 }));
       setWcSchedule(newSched);
+      setWcScheduleVersion(v => v + 1);
       setGanttDirty(true);
       if (parsed.length) setTab('heatmap_plan');
       return { zpList: parsed };
@@ -559,11 +568,13 @@ export default function App() {
           </div>
         )}
         {tab === 'import'       && <ImportTab erpZp={erpZp} zpStatusData={zpStatusData} onLoad={handleLoad} onExportZpStatus={handleExportZpStatus} hybridMode={hybridMode} onHybridModeChange={setHybridMode} />}
-        {tab === 'plan'         && <PlanTab routing={routing} zp={zp} globalLookups={globalLookups} wcSchedule={wcSchedule} subZP={subZP} fwdZP={fwdZP} zpStatus={activeZpStatus} ganttDirty={ganttDirty} onRecalc={() => recalcGantt(wcSchedule)} onScheduleChange={updateSchedule} planStart={planStart} onPlanStartChange={setPlanStart} />}
+        <div style={{display: tab === 'plan' ? 'contents' : 'none'}}>
+          <PlanTab routing={routing} zp={zp} globalLookups={globalLookups} wcSchedule={wcSchedule} subZP={subZP} fwdZP={fwdZP} zpStatus={activeZpStatus} ganttDirty={ganttDirty} onRecalc={() => recalcGantt(wcSchedule)} onScheduleChange={updateSchedule} planStart={planStart} onPlanStartChange={setPlanStart} selectedWC={selectedWC} onWCSelect={setSelectedWC} selectedDate={selectedDate} onDateSelect={setSelectedDate} heatmapFilter={heatmapFilter} onHeatmapFilterChange={setHeatmapFilter} />
+        </div>
         {tab === 'bottleneck'   && <BottleneckTab routing={routing} zp={filteredZP} globalLookups={globalLookups} wcSchedule={wcSchedule} subZP={subZP} />}
         {tab === 'routing'      && <RoutingTab routing={routing} zp={zp} globalLookups={globalLookups} />}
         {tab === 'heatmap'      && <HeatmapTab routing={routing} zp={filteredZP} globalLookups={globalLookups} wcSchedule={wcSchedule} />}
-        {tab === 'heatmap_plan' && <HeatmapPlanTab fwdZP={fwdZP} routing={routing} wcSchedule={wcSchedule} wcToWc2={wcToWc2} wcCapacity={wcCapacity} onScheduleChange={updateSchedule} onRecalc={() => recalcGantt(wcSchedule)} onOptimize={handleOptimize} isOptimizing={isOptimizing} ganttDirty={ganttDirty} isScheduling={isScheduling} planStart={planStart} onPlanStartChange={setPlanStart} schedulingMode={scheduleConfig.schedulingMode} onSchedulingModeChange={mode => { setScheduleConfig(c => ({ ...c, schedulingMode: mode })); setGanttDirty(true); }} />}
+        {tab === 'heatmap_plan' && <HeatmapPlanTab fwdZP={fwdZP} routing={routing} wcSchedule={wcSchedule} wcToWc2={wcToWc2} wcCapacity={wcCapacity} onScheduleChange={updateSchedule} onRecalc={() => recalcGantt(wcSchedule)} onOptimize={handleOptimize} isOptimizing={isOptimizing} ganttDirty={ganttDirty} isScheduling={isScheduling} planStart={planStart} onPlanStartChange={setPlanStart} schedulingMode={scheduleConfig.schedulingMode} onSchedulingModeChange={mode => { setScheduleConfig(c => ({ ...c, schedulingMode: mode })); setGanttDirty(true); }} heatmapFilter={heatmapFilter} onHeatmapFilterChange={setHeatmapFilter} />}
         {tab === 'flow_matrix'  && <FlowMatrixTab fwdZP={fwdZP} routing={routing} wcToWc2={wcToWc2} wcSchedule={wcSchedule} />}
         {tab === 'swimlane'     && <SwimlaneTab routing={routing} zp={filteredZP} globalLookups={globalLookups} wcSchedule={wcSchedule} />}
         {tab === 'sankey'       && <SankeyTab routing={routing} zp={filteredZP} globalLookups={globalLookups} wcSchedule={wcSchedule} />}

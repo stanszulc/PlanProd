@@ -1,4 +1,4 @@
-import { useState, useMemo } from 'react';
+import { useState, useMemo, useRef, useEffect } from 'react';
 import { T, s } from '../../constants/theme.js';
 import { localDateStr } from '../../utils/scheduler.js';
 import { EmptyState } from '../common/EmptyState.jsx';
@@ -29,16 +29,52 @@ const BRIGADE_CAPACITY = {
   'Szlifiernia Stal':      8.0,
 };
 
-export function HeatmapPlanTab({ fwdZP = [], routing = [], wcSchedule = {}, onScheduleChange, onRecalc, onOptimize, isOptimizing, ganttDirty, isScheduling, planStart, onPlanStartChange, schedulingMode = 'asap', onSchedulingModeChange }) {
+export function HeatmapPlanTab({ fwdZP = [], routing = [], wcSchedule = {}, onScheduleChange, onRecalc, onOptimize, isOptimizing, ganttDirty, isScheduling, planStart, onPlanStartChange, schedulingMode = 'asap', onSchedulingModeChange, heatmapFilter, onHeatmapFilterChange }) {
 
   const [showDetail, setShowDetail] = useState(false);
   const [expanded,   setExpanded]   = useState(new Set());
   const [mode,       setMode]       = useState('h');
   const [groupBy,       setGroupBy]       = useState('plan');
   const [expandedBr,    setExpandedBr]    = useState(new Set());
-  const [filterWc2,     setFilterWc2]     = useState(null); // aktywny filtr gniazda
-  const [filterCell,    setFilterCell]    = useState(null);
-  const [tooltip,       setTooltip]       = useState(null); // { wc2, date, x, y, zps } // { wc2, date } aktywny filtr komórki
+  // Filtr gniazda/komórki — kontrolowany z App.jsx (przeżywa zmianę zakładki)
+  const filterWc2 = heatmapFilter && !heatmapFilter.date ? heatmapFilter.wc2 : null;
+  const filterCell = heatmapFilter && heatmapFilter.date
+    ? { wc2: heatmapFilter.wc2, wc: heatmapFilter.wc, date: heatmapFilter.date }
+    : null;
+  function setFilterWc2(valOrFn) {
+    const v = typeof valOrFn === 'function' ? valOrFn(filterWc2) : valOrFn;
+    onHeatmapFilterChange && onHeatmapFilterChange(v ? { wc2: v } : null);
+  }
+  function setFilterCell(valOrFn) {
+    const prev = filterCell;
+    const cell = typeof valOrFn === 'function' ? valOrFn(prev) : valOrFn;
+    onHeatmapFilterChange && onHeatmapFilterChange(cell ? { wc2: cell.wc2, wc: cell.wc, date: cell.date } : null);
+  }
+  const tooltipRef = useRef(null);
+  function showTooltipHM(e, titleText, zps) {
+    const el = tooltipRef.current; if (!el) return;
+    const r = e.currentTarget.getBoundingClientRect();
+    el.style.left    = (r.right + 12) + 'px';
+    el.style.top     = (r.top - 8)   + 'px';
+    el.style.display = 'block';
+    const total = zps.reduce((s, z) => s + (z.durH || 0), 0);
+    el.querySelector('[data-tt="title"]').textContent =
+      titleText + (zps.length > 0 ? ` — ${total.toFixed(1)}h łącznie` : '');
+    const listEl = el.querySelector('[data-tt="list"]');
+    if (!zps.length) {
+      listEl.innerHTML = '<div style="color:#94a3b8">Brak operacji</div>';
+    } else {
+      listEl.innerHTML = zps.map(z =>
+        `<div style="display:flex;justify-content:space-between;gap:12px;padding:2px 0;border-bottom:1px solid rgba(148,163,184,0.15)">
+          <span style="color:#cbd5e1;font-family:monospace;font-size:10px">${z.id}</span>
+          <span style="color:#94a3b8;white-space:nowrap">${z.klient||''}</span>
+          <span style="color:#f87171;font-family:monospace;font-size:10px">${(z.due_date||'').slice(5)}</span>
+          <span style="color:#60a5fa;font-weight:600;white-space:nowrap">${z.durH?.toFixed(1)||''}h</span>
+        </div>`
+      ).join('');
+    }
+  }
+  function hideTooltipHM() { if (tooltipRef.current) tooltipRef.current.style.display = 'none'; }
 
   // wc → { group, name }
   const wcMeta = useMemo(() => {
@@ -62,6 +98,28 @@ export function HeatmapPlanTab({ fwdZP = [], routing = [], wcSchedule = {}, onSc
     });
     return map;
   }, [routing.length]);
+
+  // [PERF] Pre-computed ZP list per cell (wc2|date and wc|date) — O(1) lookup at hover
+  const zpsByCellMap = useMemo(() => {
+    const map = {};
+    fwdZP.forEach(op => {
+      const wc  = op.workcenter;
+      const wc2 = wcMeta[wc]?.group || wc;
+      const id  = op.parent_zp || op.zp_id;
+      const entry = { id, klient: op.klient || op.zp_id, durH: op.durH, due_date: op.due_date };
+      (op.segments || []).forEach(seg => {
+        if (!seg.segStart) return;
+        const d    = localDateStr(seg.segStart);
+        const bKey = wc2 + '|' + d;
+        const mKey = wc  + '|' + d;
+        if (!map[bKey]) map[bKey] = { zps: [], seen: new Set() };
+        if (!map[bKey].seen.has(id)) { map[bKey].seen.add(id); map[bKey].zps.push(entry); }
+        if (!map[mKey]) map[mKey] = { zps: [], seen: new Set() };
+        if (!map[mKey].seen.has(id)) { map[mKey].seen.add(id); map[mKey].zps.push(entry); }
+      });
+    });
+    return map;
+  }, [fwdZP, wcMeta]);
 
   const { loadMap, brigadeLoadMap, dates, groups, lateKeys, lateBrigadeKeys, weekendSet } = useMemo(() => {
     const loadMap     = {};
@@ -280,16 +338,14 @@ export function HeatmapPlanTab({ fwdZP = [], routing = [], wcSchedule = {}, onSc
   const [editingCapVal, setEditingCapVal] = useState('');
 
   // Capacity brygady = suma godzin jej maszyn z wcSchedule
-  // Fallback do BRIGADE_CAPACITY gdy maszyny nie mają danych
+  // Fallback do BRIGADE_CAPACITY tylko gdy brak maszyn w meta (nie gdy weekend = 0)
   function getBrigadeCapH(wc2, dateStr) {
-    if (weekendSet.has(dateStr)) return 0;
-    // Użyj wcMeta — zawiera WSZYSTKIE maszyny z routingu, nie tylko te z obciążeniem
     const wcs = Object.entries(wcMeta)
       .filter(([, meta]) => meta.group === wc2)
       .map(([wc]) => wc);
-    if (!wcs.length) return BRIGADE_CAPACITY[wc2] ?? 0;
+    if (!wcs.length) return weekendSet.has(dateStr) ? 0 : (BRIGADE_CAPACITY[wc2] ?? 0);
     const sum = wcs.reduce((s, wc) => s + getWcH(wc, dateStr), 0);
-    return Math.round((sum > 0 ? sum : (BRIGADE_CAPACITY[wc2] ?? 0)) * 10) / 10;
+    return Math.round(sum * 10) / 10;
   }
 
   // +8h/-8h → zapisuje per-date do wcSchedule (już jest per-date po refaktorze App.jsx)
@@ -372,36 +428,7 @@ export function HeatmapPlanTab({ fwdZP = [], routing = [], wcSchedule = {}, onSc
     });
   }
 
-  const TooltipEl = tooltip && (
-    <div style={{
-      position: 'fixed', zIndex: 9999, pointerEvents: 'none',
-      left: tooltip.x + 12, top: tooltip.y - 8,
-      background: '#1a2030', border: `1px solid ${T.border2}`,
-      borderRadius: 8, padding: '8px 12px', minWidth: 200, maxWidth: 320,
-      boxShadow: '0 8px 24px rgba(0,0,0,0.5)', fontSize: 11,
-    }}>
-      <div style={{ fontWeight: 700, color: T.accent, marginBottom: 6, fontSize: 12 }}>
-        {tooltip.wc2} × {tooltip.date}
-        {tooltip.zps.length > 0 && (
-          <span style={{ marginLeft: 8, fontSize: 11, color: T.text3, fontWeight: 400 }}>
-            — {tooltip.zps.reduce((s, z) => s + (z.durH || 0), 0).toFixed(1)}h łącznie
-          </span>
-        )}
-      </div>
-      {tooltip.zps.length === 0
-        ? <div style={{ color: T.text3 }}>Brak operacji</div>
-        : tooltip.zps.map(z => (
-          <div key={z.id} style={{ display: 'flex', justifyContent: 'space-between', gap: 12,
-            padding: '2px 0', borderBottom: `1px solid ${T.border2}`, color: T.text }}>
-            <span style={{ color: T.text2, fontFamily: 'monospace', fontSize: 10 }}>{z.id}</span>
-            <span style={{ color: T.text3, whiteSpace: 'nowrap' }}>{z.klient}</span>
-            <span style={{ color: T.bn, fontFamily: 'monospace', fontSize: 10 }}>{z.due_date?.slice(5)}</span>
-            <span style={{ color: T.accent, fontWeight: 600, whiteSpace: 'nowrap' }}>{z.durH?.toFixed(1)}h</span>
-          </div>
-        ))
-      }
-    </div>
-  );
+  // tooltip via DOM ref — zero React state re-renders on hover
 
   if (!fwdZP.length) return <EmptyState icon="📊" title="Brak danych planu" sub="Załaduj dane ERP aby zobaczyć heatmapę" />;
   if (!dates.length)  return <EmptyState icon="📊" title="Brak zaplanowanych operacji" sub="Harmonogram jest pusty" />;
@@ -422,7 +449,12 @@ export function HeatmapPlanTab({ fwdZP = [], routing = [], wcSchedule = {}, onSc
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
-      {TooltipEl}
+      <div ref={tooltipRef} style={{display:'none',position:'fixed',zIndex:9999,pointerEvents:'none',
+        background:'#1a2030',border:`1px solid ${T.border2}`,borderRadius:8,padding:'8px 12px',
+        minWidth:200,maxWidth:360,boxShadow:'0 8px 24px rgba(0,0,0,0.5)',fontSize:11}}>
+        <div data-tt="title" style={{fontWeight:700,color:T.accent,marginBottom:6,fontSize:12}}/>
+        <div data-tt="list"/>
+      </div>
 
       {/* ── TOOLBAR ── */}
       <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
@@ -560,7 +592,7 @@ export function HeatmapPlanTab({ fwdZP = [], routing = [], wcSchedule = {}, onSc
                 const sumSt    = hmStyle(totAvail, totLoad);
                 return [
                   <tr key={wc2} onClick={() => toggleExpand(wc2)} style={{ cursor: 'pointer', background: T.surface2 }}>
-                    <td style={{ padding: '6px 8px 6px 0', fontWeight: 700, color: T.text, fontSize: 12, whiteSpace: 'nowrap' }}>
+                    <td style={{ padding: '6px 8px 6px 0', fontWeight: 700, color: T.text, fontSize: 12, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
                       <span style={{ fontSize: 9, color: T.text3, marginRight: 4, display: 'inline-block',
                         transform: isOpen ? 'rotate(90deg)' : 'none', transition: 'transform .15s' }}>▶</span>
                       {wc2}
@@ -585,8 +617,8 @@ export function HeatmapPlanTab({ fwdZP = [], routing = [], wcSchedule = {}, onSc
                             return (
                               <div
                                 onClick={() => load > 0 && setFilterCell(fc => fc?.wc2 === wc2 && fc?.date === dates[i] ? null : { wc2, date: dates[i] })}
-                                onMouseEnter={e => { if (load > 0) { const r = e.currentTarget.getBoundingClientRect(); setTooltip({ wc2, date: dates[i], x: r.right, y: r.top, zps: getZpsForCell(wc2, dates[i]) }); }}}
-                                onMouseLeave={() => setTooltip(null)}
+                                onMouseEnter={e => { if (load > 0) showTooltipHM(e, wc2 + ' × ' + dates[i], zpsByCellMap[wc2+'|'+dates[i]]?.zps||[]); }}
+                                onMouseLeave={hideTooltipHM}
                                 style={{ display: 'inline-flex', alignItems: 'center', justifyContent: 'center',
                                 minWidth: 52, height: 24, borderRadius: 4,
                                 background: isDimmed ? T.surface2 : hs.bg,
@@ -614,7 +646,7 @@ export function HeatmapPlanTab({ fwdZP = [], routing = [], wcSchedule = {}, onSc
                     const mSum   = hmStyle(mAvail.reduce((s,v)=>s+v,0), mLoads.reduce((s,v)=>s+v,0));
                     return (
                       <tr key={m.wc} style={{ background: T.surface }}>
-                        <td style={{ padding: '3px 8px 3px 16px', color: T.text2, fontSize: 11, whiteSpace: 'nowrap' }}>
+                        <td style={{ padding: '3px 8px 3px 16px', color: T.text2, fontSize: 11, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
                           <span style={{ color: T.text3, marginRight: 4 }}>└</span>
                           <span style={{ fontFamily: 'monospace', fontWeight: 600, fontSize: 10 }}>{m.wc}</span>
                           <span style={{ color: T.text3, marginLeft: 6, fontSize: 10 }}>{m.name}</span>
@@ -629,8 +661,8 @@ export function HeatmapPlanTab({ fwdZP = [], routing = [], wcSchedule = {}, onSc
                           return (
                             <td key={i} style={{ padding: 3, textAlign: 'center' }}>
                               <div
-                                onMouseEnter={e => { if (load > 0) { const r = e.currentTarget.getBoundingClientRect(); setTooltip({ wc2: `${m.wc} ${m.name}`, date: dates[i], x: r.right, y: r.top, zps: getZpsForCell(mWc2, dates[i], m.wc) }); }}}
-                                onMouseLeave={() => setTooltip(null)}
+                                onMouseEnter={e => { if (load > 0) showTooltipHM(e, m.wc + ' × ' + dates[i], zpsByCellMap[m.wc+'|'+dates[i]]?.zps||[]); }}
+                                onMouseLeave={hideTooltipHM}
                                 onClick={() => load > 0 && setFilterCell(fc => fc?.wc === m.wc && fc?.date === dates[i] ? null : { wc2: mWc2, wc: m.wc, date: dates[i] })}
                                 style={{ display: 'inline-flex', alignItems: 'center', justifyContent: 'center',
                                 minWidth: 52, height: 22, borderRadius: 4,
@@ -682,7 +714,7 @@ export function HeatmapPlanTab({ fwdZP = [], routing = [], wcSchedule = {}, onSc
                 const grp = groups.find(g => g.wc2 === br);
                 return [
                   <tr key={br} style={{ background: bi % 2 === 0 ? T.surface : T.surface2 }}>
-                    <td style={{ padding: '5px 8px 5px 0', fontWeight: 700, color: T.text, fontSize: 12, whiteSpace: 'nowrap', cursor: 'pointer' }}
+                    <td style={{ padding: '5px 8px 5px 0', fontWeight: 700, color: T.text, fontSize: 12, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis', cursor: 'pointer' }}
                       onClick={() => setExpandedBr(prev => { const n = new Set(prev); n.has(br) ? n.delete(br) : n.add(br); return n; })}>
                       <span style={{ fontSize: 9, color: T.text3, marginRight: 4, display: 'inline-block',
                         transform: expandedBr.has(br) ? 'rotate(90deg)' : 'none', transition: 'transform .15s' }}>▶</span>
@@ -756,7 +788,7 @@ export function HeatmapPlanTab({ fwdZP = [], routing = [], wcSchedule = {}, onSc
                   ...(expandedBr.has(br) && grp ? grp.machines.map(m => {
                     return (
                     <tr key={`${br}-${m.wc}`} style={{ background: T.surface3 }}>
-                      <td style={{ padding: '3px 8px 3px 20px', color: T.text2, fontSize: 11, whiteSpace: 'nowrap' }}>
+                      <td style={{ padding: '3px 8px 3px 20px', color: T.text2, fontSize: 11, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
                         <span style={{ color: T.text3, marginRight: 4 }}>└</span>
                         <span style={{ fontFamily: 'monospace', fontWeight: 600, fontSize: 10 }}>{m.wc}</span>
                         <span style={{ color: T.text3, marginLeft: 6, fontSize: 10 }}>{m.name}</span>

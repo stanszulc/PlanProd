@@ -94,16 +94,21 @@ export function SettingsTab({ config, onConfigChange, wcCapacity = {}, onWcCapac
           <NumInput value={localConfig.horizonDays || 14}
             onChange={v => update('horizonDays', v)} min={1} max={90} unit="dni" />
         </Row>
+        <Row label="Godzina startu zmiany"
+          desc="Od której godziny maszyny zaczynają pracę (np. 6 = 06:00). Wpływa na timestampy segmentów na Gancie.">
+          <NumInput value={localConfig.shiftStart ?? 6}
+            onChange={v => update('shiftStart', v)} min={0} max={12} unit="h" />
+        </Row>
         <Row label="Metoda sortowania ZP"
           desc="Kolejność w jakiej ZP wchodzi na maszyny.">
           <select value={localConfig.urgencyMethod}
             onChange={e => update('urgencyMethod', e.target.value)}
             style={{ fontSize: 12, padding: '5px 10px', borderRadius: 6,
               border: `1px solid ${T.border2}`, background: T.surface2, color: T.text }}>
-            <option value="cr">Critical Ratio (zalecane)</option>
+            <option value="atc">ATC — Apparent Tardiness Cost (zalecane)</option>
+            <option value="cr">Critical Ratio</option>
             <option value="due_date">Due date (najprostsze)</option>
             <option value="slack">Slack czasowy</option>
-            <option value="atc">ATC — Apparent Tardiness Cost</option>
           </select>
         </Row>
       </section>

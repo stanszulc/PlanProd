@@ -108,7 +108,7 @@ function getPoolUsedToday(poolUsed, occKey, dateStr) {
 // poolUsed: Object z makePoolUsed() — tylko dla 3xxxx (isPool)
 // Maszyny 2xxxx: oryginalna logika slot-based (occ [{from,to}])
 // Pool   3xxxx: nowa logika capacity-based (poolUsed {dateStr→usedH})
-function findSlotForward(fromDt, needH, wc, wcSchedule, occ, getOccKey, getPoolAvail, poolUsed) {
+function findSlotForward(fromDt, needH, wc, wcSchedule, occ, getOccKey, getPoolAvail, poolUsed, shiftStart = 0) {
   const occKey  = getOccKey    ? getOccKey(wc)         : wc;
   const isPool  = occKey !== wc;                        // 3xxxx: POOL_<wc2> ≠ wc
   const availFn = getPoolAvail ? (dt) => getPoolAvail(wc, dt) : (dt) => getAvail(wc, dt, wcSchedule);
@@ -122,11 +122,13 @@ function findSlotForward(fromDt, needH, wc, wcSchedule, occ, getOccKey, getPoolA
     const avail = availFn(cursor);
     if (avail === 0) {
       cursor.setDate(cursor.getDate() + 1);
-      cursor.setHours(0, 0, 0, 0);
+      cursor.setHours(shiftStart, 0, 0, 0);
       continue;
     }
 
-    const dayStart = new Date(cursor); dayStart.setHours(0, 0, 0, 0);
+    const dayStart = new Date(cursor); dayStart.setHours(shiftStart, 0, 0, 0);
+    // Jeśli cursor jest przed startem zmiany (np. planStart=00:00, shift=06:00), przesuń na start
+    if (cursor.getTime() < dayStart.getTime()) cursor = new Date(dayStart);
     const dateStr  = localDateStr(dayStart);
     const midnight = new Date(dayStart); midnight.setHours(24, 0, 0, 0);
 
@@ -138,7 +140,7 @@ function findSlotForward(fromDt, needH, wc, wcSchedule, occ, getOccKey, getPoolA
       if (freeToday <= EPSILON) {
         // Dzień pełny — następny
         cursor.setDate(cursor.getDate() + 1);
-        cursor.setHours(0, 0, 0, 0);
+        cursor.setHours(shiftStart, 0, 0, 0);
         continue;
       }
 
@@ -156,7 +158,7 @@ function findSlotForward(fromDt, needH, wc, wcSchedule, occ, getOccKey, getPoolA
 
       if (cursor >= midnight) {
         cursor.setDate(cursor.getDate() + 1);
-        cursor.setHours(0, 0, 0, 0);
+        cursor.setHours(shiftStart, 0, 0, 0);
       }
       continue;
     }
@@ -167,7 +169,7 @@ function findSlotForward(fromDt, needH, wc, wcSchedule, occ, getOccKey, getPoolA
 
     if (cursor >= dayEnd) {
       cursor.setDate(cursor.getDate() + 1);
-      cursor.setHours(0, 0, 0, 0);
+      cursor.setHours(shiftStart, 0, 0, 0);
       continue;
     }
     const slots        = occ[occKey] || [];
@@ -175,7 +177,7 @@ function findSlotForward(fromDt, needH, wc, wcSchedule, occ, getOccKey, getPoolA
     const windowStart  = new Date(Math.max(windowStartT, cursor.getTime()));
     if (windowStart >= dayEnd) {
       cursor.setDate(cursor.getDate() + 1);
-      cursor.setHours(0, 0, 0, 0);
+      cursor.setHours(shiftStart, 0, 0, 0);
       continue;
     }
     const nextFrom  = nextSlotAfter(slots, windowStart.getTime());
@@ -245,6 +247,7 @@ function scheduleAll(zpList, routingByProduct, wcSchedule, planStartDt, onProgre
   const SAFETY_BUFFER_DAYS = config?.safetyBufferDays ?? 1;
   const MODE               = config?.schedulingMode ?? 'asap';
   const URGENCY_METHOD     = config?.urgencyMethod ?? 'cr';
+  const SHIFT_START        = config?.shiftStart ?? 6;
   const occ      = makeOccupancy();
   const poolUsed = makePoolUsed();                      // sesja 9: pool capacity
   const result   = [];
@@ -386,7 +389,7 @@ function scheduleAll(zpList, routingByProduct, wcSchedule, planStartDt, onProgre
     const durH = op.ct_min > 0 ? zp.volume * op.ct_min / 60 : (op._durH ?? 0);
 
     const { startDt, endDt, segs } = findSlotForward(
-      cursor, durH, op.workcenter, wcSchedule, occ, getOccKey, getPoolAvail, poolUsed
+      cursor, durH, op.workcenter, wcSchedule, occ, getOccKey, getPoolAvail, poolUsed, SHIFT_START
     );
 
     state.opResults.push({ op, startDt, endDt, segs, durH });
@@ -541,7 +544,8 @@ self.onmessage = function(e) {
           fromDt, durH, wc, wcSchedule, occ,
           localGetOccKey,
           localGetPoolAvail,
-          poolUsed
+          poolUsed,
+          config?.shiftStart ?? 6
         );
         if (!result.segs.length) return null;
         return {

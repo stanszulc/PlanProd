@@ -1,13 +1,11 @@
-import { useState } from 'react';
 import { T, tocColor } from '../../constants/theme.js';
 import { fmtDt } from '../../utils/scheduler.js';
 import { Dot } from '../common/Dot.jsx';
 import { GanttTab } from './GanttTab.jsx';
-import { GrafikTab } from './GrafikTab.jsx';
 
 export function PlanTab({ routing, zp, globalLookups, wcSchedule, subZP, fwdZP, zpStatus,
-                     onRecalc, ganttDirty, onScheduleChange, planStart, onPlanStartChange }) {
-  const [sharedView, setSharedView] = useState({ panX:0, scaleIdx:2, hourW:28, scrollY:0, wcOrder:[] });
+                     onRecalc, ganttDirty, planStart, onPlanStartChange,
+                     selectedWC, onWCSelect, selectedDate, onDateSelect, heatmapFilter, onHeatmapFilterChange }) {
 
   const panelStyle = {
     background: T.surface,
@@ -31,7 +29,7 @@ export function PlanTab({ routing, zp, globalLookups, wcSchedule, subZP, fwdZP, 
     <div style={{ display:'flex', flexDirection:'column', gap:8, padding:'0 0 8px' }}>
 
       {/* ── GANTT ── */}
-      <div style={{ ...panelStyle, height: '45vh', minHeight: 220 }}>
+      <div style={{ ...panelStyle, height: '62vh', minHeight: 380 }}>
         <div style={headerStyle}>📊 Harmonogram (Gantt)</div>
         <div style={{ flex:1, overflow:'hidden', position:'relative', minHeight:0 }}>
           <GanttTab
@@ -40,26 +38,9 @@ export function PlanTab({ routing, zp, globalLookups, wcSchedule, subZP, fwdZP, 
             wcSchedule={wcSchedule} subZP={subZP} fwdZP={fwdZP} zpStatus={zpStatus}
             onRecalc={onRecalc} ganttDirty={ganttDirty}
             planStart={planStart} onPlanStartChange={onPlanStartChange}
-            onViewChange={v => setSharedView(v)}
-          />
-        </div>
-      </div>
-
-      {/* ── GRAFIK ZASOBÓW ── */}
-      <div style={{ ...panelStyle, height: '28vh', minHeight: 160 }}>
-        <div style={headerStyle}>📅 Grafik zasobów — dostępność vs zapotrzebowanie</div>
-        <div style={{ flex:1, overflow:'hidden', position:'relative', minHeight:0 }}>
-          <GrafikTab
-            embedded
-            routing={routing} zp={zp}
-            wcSchedule={wcSchedule} onScheduleChange={onScheduleChange}
-            subZP={fwdZP && fwdZP.length ? fwdZP : subZP}
-            slavePanX={sharedView.panX}
-            slaveScaleIdx={sharedView.scaleIdx}
-            slaveHourW={sharedView.hourW}
-            slaveScrollY={sharedView.scrollY}
-            wcOrder={sharedView.wcOrder}
-            planStart={planStart}
+            selectedWC={selectedWC} onWCSelect={onWCSelect}
+            selectedDate={selectedDate} onDateSelect={onDateSelect}
+            heatmapFilter={heatmapFilter} onHeatmapFilterChange={onHeatmapFilterChange}
           />
         </div>
       </div>
