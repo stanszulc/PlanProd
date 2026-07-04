@@ -577,7 +577,11 @@ export default function App() {
         {tab === 'heatmap_plan' && <HeatmapPlanTab fwdZP={fwdZP} routing={routing} wcSchedule={wcSchedule} wcToWc2={wcToWc2} wcCapacity={wcCapacity} onScheduleChange={updateSchedule} onRecalc={() => recalcGantt(wcSchedule)} onOptimize={handleOptimize} isOptimizing={isOptimizing} ganttDirty={ganttDirty} isScheduling={isScheduling} planStart={planStart} onPlanStartChange={setPlanStart} schedulingMode={scheduleConfig.schedulingMode} onSchedulingModeChange={mode => { setScheduleConfig(c => ({ ...c, schedulingMode: mode })); setGanttDirty(true); }} heatmapFilter={heatmapFilter} onHeatmapFilterChange={setHeatmapFilter} />}
         {tab === 'flow_matrix'  && <FlowMatrixTab fwdZP={fwdZP} routing={routing} wcToWc2={wcToWc2} wcSchedule={wcSchedule} />}
         {tab === 'swimlane'     && <SwimlaneTab routing={routing} zp={filteredZP} globalLookups={globalLookups} wcSchedule={wcSchedule} />}
-        {tab === 'sankey'       && <SankeyTab routing={routing} zp={filteredZP} globalLookups={globalLookups} wcSchedule={wcSchedule} />}
+        {tab === 'sankey'       && <SankeyTab routing={routing} zp={filteredZP} globalLookups={globalLookups} wcSchedule={wcSchedule}
+            fwdZP={fwdZP} wcToWc2={wcToWc2}
+            heatmapFilter={heatmapFilter} onHeatmapFilterChange={setHeatmapFilter}
+            selectedWC={selectedWC} onWCSelect={setSelectedWC}
+            selectedDate={selectedDate} onDateSelect={setSelectedDate} />}
         {tab === 'realizacja'   && <RealizacjaTab zpStatusData={zpStatusData} />}
         {tab === 'buffer'       && <BufferTab zpStatusData={zpStatusData} />}
         {tab === 'buffer_zs'    && <BufferZSTab zpStatusData={zpStatusData} />}

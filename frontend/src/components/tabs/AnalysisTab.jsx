@@ -1,4 +1,4 @@
-import { useState, useMemo, useRef } from 'react';
+import { useState, useMemo, useRef, useEffect } from 'react';
 import { T, s, PALETTE } from '../../constants/theme.js';
 import {
   calcWcStats, calcHeatmapData, calcReasonPareto, hasReasonCodes,
@@ -245,7 +245,9 @@ function HistorySankeySection({ historyData, routing }) {
   const baseLayout = useMemo(() => {
     if (!activeWCs.length || !routing.length) return { positions: {}, SVG_W: 700, SVG_H: 360 };
     const products = [...new Set(routing.map(r => r.product))];
-    const PAD_X = 90, PAD_Y = 80, COL_W = 180, LANE_H = 120;
+    const PAD_X = 90, PAD_Y = 50, COL_W = 180;
+    const MAX_H = 600;
+    const LANE_H = products.length > 1 ? Math.min(55, (MAX_H - PAD_Y * 2) / (products.length - 1)) : 55;
     const SVG_H = PAD_Y * 2 + Math.max(products.length - 1, 0) * LANE_H;
     const prodLaneY = {};
     products.forEach((p, i) => {
@@ -335,17 +337,23 @@ function HistorySankeySection({ historyData, routing }) {
     }
   }
   function onMU() { dragging.current = null; }
-  function onWheel(e) {
-    e.preventDefault();
-    const r = svgRef.current?.getBoundingClientRect();
-    if (!r) return;
-    const mx = e.clientX - r.left, my = e.clientY - r.top;
-    const d = e.deltaY < 0 ? 1.12 : 1/1.12;
-    setView(v => {
-      const ns = Math.min(3, Math.max(0.2, v.scale * d));
-      return { scale: +ns.toFixed(3), tx: mx - (mx - v.tx) * (ns/v.scale), ty: my - (my - v.ty) * (ns/v.scale) };
-    });
-  }
+  useEffect(() => {
+    const el = svgRef.current;
+    if (!el) return;
+    function onWheel(e) {
+      e.preventDefault();
+      const r = el.getBoundingClientRect();
+      const mx = e.clientX - r.left, my = e.clientY - r.top;
+      const d = e.deltaY < 0 ? 1.12 : 1/1.12;
+      setView(v => {
+        const ns = Math.min(3, Math.max(0.2, v.scale * d));
+        return { scale: +ns.toFixed(3), tx: mx - (mx - v.tx) * (ns/v.scale), ty: my - (my - v.ty) * (ns/v.scale) };
+      });
+    }
+    el.addEventListener('wheel', onWheel, { passive: false });
+    return () => el.removeEventListener('wheel', onWheel);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   if (!historyData.length) return <Empty />;
   if (!periodKeys.length) return <Empty />;
@@ -406,11 +414,11 @@ function HistorySankeySection({ historyData, routing }) {
       </div>
 
       {/* SVG canvas */}
-      <div style={{ background: '#090b0e', borderRadius: 10, overflow: 'hidden', height: Math.max(SVG_H + 40, 360) }}>
+      <div style={{ background: '#090b0e', borderRadius: 10, overflow: 'hidden', height: 'calc(100vh - 340px)', minHeight: 360 }}>
         <svg ref={svgRef} width="100%" height="100%"
           style={{ display: 'block', cursor: 'default', userSelect: 'none' }}
           onMouseMove={onMM} onMouseUp={onMU} onMouseLeave={onMU}
-          onMouseDown={onBgMD} onWheel={onWheel}>
+          onMouseDown={onBgMD}>
           <rect x="0" y="0" width="100%" height="100%" fill="transparent"/>
           <g transform={`translate(${view.tx},${view.ty}) scale(${view.scale})`}>
             <defs>
@@ -429,6 +437,7 @@ function HistorySankeySection({ historyData, routing }) {
             {flowData.connections.map(conn => {
               const fp = allPositions[conn.from], tp = allPositions[conn.to];
               if (!fp || !tp) return null;
+              if (!flowData.nodeVolumes[conn.from] || !flowData.nodeVolumes[conn.to]) return null;
               const prodIdx     = products.indexOf(conn.product);
               const col         = PALETTE[prodIdx % PALETTE.length];
               const edgeKey     = `${conn.from}->${conn.to}`;
@@ -452,6 +461,7 @@ function HistorySankeySection({ historyData, routing }) {
               const [from, to] = key.split('->');
               const fp = allPositions[from], tp = allPositions[to];
               if (!fp || !tp) return null;
+              if (!flowData.nodeVolumes[from] || !flowData.nodeVolumes[to]) return null;
               const isHov = hoveredWC === from || hoveredWC === to;
               if (hoveredWC && !isHov) return null;
               const arcLift = Math.abs(tp.x - fp.x) > 250 ? -Math.abs(tp.x - fp.x)*0.22 : 0;
