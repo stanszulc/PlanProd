@@ -8,6 +8,7 @@
 
 const MS            = 3_600_000;
 const DEFAULT_AVAIL = 16;
+const DEFAULT_CAP   = 8;         // h/dzień fallback capacity — używane do przeliczania delayH -> delayDays
 const EPSILON       = 0.0001;
 const SAFETY_LIMIT  = 50_000;
 const TOC_YELLOW    = 0.33;
@@ -275,7 +276,7 @@ function scheduleAll(zpList, routingByProduct, wcSchedule, planStartDt, onProgre
   }
 
   function totalH(zp) {
-    const ops = routingByProduct[zp.product] || [];
+    const ops = routingByProduct[zp._routingKey || zp.product] || [];
     return ops.reduce((s, op) => {
       const h = op.ct_min > 0 ? zp.volume * op.ct_min / 60 : (op._durH ?? 0);
       return s + h;
@@ -339,7 +340,7 @@ function scheduleAll(zpList, routingByProduct, wcSchedule, planStartDt, onProgre
 
   const zpState = new Map();
   for (const zp of zpList) {
-    const ops = (routingByProduct[zp.product] || [])
+    const ops = (routingByProduct[zp._routingKey || zp.product] || [])
       .slice().sort((a, b) => a.sequence - b.sequence)
       .filter(op => {
         const h = op.ct_min > 0 ? zp.volume * op.ct_min / 60 : (op._durH ?? 0);
@@ -432,7 +433,7 @@ function scheduleAll(zpList, routingByProduct, wcSchedule, planStartDt, onProgre
 
       const delayMs   = Math.max(0, realEnd - dueDate);
       const delayH    = delayMs / MS;
-      const delayDays = +(delayH / DEFAULT_AVAIL).toFixed(1);
+      const delayDays = +(delayH / DEFAULT_CAP).toFixed(1);
       const toc       = tocBuffer(backStart, planStartDt, dueDate, realEnd);
       const bottleneck = opResults.reduce((b, o) => o.durH > b.durH ? o : b, opResults[0]).op.workcenter;
 
@@ -472,7 +473,7 @@ self.onmessage = function(e) {
   // ── OPTIMIZE_INSERT ────────────────────────────────────────────────────────
   if (type === 'OPTIMIZE_INSERT') {
     try {
-      const { wcSchedule, planStart, fwdZP, zpStatus, wcToWc2: wcToWc2Payload } = payload;
+      const { wcSchedule, planStart, fwdZP, zpStatus, wcToWc2: wcToWc2Payload, config } = payload;
       const t0 = Date.now();
 
       console.log('[Worker] OPTIMIZE_INSERT start, fwdZP:', fwdZP?.length, 'zpStatus:', zpStatus?.length);
@@ -692,7 +693,7 @@ self.onmessage = function(e) {
               ...workStatus[statusIdx],
               realEnd:   newRealEnd,
               delayH,
-              delayDays: +(delayH / 16).toFixed(1),
+              delayDays: +(delayH / DEFAULT_CAP).toFixed(1),
               late:      delayH > 0,
             };
           }

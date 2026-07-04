@@ -313,6 +313,7 @@ export function GanttTab({ routing, zp, globalLookups, wcSchedule, subZP, fwdZP,
 
   const panXRef = useRef(0); // aktualny panX podczas drag — bez re-renderu
   const svgGroupRef = useRef(null); // ref na scrollowaną grupę SVG
+  const debouncePanRef = useRef(null); // debounce dla setPanX po scrollu kółkiem
 
   if (!dates.length) return <EmptyState icon="📅" title="Brak danych" sub="Wgraj pliki CSV" />;
 

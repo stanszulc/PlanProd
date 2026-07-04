@@ -276,7 +276,7 @@ export function backSchedule(zpList, routingByProduct, wcSchedule) {
   const zpOpCounter  = {};
 
   for (const zp of zpList) {
-    const ops = (routingByProduct[zp.product] || [])
+    const ops = (routingByProduct[zp._routingKey || zp.product] || [])
       .slice()
       .sort((a, b) => b.sequence - a.sequence);
     if (!ops.length) continue;
@@ -403,7 +403,7 @@ export function forwardSchedule(zpList, routingByProduct, wcSchedule, planStart)
   );
 
   for (const zp of sorted) {
-    const ops = (routingByProduct[zp.product] || [])
+    const ops = (routingByProduct[zp._routingKey || zp.product] || [])
       .slice()
       .sort((a, b) => a.sequence - b.sequence);
     if (!ops.length) continue;
@@ -490,7 +490,7 @@ export function computeLoads(routingByProduct, zpList, wcSchedule, date) {
   const wcMap = {};
 
   for (const z of zpList) {
-    for (const op of (routingByProduct[z.product] || [])) {
+    for (const op of (routingByProduct[z._routingKey || z.product] || [])) {
       const capH = getAvail(op.workcenter, date ? (date + 'T12:00:00') : new Date(), wcSchedule);
       if (!wcMap[op.workcenter])
         wcMap[op.workcenter] = { load: 0, cap: capH, contrib: {} };
@@ -754,14 +754,57 @@ export function parseZPFromERP(text) {
 }
 
 
+// Sygnatura routingu ZP — do wykrycia wariantów technologicznych tego samego produktu.
+// Dwa ZP tego samego produktu z tą samą sygnaturą dzielą jeden wpis w routingByProduct;
+// przy rozbieżności każdy dostaje własny wpis (patrz erpZpToSchedulerInput).
+function _opsSignature(ops) {
+  return [...ops]
+    .sort((a, b) => a.sequence - b.sequence)
+    .map(op => `${op.sequence}:${op.machine_id}:${(op.predecessors || []).join(',')}`)
+    .join('|');
+}
+
 // ─── ADAPTER: ERP ZP → forwardSchedule ───────────────────────────────────────
 // forwardSchedule oczekuje { zpList, routingByProduct }.
 // volume=1 bo durH jest już całkowitym czasem ZP (nie ct_min per sztukę).
+// Każdy ZP niesie własne `ops` z ERP — jeśli różnią się od kanonicznego routingu
+// przyjętego dla danego produktu (pierwszy napotkany ZP), dostaje osobny wpis
+// w routingByProduct pod kluczem `${product}::${zp_id}` (zp._routingKey), żeby
+// nie zgubić jego rzeczywistej sekwencji operacji/maszyn.
 export function erpZpToSchedulerInput(erpZpList) {
-  const routingByProduct = {};
+  const routingByProduct  = {};
+  const canonicalSig      = {}; // product -> sygnatura pierwszego napotkanego ZP
   const zpList = [];
 
+  function buildOps(ops) {
+    return ops.map(op => ({
+      operation:    op.machine_name || op.op_label,
+      workcenter:   op.machine_id,   // scheduler planuje per maszyna
+      wc_group:     op.workcenter,   // gniazdo — do widoku
+      machine_id:   op.machine_id,
+      machine_name: op.machine_name,
+      sequence:     op.sequence,
+      predecessors: op.predecessors,
+      ct_min:       0,               // nieużywane — durH z ZP
+      capacity_h:   DEFAULT_AVAIL,   // fallback; wcSchedule nadpisze
+      _durH:        op.durH,
+      _durRemH:     op.durRemH,
+      _status:      op.status,
+    }));
+  }
+
   for (const zp of erpZpList) {
+    const sig = _opsSignature(zp.ops);
+    let routingKey; // undefined = użyj zp.product wprost (przypadek bez wariantów)
+
+    if (!(zp.product in canonicalSig)) {
+      canonicalSig[zp.product] = sig;
+      routingByProduct[zp.product] = buildOps(zp.ops);
+    } else if (sig !== canonicalSig[zp.product]) {
+      routingKey = `${zp.product}::${zp.zp_id}`;
+      routingByProduct[routingKey] = buildOps(zp.ops);
+    }
+
     zpList.push({
       zp_id:     zp.zp_id,
       zs_id:     zp.zs_id,
@@ -772,24 +815,8 @@ export function erpZpToSchedulerInput(erpZpList) {
       due_date:  zp.due_date,
       ship_date: zp.ship_date,
       priority:  zp.priority,
+      ...(routingKey ? { _routingKey: routingKey } : {}),
     });
-
-    if (!routingByProduct[zp.product]) {
-      routingByProduct[zp.product] = zp.ops.map(op => ({
-        operation:    op.machine_name || op.op_label,
-        workcenter:   op.machine_id,   // scheduler planuje per maszyna
-        wc_group:     op.workcenter,   // gniazdo — do widoku
-        machine_id:   op.machine_id,
-        machine_name: op.machine_name,
-        sequence:     op.sequence,
-        predecessors: op.predecessors,
-        ct_min:       0,               // nieużywane — durH z ZP
-        capacity_h:   DEFAULT_AVAIL,   // fallback; wcSchedule nadpisze
-        _durH:        op.durH,
-        _durRemH:     op.durRemH,
-        _status:      op.status,
-      }));
-    }
   }
 
   return { zpList, routingByProduct };

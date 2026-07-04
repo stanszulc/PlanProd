@@ -375,7 +375,7 @@ export default function App() {
     };
     worker.postMessage({
       type: 'OPTIMIZE_INSERT',
-      payload: { wcSchedule, planStart, fwdZP, zpStatus, wcToWc2 },
+      payload: { wcSchedule, planStart, fwdZP, zpStatus, wcToWc2, config: scheduleConfig },
     });
   }
 

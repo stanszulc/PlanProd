@@ -56,13 +56,13 @@ export function SankeyTab({ routing, zp, globalLookups, wcSchedule,
     const dateBase = selectedDate
       ? wcBase.filter(s2 => (s2.segments || []).some(seg => seg.segStart && new Date(seg.segStart).toISOString().slice(0, 10) === selectedDate))
       : wcBase;
-    const ids = new Set(dateBase.map(s2 => s2.parent_zp || s2.zp_id));
+    const ids = new Set(dateBase.map(s2 => s2.parent_zp || s2.zp_id.split('/')[0]));
     return ids.size > 0 ? ids : null;
   }, [fwdZP, heatmapFilter, selectedWC, selectedDate, wcToWc2]);
 
   // ── Przefiltrowany fwdZP wg filtra zewnętrznego ──────────────────────────────
   const activeFwdZP = useMemo(() =>
-    externalZpIds ? fwdZP.filter(s2 => externalZpIds.has(s2.parent_zp || s2.zp_id)) : fwdZP,
+    externalZpIds ? fwdZP.filter(s2 => externalZpIds.has(s2.parent_zp || s2.zp_id.split('/')[0])) : fwdZP,
   [fwdZP, externalZpIds]);
 
   // ── Klucze okresu (dzień lub tydzień) z segmentów planu ──────────────────────
@@ -94,7 +94,7 @@ export function SankeyTab({ routing, zp, globalLookups, wcSchedule,
         const k = granularity === 'week' ? segWeek(seg) : segDay(seg);
         return k === effectiveKey;
       });
-      if (matches) ids.add(s2.parent_zp || s2.zp_id);
+      if (matches) ids.add(s2.parent_zp || s2.zp_id.split('/')[0]);
     });
     return ids;
   }, [activeFwdZP, effectiveKey, granularity]);
@@ -116,7 +116,7 @@ export function SankeyTab({ routing, zp, globalLookups, wcSchedule,
 
     // Zbierz zaplanowane czasy operacji z fwdZP (dla węzłów)
     activeFwdZP.forEach(s2 => {
-      if (!periodZpIds.has(s2.parent_zp || s2.zp_id)) return;
+      if (!periodZpIds.has(s2.parent_zp || s2.zp_id.split('/')[0])) return;
       const wc = String(s2.workcenter);
       if (!planCt[wc]) planCt[wc] = { totalMin: 0, count: 0 };
       (s2.segments || []).forEach(seg => {

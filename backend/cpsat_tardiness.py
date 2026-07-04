@@ -299,7 +299,7 @@ def solve_tardiness(zp_list, routing, wc_sched, plan_start, cfg):
 
     # ── 8. Solver ─────────────────────────────────────────────────────────────
     solver = cp_model.CpSolver()
-    solver.parameters.max_time_in_seconds = 300
+    solver.parameters.max_time_in_seconds = time_limit
     solver.parameters.num_search_workers  = 4
     if debug:
         solver.parameters.log_search_progress = True
