@@ -40,13 +40,24 @@ export function RoutingTab({ routing, zp, globalLookups }) {
     return [...set.entries()].sort((a, b) => String(a[0]).localeCompare(String(b[0])));
   }, [routing]);
 
-  // Grupuj produkty po identycznym fingerprint routingu (sekwencja gniazd)
+  // Klucz zależności zgodny z silnikiem (scheduler.worker.js): _opUid gdy nadany
+  // przez applyParallelPredecessors, inaczej numer OP (naiwny łańcuch bez maszyn równoległych).
+  const opKey = op => op._opUid ?? op.sequence;
+
+  // Grupuj produkty po identycznym fingerprint routingu — sekwencja gniazd ORAZ
+  // struktura zależności (predecessors), nie tylko sama kolejność. Dwa routingi
+  // z tymi samymi maszynami, ale innym grafem (np. jeden liniowy, drugi z maszynami
+  // równoległymi) to różne wizualnie routingi, nie powinny się scalać w jedną grupę.
   const uniqueRoutings = useMemo(() => {
     const groups = new Map(); // fingerprint → {ops, products[]}
     const allProducts = [...new Set(routing.map(r => r.product))];
     allProducts.forEach(p => {
       const ops = (globalLookups.routingByProduct[p] || []).slice().sort((a, b) => a.sequence - b.sequence);
-      const fp = ops.map(o => String(o.workcenter)).join('|');
+      const posOf = new Map(ops.map((op, i) => [opKey(op), i]));
+      const fp = ops.map(op => {
+        const predPos = (op.predecessors || []).map(pk => posOf.get(pk)).filter(x => x !== undefined).sort((a, b) => a - b);
+        return `${op.workcenter}<${predPos.join(',')}>`;
+      }).join('|');
       if (!groups.has(fp)) groups.set(fp, { ops, products: [] });
       groups.get(fp).products.push(p);
     });
@@ -59,6 +70,45 @@ export function RoutingTab({ routing, zp, globalLookups }) {
     return uniqueRoutings.filter(r => r.ops.some(op => String(op.workcenter) === filterWC));
   }, [uniqueRoutings, filterWC]);
 
+  // Układ węzłów wg grafu zależności: kolumna (depth) = najdłuższa ścieżka od korzenia,
+  // operacje bez wzajemnej zależności w tej samej kolumnie mogą stanąć jedna nad drugą
+  // (widać wtedy rozgałęzienie/zbiegnięcie zamiast sztucznego liniowego łańcucha).
+  const ROWGAP = 14;
+  const layoutedRoutings = useMemo(() => {
+    return filteredRoutings.map(route => {
+      const { ops } = route;
+      const byKey = new Map(ops.map(op => [opKey(op), op]));
+      const depthCache = new Map();
+      function depthOf(op) {
+        const k = opKey(op);
+        if (depthCache.has(k)) return depthCache.get(k);
+        depthCache.set(k, 0); // guard przed ewentualnym cyklem
+        const preds = (op.predecessors || []).filter(p => byKey.has(p) && p !== k);
+        const d = preds.length === 0 ? 0 : 1 + Math.max(...preds.map(p => depthOf(byKey.get(p))));
+        depthCache.set(k, d);
+        return d;
+      }
+      ops.forEach(depthOf);
+
+      const columns = new Map(); // depth -> [op,...]
+      ops.forEach(op => {
+        const d = depthCache.get(opKey(op));
+        if (!columns.has(d)) columns.set(d, []);
+        columns.get(d).push(op);
+      });
+      columns.forEach(list => list.sort((a, b) => a.sequence - b.sequence));
+
+      const positions = new Map(); // key -> { depth, idx, colSize }
+      columns.forEach((list, depth) => {
+        list.forEach((op, idx) => positions.set(opKey(op), { depth, idx, colSize: list.length }));
+      });
+
+      const maxDepth = columns.size ? Math.max(...columns.keys()) : 0;
+      const maxColSize = columns.size ? Math.max(...[...columns.values()].map(c => c.length)) : 1;
+      return { ...route, byKey, positions, maxDepth, maxColSize };
+    });
+  }, [filteredRoutings]);
+
   const firstDateZP = useMemo(() => dates.length ? zp.filter(z => z.due_date === dates[0]) : [], [zp, dates]);
   const wcLoads = useMemo(() => dates.length ? computeLoads(globalLookups.routingByProduct, firstDateZP) : {}, [dates.join(','), firstDateZP.length]);
   const maxUtil = Object.values(wcLoads).length ? Math.max(...Object.values(wcLoads).map(v => v.util)) : 0;
@@ -66,11 +116,12 @@ export function RoutingTab({ routing, zp, globalLookups }) {
   if (!routing.length) return <EmptyState icon="🔀" title="Brak danych" sub="Wgraj routing.csv" />;
 
   const BW = 120, BH = 72, GAP = 36, ROW_H = 140, LEFT = 180;
-  const maxOps = filteredRoutings.length
-    ? Math.max(...filteredRoutings.map(r => r.ops.length))
-    : 1;
-  const svgW = LEFT + maxOps * (BW + GAP) + 40;
-  const svgH = filteredRoutings.length * ROW_H + 60;
+  const maxDepthAll = layoutedRoutings.length ? Math.max(...layoutedRoutings.map(r => r.maxDepth)) : 0;
+  const groupHeights = layoutedRoutings.map(r => Math.max(ROW_H, r.maxColSize * (BH + ROWGAP) + 60));
+  const groupTops = [];
+  groupHeights.reduce((top, h) => { groupTops.push(top); return top + h; }, 30);
+  const svgW = LEFT + (maxDepthAll + 1) * (BW + GAP) + 40;
+  const svgH = groupHeights.reduce((a, b) => a + b, 30);
 
   // Nazwa gniazda do wyświetlenia w filtrze
   const wcName = filterWC ? (allWC.find(([id]) => id === filterWC)?.[1] || filterWC) : '';
@@ -149,30 +200,61 @@ export function RoutingTab({ routing, zp, globalLookups }) {
                   <path d="M1 1L9 5L1 9" fill="none" stroke="#555c6b" strokeWidth="1.5" />
                 </marker>
               </defs>
-              {filteredRoutings.map((route, pi) => {
-                const { ops, products: routeProducts } = route;
-                const rowY = 30 + pi * ROW_H;
-                const boxY = rowY + (ROW_H - 30 - BH) / 2;
+              {layoutedRoutings.map((route, pi) => {
+                const { ops, products: routeProducts, positions, maxColSize } = route;
+                const groupTop = groupTops[pi];
+                const groupH = groupHeights[pi];
+                const groupMidY = groupTop + groupH / 2;
+                const colBlockH = maxColSize * (BH + ROWGAP) - ROWGAP;
                 // Kolor po pierwszym produkcie z grupy
                 const p0 = routeProducts[0];
                 const col = PALETTE[(globalLookups.productIndexMap[p0] ?? pi) % PALETTE.length];
-                const tooltipId = `rt-${pi}`;
+
+                // Pozycja pudełka danej operacji — kolumna wg głębokości w grafie,
+                // wewnątrz kolumny wycentrowana wg liczby operacji na tym samym poziomie.
+                function boxPos(op) {
+                  const { depth, idx, colSize } = positions.get(opKey(op));
+                  const colH = colSize * (BH + ROWGAP) - ROWGAP;
+                  const x = LEFT + depth * (BW + GAP);
+                  const y = groupTop + 30 + (colBlockH - colH) / 2 + idx * (BH + ROWGAP);
+                  return { x, y };
+                }
+
                 return (
                   <g key={pi}>
-                    {pi > 0 && <line x1="0" y1={rowY - 10} x2={svgW} y2={rowY - 10} stroke={T.border} />}
+                    {pi > 0 && <line x1="0" y1={groupTop - 10} x2={svgW} y2={groupTop - 10} stroke={T.border} />}
                     {/* Etykieta z liczbą produktów + title */}
                     <title>{routeProducts.map(p => productNames[p] ? `${p} — ${productNames[p]}` : p).join('\n')}</title>
-                    <text x={LEFT - 10} y={boxY + BH / 2 - 16} fontSize="11" fontWeight="700" fill={col} textAnchor="end" dominantBaseline="central">{routeProducts.length}×</text>
-                    <text x={LEFT - 10} y={boxY + BH / 2 - 2} fontSize="8" fill="#a8b0c0" textAnchor="end" dominantBaseline="central">{routeProducts.slice(0,3).join(', ')}{routeProducts.length > 3 ? '…' : ''}</text>
-                    <text x={LEFT - 10} y={boxY + BH / 2 + 12} fontSize="8" fill="#6b7280" textAnchor="end" dominantBaseline="central" style={{fontStyle:'italic'}}>{(productNames[routeProducts[0]] || '').slice(0, 28)}{(productNames[routeProducts[0]] || '').length > 28 ? '…' : ''}</text>
-                    {ops.map((op, oi) => {
-                      const boxX = LEFT + oi * (BW + GAP);
+                    <text x={LEFT - 10} y={groupMidY - 16} fontSize="11" fontWeight="700" fill={col} textAnchor="end" dominantBaseline="central">{routeProducts.length}×</text>
+                    <text x={LEFT - 10} y={groupMidY - 2} fontSize="8" fill="#a8b0c0" textAnchor="end" dominantBaseline="central">{routeProducts.slice(0,3).join(', ')}{routeProducts.length > 3 ? '…' : ''}</text>
+                    <text x={LEFT - 10} y={groupMidY + 12} fontSize="8" fill="#6b7280" textAnchor="end" dominantBaseline="central" style={{fontStyle:'italic'}}>{(productNames[routeProducts[0]] || '').slice(0, 28)}{(productNames[routeProducts[0]] || '').length > 28 ? '…' : ''}</text>
+
+                    {/* Krawędzie zależności — z predecessors (fan-out/fan-in), nie z kolejności w tablicy */}
+                    {ops.map(op => {
+                      const to = boxPos(op);
+                      return (op.predecessors || []).map(predKey => {
+                        const predOp = route.byKey.get(predKey);
+                        if (!predOp) return null;
+                        const from = boxPos(predOp);
+                        const x1 = from.x + BW, y1 = from.y + BH / 2;
+                        const x2 = to.x, y2 = to.y + BH / 2;
+                        const midX = (x1 + x2) / 2;
+                        return (
+                          <path key={`${predKey}->${opKey(op)}`}
+                            d={`M ${x1} ${y1} C ${midX} ${y1} ${midX} ${y2} ${x2 - 4} ${y2}`}
+                            fill="none" stroke="#555c6b" strokeWidth="1.5" markerEnd="url(#ra)" />
+                        );
+                      });
+                    })}
+
+                    {ops.map(op => {
+                      const { x: boxX, y: boxY } = boxPos(op);
                       const wcData = wcLoads[op.workcenter] || { util: 0 };
                       const u = wcData.util;
                       const isBn = Math.abs(u - maxUtil) < 0.001 && u > 0.85;
                       const isHighlighted = filterWC && String(op.workcenter) === filterWC;
                       return (
-                        <g key={oi}>
+                        <g key={opKey(op)}>
                           <rect x={boxX} y={boxY} width={BW} height={BH} rx="8"
                             fill={isHighlighted ? 'rgba(77,148,255,0.12)' : T.surface2}
                             stroke={isHighlighted ? T.accent : isBn ? T.bn : T.border2}
@@ -182,14 +264,11 @@ export function RoutingTab({ routing, zp, globalLookups }) {
                           <text x={boxX + BW / 2} y={boxY + 22} textAnchor="middle" fontSize="13" fontWeight="700" fill={isHighlighted ? T.accent : T.text}>{op.workcenter}</text>
                           <text x={boxX + BW / 2} y={boxY + 40} textAnchor="middle" fontSize="10" fill={T.text2}>{op.operation}</text>
                           <text x={boxX + BW / 2} y={boxY + 58} textAnchor="middle" fontSize="10" fill={T.text3}>{op.ct_min} min</text>
-                          {oi < ops.length - 1 && (
-                            <line x1={boxX + BW + 2} y1={boxY + BH / 2} x2={boxX + BW + GAP - 4} y2={boxY + BH / 2} stroke="#555c6b" strokeWidth="1.5" markerEnd="url(#ra)" />
-                          )}
                         </g>
                       );
                     })}
                     {/* Hover rect — tooltip z listą produktów */}
-                    <rect x={0} y={boxY - 10} width={LEFT - 15} height={BH + 20} fill="transparent"
+                    <rect x={0} y={groupTop} width={LEFT - 15} height={groupH} fill="transparent"
                       style={{ cursor: 'default' }}
                       onMouseEnter={e => {
                         const rect = svgWrapRef.current?.getBoundingClientRect() || { left: 0, top: 0 };

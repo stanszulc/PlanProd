@@ -113,6 +113,21 @@ export function SettingsTab({ config, onConfigChange, wcCapacity = {}, onWcCapac
         </Row>
       </section>
 
+      {/* ── OPERACJE RÓWNOLEGŁE ── */}
+      <section>
+        <SectionHeader icon="🔀" label="Operacje równoległe" />
+        <Row label="Tryb harmonogramowania operacji"
+          desc="Graph: operacje na maszynach z listy 'maszyny równoległe' (zakładka Import) startują niezależnie od siebie — kolejna operacja czeka aż wszystkie się zakończą. Legacy: wszystkie operacje w ścisłym łańcuchu, jak dotychczas.">
+          <select value={localConfig.schedulingGraphMode ?? 'graph'}
+            onChange={e => update('schedulingGraphMode', e.target.value)}
+            style={{ fontSize: 12, padding: '5px 10px', borderRadius: 6,
+              border: `1px solid ${T.border2}`, background: T.surface2, color: T.text }}>
+            <option value="graph">Graph — równoległe maszyny startowe (zalecane)</option>
+            <option value="legacy">Legacy — ścisły łańcuch (jak dotychczas)</option>
+          </select>
+        </Row>
+      </section>
+
       {/* ── CAPACITY MASZYN ── */}
       <section>
         <SectionHeader icon="⚙️" label="Capacity maszyn / stanowisk [rbh/dzień]" />

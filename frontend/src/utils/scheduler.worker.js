@@ -249,6 +249,7 @@ function scheduleAll(zpList, routingByProduct, wcSchedule, planStartDt, onProgre
   const MODE               = config?.schedulingMode ?? 'asap';
   const URGENCY_METHOD     = config?.urgencyMethod ?? 'cr';
   const SHIFT_START        = config?.shiftStart ?? 6;
+  const GRAPH_MODE         = (config?.schedulingGraphMode ?? 'graph') === 'graph';
   const occ      = makeOccupancy();
   const poolUsed = makePoolUsed();                      // sesja 9: pool capacity
   const result   = [];
@@ -338,11 +339,71 @@ function scheduleAll(zpList, routingByProduct, wcSchedule, planStartDt, onProgre
     get size() { return this.data.length; }
   }
 
-  const zpState = new Map();
+  let done = 0;
+
+  // Finalizacja ZP — współdzielona przez legacy i graph. Sortuje opResults po
+  // starcie zamiast zakładać kolejność wstawienia: w trybie graph operacje
+  // mogą kończyć się w innej kolejności niż w tablicy (gałęzie równoległe).
+  function finalizeZp(zp, opResultsRaw) {
+    done++;
+    const sorted = [...opResultsRaw].sort((a, b) => a.startDt - b.startDt);
+    const dueDate   = new Date(zp.due_date + 'T23:59:59');
+    const backStart = sorted.reduce((min, o) => (o.startDt < min ? o.startDt : min), sorted[0].startDt);
+    const realEnd   = sorted.reduce((max, o) => (o.endDt   > max ? o.endDt   : max), sorted[0].endDt);
+
+    let seqCounter = 0;
+    for (const { op: o, startDt: sd, endDt: ed, segs: sg, durH: dh } of sorted) {
+      seqCounter++;
+      result.push({
+        zp_id:      `${zp.zp_id}/${String(seqCounter).padStart(3,'0')}`,
+        parent_zp:  zp.zp_id,
+        zs_id:      zp.zs_id   || '',
+        klient:     zp.klient  || '',
+        product:    zp.product,
+        workcenter: o.workcenter,
+        machine_id: o.machine_id || o.workcenter,
+        wc_group:   o.wc_group  || '',
+        operation:  o.operation || o.machine_name || '',
+        sequence:   o.sequence,
+        volume:     zp.volume,
+        durH:       dh,
+        start_dt:   sd,
+        end_dt:     ed,
+        segments:   sg,
+        due_date:   zp.due_date,
+        priority:   zp.priority,
+        realEnd,
+      });
+    }
+
+    const delayMs   = Math.max(0, realEnd - dueDate);
+    const delayH    = delayMs / MS;
+    const delayDays = +(delayH / DEFAULT_CAP).toFixed(1);
+    const toc       = tocBuffer(backStart, planStartDt, dueDate, realEnd);
+    const bottleneck = sorted.reduce((b, o) => (o.durH > b.durH ? o : b), sorted[0]).op.workcenter;
+
+    zpStatus.push({
+      zp_id:   zp.zp_id, zs_id: zp.zs_id || '', pozycja: zp.pozycja || '',
+      klient:  zp.klient || '', product: zp.product, due_date: zp.due_date,
+      priority: zp.priority, backStart, realEnd, delayH, delayDays, toc,
+      bottleneck, late: delayH > 0, backDelay: 0,
+    });
+  }
+
+  // Operacje per ZP (>0h); ZP bez żadnej operacji dostają status od razu.
+  const zpsWithOps = [];
   for (const zp of zpList) {
     const ops = (routingByProduct[zp._routingKey || zp.product] || [])
       .slice().sort((a, b) => a.sequence - b.sequence)
       .filter(op => {
+        // W trybie graph operacje o zerowym czasie NIE są odrzucane, nawet jeśli same
+        // nie mają realnej pracy — inna operacja może wskazywać na nie w predecessors
+        // (np. maszyna równoległa z zerowym czasem). Odrzucenie ich tu zrywałoby graf
+        // zależności: doneEnds[jej _opUid] nigdy by nie powstało, więc każdy, kto na nią
+        // czeka, blokowałby się na zawsze — a wraz z nim całe ZP znikałoby z wyniku bez
+        // żadnego błędu. findSlotForward bezpiecznie obsługuje durH=0 (zwraca od razu,
+        // zero-długościowy segment), więc trzymanie ich w grafie nic nie kosztuje.
+        if (GRAPH_MODE) return true;
         const h = op.ct_min > 0 ? zp.volume * op.ct_min / 60 : (op._durH ?? 0);
         return h > 0;
       });
@@ -358,13 +419,7 @@ function scheduleAll(zpList, routingByProduct, wcSchedule, planStartDt, onProgre
       });
       continue;
     }
-    zpState.set(zp.zp_id, {
-      zp, ops, opIdx: 0,
-      cursor: new Date(MODE === 'alap'
-        ? calcAlapStart(zp, ops, wcSchedule, planStartDt, SAFETY_BUFFER_DAYS)
-        : planStartDt),
-      opResults: [],
-    });
+    zpsWithOps.push({ zp, ops });
   }
 
   const heap = new MinHeap((a, b) => {
@@ -373,76 +428,105 @@ function scheduleAll(zpList, routingByProduct, wcSchedule, planStartDt, onProgre
     return urgencyDynamic(a.zp, tA) - urgencyDynamic(b.zp, tB);
   });
 
-  for (const state of zpState.values()) heap.push(state);
+  const total = zpsWithOps.length;
 
-  const total = zpState.size;
-  let done    = 0;
+  if (!GRAPH_MODE) {
+    // ─── LEGACY: jeden kursor na ZP, operacje jedna-po-jednej wg kolejności w tablicy ───
+    for (const { zp, ops } of zpsWithOps) {
+      heap.push({
+        zp, ops, opIdx: 0,
+        cursor: new Date(MODE === 'alap'
+          ? calcAlapStart(zp, ops, wcSchedule, planStartDt, SAFETY_BUFFER_DAYS)
+          : planStartDt),
+        opResults: [],
+      });
+    }
+
+    while (heap.size > 0) {
+      const state = heap.pop();
+      const { zp, ops, opIdx, cursor } = state;
+
+      if (onProgress && done % 50 === 0) {
+        onProgress(Math.round(done / total * 100), `Planuję ${done}/${total} ZP...`);
+      }
+
+      const op   = ops[opIdx];
+      const durH = op.ct_min > 0 ? zp.volume * op.ct_min / 60 : (op._durH ?? 0);
+
+      const { startDt, endDt, segs } = findSlotForward(
+        cursor, durH, op.workcenter, wcSchedule, occ, getOccKey, getPoolAvail, poolUsed, SHIFT_START
+      );
+
+      state.opResults.push({ op, startDt, endDt, segs, durH });
+      state.opIdx++;
+      state.cursor = new Date(endDt);
+
+      if (state.opIdx < ops.length) {
+        heap.push(state);
+      } else {
+        finalizeZp(zp, state.opResults);
+      }
+    }
+
+    return { fwdZP: result, zpStatus };
+  }
+
+  // ─── GRAPH: wiele jednocześnie "gotowych" operacji na ZP, honoruje predecessors ───
+  // Klucz zależności to op._opUid (jeśli applyParallelPredecessors go nadał) albo
+  // op.sequence jako fallback dla naiwnego łańcucha z parseZPFromERP — oba warianty
+  // są spójne wewnątrz jednego ZP, bo predecessors budowane są w tej samej przestrzeni kluczy.
+  for (const { zp, ops } of zpsWithOps) {
+    const initialCursor = new Date(MODE === 'alap'
+      ? calcAlapStart(zp, ops, wcSchedule, planStartDt, SAFETY_BUFFER_DAYS)
+      : planStartDt);
+
+    const zpCtx = { zp, ops, doneEnds: {}, dispatched: new Set(), remaining: ops.length, opResults: [] };
+
+    ops.forEach(op => {
+      if (!op.predecessors || op.predecessors.length === 0) {
+        zpCtx.dispatched.add(op._opUid ?? op.sequence);
+        heap.push({ zpCtx, zp: zpCtx.zp, op, cursor: initialCursor });
+      }
+    });
+  }
 
   while (heap.size > 0) {
-    const state = heap.pop();
-    const { zp, ops, opIdx, cursor } = state;
+    const entry = heap.pop();
+    const { zpCtx, op, cursor } = entry;
+    const { zp, ops } = zpCtx;
 
     if (onProgress && done % 50 === 0) {
       onProgress(Math.round(done / total * 100), `Planuję ${done}/${total} ZP...`);
     }
 
-    const op   = ops[opIdx];
     const durH = op.ct_min > 0 ? zp.volume * op.ct_min / 60 : (op._durH ?? 0);
-
     const { startDt, endDt, segs } = findSlotForward(
       cursor, durH, op.workcenter, wcSchedule, occ, getOccKey, getPoolAvail, poolUsed, SHIFT_START
     );
 
-    state.opResults.push({ op, startDt, endDt, segs, durH });
-    state.opIdx++;
-    state.cursor = new Date(endDt);
+    zpCtx.opResults.push({ op, startDt, endDt, segs, durH });
+    const opKey = op._opUid ?? op.sequence;
+    zpCtx.doneEnds[opKey] = endDt;
+    zpCtx.remaining--;
 
-    if (state.opIdx < ops.length) {
-      heap.push(state);
-    } else {
-      done++;
-      const opResults = state.opResults;
-      const dueDate   = new Date(zp.due_date + 'T23:59:59');
-      const backStart = opResults[0].startDt;
-      const realEnd   = opResults[opResults.length - 1].endDt;
-
-      let seqCounter = 0;
-      for (const { op: o, startDt: sd, endDt: ed, segs: sg, durH: dh } of opResults) {
-        seqCounter++;
-        result.push({
-          zp_id:      `${zp.zp_id}/${String(seqCounter).padStart(3,'0')}`,
-          parent_zp:  zp.zp_id,
-          zs_id:      zp.zs_id   || '',
-          klient:     zp.klient  || '',
-          product:    zp.product,
-          workcenter: o.workcenter,
-          machine_id: o.machine_id || o.workcenter,
-          wc_group:   o.wc_group  || '',
-          operation:  o.operation || o.machine_name || '',
-          sequence:   o.sequence,
-          volume:     zp.volume,
-          durH:       dh,
-          start_dt:   sd,
-          end_dt:     ed,
-          segments:   sg,
-          due_date:   zp.due_date,
-          priority:   zp.priority,
-          realEnd,
-        });
+    // Odblokuj operacje, których WSZYSCY predecessors są już zakończeni (fan-in).
+    for (const candidate of ops) {
+      const candKey = candidate._opUid ?? candidate.sequence;
+      if (zpCtx.dispatched.has(candKey)) continue;
+      const preds = candidate.predecessors || [];
+      if (preds.length === 0) continue; // już obsłużona przy seedowaniu
+      if (preds.every(p => zpCtx.doneEnds[p] !== undefined)) {
+        const joinCursor = preds.reduce(
+          (max, p) => (zpCtx.doneEnds[p] > max ? zpCtx.doneEnds[p] : max),
+          zpCtx.doneEnds[preds[0]]
+        );
+        zpCtx.dispatched.add(candKey);
+        heap.push({ zpCtx, zp: zpCtx.zp, op: candidate, cursor: new Date(joinCursor) });
       }
+    }
 
-      const delayMs   = Math.max(0, realEnd - dueDate);
-      const delayH    = delayMs / MS;
-      const delayDays = +(delayH / DEFAULT_CAP).toFixed(1);
-      const toc       = tocBuffer(backStart, planStartDt, dueDate, realEnd);
-      const bottleneck = opResults.reduce((b, o) => o.durH > b.durH ? o : b, opResults[0]).op.workcenter;
-
-      zpStatus.push({
-        zp_id:   zp.zp_id, zs_id: zp.zs_id || '', pozycja: zp.pozycja || '',
-        klient:  zp.klient || '', product: zp.product, due_date: zp.due_date,
-        priority: zp.priority, backStart, realEnd, delayH, delayDays, toc,
-        bottleneck, late: delayH > 0, backDelay: 0,
-      });
+    if (zpCtx.remaining === 0) {
+      finalizeZp(zp, zpCtx.opResults);
     }
   }
 
@@ -714,3 +798,7 @@ self.onmessage = function(e) {
     }
   }
 };
+
+// Eksport wyłącznie do testów (Node/Vitest) — worker (self.onmessage) go nie używa,
+// przeglądarka ładuje ten plik jako module worker więc nieużywany export jest nieszkodliwy.
+export { scheduleAll };

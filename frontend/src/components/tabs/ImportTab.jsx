@@ -1,6 +1,6 @@
 import { useState } from 'react';
 import { T, s } from '../../constants/theme.js';
-import { DEMO_ZP_STATUS } from '../../constants/demoData.js';
+import { DEMO_ZP_STATUS, DEMO_PARALLEL_MACHINES } from '../../constants/demoData.js';
 
 function dlCSV(content, filename) {
   const a = document.createElement('a');
@@ -32,19 +32,27 @@ ZP-001/01/01,ZP-001/01,ZS-001,1,Kowalski,P-KOD,Wycinanie,G-01,1,30,30,CNF,2026-0
 ZP-001/01/02,ZP-001/01,ZS-001,1,Kowalski,P-KOD,Gięcie,G-02,2,30,30,WIP,2026-05-25,2026-05-20 09:00,2026-05-20 13:00,2026-05-20 09:10,,1,
 ZP-001/01/03,ZP-001/01,ZS-001,1,Kowalski,P-KOD,Spawanie,G-03,3,30,0,PLAN,2026-05-25,2026-05-21 07:00,2026-05-21 10:00,,,1,`,
   },
+  parallel_machines: {
+    filename: 'maszyny_rownolegle_przyklad.csv',
+    content: `WC
+20005
+20059`,
+  },
 };
 
 // [ZMIANA] Props: usunięto `routing` (zastąpione przez erpZp),
 // dodano `erpZp` — lista ZP sparsowana z parseZPFromERP
 export function ImportTab({
-  erpZp, zpStatusData,
+  erpZp, zpStatusData, parallelMachines,
   onLoad, onExportZpStatus,
   hybridMode, onHybridModeChange,
 }) {
-  const [erpLoaded, setErpLoaded] = useState(erpZp?.length > 0);
-  const [zpLoaded,  setZpLoaded]  = useState(zpStatusData?.length > 0);
+  const [erpLoaded,      setErpLoaded]      = useState(erpZp?.length > 0);
+  const [zpLoaded,       setZpLoaded]       = useState(zpStatusData?.length > 0);
+  const [parallelLoaded, setParallelLoaded] = useState(parallelMachines?.length > 0);
   const [rejectLog, setRejectLog] = useState([]);
   const [erpInfo,   setErpInfo]   = useState(null); // { zpCount, machineCount, opCount }
+  const [parallelCount, setParallelCount] = useState(parallelMachines?.length || 0);
 
   function readFile(file, type) {
     const reader = new FileReader();
@@ -69,12 +77,16 @@ export function ImportTab({
         if (result?.rejected?.length) setRejectLog(result.rejected);
         else setRejectLog([]);
       }
+      if (type === 'parallel_machines') {
+        setParallelLoaded(true);
+        setParallelCount(result?.count ?? 0);
+      }
     };
     reader.readAsText(file, 'UTF-8');
   }
 
   // [ZMIANA] DropBox — uproszczony, obsługuje drag & drop i click
-  const DropBox = ({ type, loaded, label, icon, desc, cols, info }) => (
+  const DropBox = ({ type, loaded, label, icon, desc, cols, info, infoText }) => (
     <div
       style={{
         border: `1.5px dashed ${loaded ? T.ok : T.border2}`,
@@ -96,6 +108,9 @@ export function ImportTab({
             <div style={{ fontSize: 10, color: T.text3, lineHeight: 1.6 }}>
               {info.zpCount} ZP · {info.opCount} operacji · {info.machineCount} maszyn
             </div>
+          )}
+          {infoText && (
+            <div style={{ fontSize: 10, color: T.text3, lineHeight: 1.6 }}>{infoText}</div>
           )}
         </div>
       ) : (
@@ -122,8 +137,7 @@ export function ImportTab({
       {/* ── 1. WGRAJ PLIKI ─────────────────────────────────────────────────── */}
       <section>
         <SectionHeader icon="📥" label="Wgraj pliki" />
-        {/* [ZMIANA] Dwa boxy zamiast trzech — ERP zastępuje routing + zs */}
-        <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 16 }}>
+        <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: 16 }}>
           <DropBox
             type="erp_zp"
             loaded={erpLoaded || hasErpData}
@@ -157,6 +171,17 @@ export function ImportTab({
               { n: 'actual_start',  req: false },
               { n: 'actual_end',    req: false },
               { n: 'volume_actual', req: false },
+            ]}
+          />
+          <DropBox
+            type="parallel_machines"
+            loaded={parallelLoaded || parallelMachines?.length > 0}
+            label="Maszyny równoległe"
+            icon="🔀"
+            desc="Kody WC, które zawsze działają niezależnie od reszty trasy (np. piły startowe) — kolejna operacja czeka na wszystkie naraz."
+            infoText={`${parallelCount} maszyn`}
+            cols={[
+              { n: 'WC', req: true },
             ]}
           />
         </div>
@@ -197,6 +222,23 @@ export function ImportTab({
           Kolumny: <code>WC</code> = numer maszyny, <code>WC2</code> = gniazdo/linia,
           <code> WCname</code> = pełna nazwa maszyny, <code>CzasPlan</code> = czas całkowity [h].
         </div>
+
+        {/* Info o formacie pliku maszyn równoległych */}
+        <div style={{
+          marginTop: 8,
+          padding: '10px 14px',
+          background: T.surface,
+          border: `1px solid ${T.border}`,
+          borderRadius: 8,
+          fontSize: 11,
+          color: T.text3,
+          lineHeight: 1.7,
+        }}>
+          <strong style={{ color: T.text2 }}>Format pliku maszyn równoległych:</strong>{' '}
+          Jedna kolumna <code>WC</code> (kod maszyny) na wiersz, nagłówek opcjonalny.
+          Operacje na tych maszynach zawsze startują niezależnie od siebie i od reszty trasy —
+          pierwsza kolejna operacja czeka aż wszystkie się zakończą.
+        </div>
       </section>
 
       {/* ── 2. EKSPORTUJ ───────────────────────────────────────────────────── */}
@@ -216,8 +258,11 @@ export function ImportTab({
               onClick={() => {
                 onLoad(null, 'demo');
                 onLoad(DEMO_ZP_STATUS, 'zp_status');
+                const parallelResult = onLoad(DEMO_PARALLEL_MACHINES, 'parallel_machines');
                 setZpLoaded(true);
                 setErpLoaded(true);
+                setParallelLoaded(true);
+                setParallelCount(parallelResult?.count ?? 0);
               }}>
               ▶ Załaduj demo
             </button>
@@ -250,11 +295,11 @@ export function ImportTab({
       {/* ── 3. POBIERZ PRZYKŁADY ───────────────────────────────────────────── */}
       <section>
         <SectionHeader icon="📋" label="Pobierz przykłady" />
-        {/* [ZMIANA] Dwa przykłady zamiast trzech */}
-        <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12 }}>
+        <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: 12 }}>
           {[
-            { key: 'erp_zp',    label: 'erp_zp_przyklad.csv',    icon: '🏭', desc: 'Eksport ZP z ERP (format TSV)' },
-            { key: 'zp_status', label: 'zp_status_przyklad.csv', icon: '📋', desc: 'Status realizacji ZP' },
+            { key: 'erp_zp',            label: 'erp_zp_przyklad.csv',              icon: '🏭', desc: 'Eksport ZP z ERP (format TSV)' },
+            { key: 'zp_status',         label: 'zp_status_przyklad.csv',           icon: '📋', desc: 'Status realizacji ZP' },
+            { key: 'parallel_machines', label: 'maszyny_rownolegle_przyklad.csv',  icon: '🔀', desc: 'Lista maszyn równoległych' },
           ].map(({ key, label, icon, desc }) => (
             <div key={key} style={{ ...s.card, display: 'flex', alignItems: 'center', gap: 12 }}>
               <span style={{ fontSize: 22, flexShrink: 0 }}>{icon}</span>

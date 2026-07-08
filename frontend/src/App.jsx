@@ -2,7 +2,7 @@ import React, { useState, useCallback, useMemo, useEffect, useRef } from 'react'
 import { s, T, PALETTE } from './constants/theme.js';
 import { DEMO_ERP_ZP, DEMO_ZP_STATUS } from './constants/demoData.js';
 import {
-  parseZPFromERP, erpZpToSchedulerInput,
+  parseZPFromERP, erpZpToSchedulerInput, parseParallelMachines,
   tocBuffer, computeLoads, dlCSV,
   calcHybridZpStatus,
 } from './utils/scheduler.js';
@@ -180,6 +180,7 @@ function NavMenu({ menu, active, onSelect, indicators = {} }) {
 export default function App() {
   const [tab, setTab]               = useState('dashboard');
   const [erpZp, setErpZp]           = useState([]);
+  const [parallelMachines, setParallelMachines] = useState([]); // kody WC z osobnego pliku — patrz erpZpToSchedulerInput
   const [isScheduling, setIsScheduling] = useState(false);
   const [isOptimizing, setIsOptimizing] = useState(false);
   const workerRef    = useRef(null);
@@ -209,6 +210,7 @@ export default function App() {
     schedulingMode:  'asap',
     safetyBufferDays: 1,
     shiftStart:      6,
+    schedulingGraphMode: 'graph', // 'graph' honoruje parallelMachines (fan-in), 'legacy' = dawne zachowanie
   });
 
   const [historyData, setHistoryData]         = useState([]);
@@ -244,6 +246,17 @@ export default function App() {
       setGanttDirty(true);
     }
   }, [routing.length, planStart, zp.length, Object.keys(wcToWc2).length]);
+
+  // Zmiana listy maszyn równoległych / trybu grafu po imporcie -> przelicz routing
+  // (nie dotyka zp/wcSchedule, patrz ograniczenie opisane w planie).
+  useEffect(() => {
+    if (erpZp.length > 0) {
+      const { routingByProduct } = erpZpToSchedulerInput(erpZp, { parallelMachines, mode: scheduleConfig.schedulingGraphMode });
+      setRouting(_erpRoutingToFlat(routingByProduct));
+      setWcScheduleVersion(v => v + 1);
+      setGanttDirty(true);
+    }
+  }, [parallelMachines, scheduleConfig.schedulingGraphMode]);
 
   const globalLookups = useMemo(() => {
     const routingByProduct = {};
@@ -421,7 +434,7 @@ export default function App() {
     if (type === 'demo') {
       const parsed      = parseZPFromERP(DEMO_ERP_ZP);
       const newWcToWc2  = parsed.wcToWc2 || {};
-      const { zpList, routingByProduct } = erpZpToSchedulerInput(parsed);
+      const { zpList, routingByProduct } = erpZpToSchedulerInput(parsed, { parallelMachines, mode: scheduleConfig.schedulingGraphMode });
       const routingFlat = _erpRoutingToFlat(routingByProduct);
       const ps          = '2026-06-22';
       const wcs         = [...new Set(routingFlat.map(r => r.workcenter))].sort();
@@ -440,7 +453,7 @@ export default function App() {
     if (type === 'erp_zp') {
       const parsed      = parseZPFromERP(text);
       const newWcToWc2  = parsed.wcToWc2 || {};
-      const { zpList, routingByProduct } = erpZpToSchedulerInput(parsed);
+      const { zpList, routingByProduct } = erpZpToSchedulerInput(parsed, { parallelMachines, mode: scheduleConfig.schedulingGraphMode });
       const routingFlat = _erpRoutingToFlat(routingByProduct);
       const horizonDate = new Date();
       horizonDate.setDate(horizonDate.getDate() + (scheduleConfig.horizonDays || 14));
@@ -452,6 +465,7 @@ export default function App() {
       const ps          = new Date().toISOString().slice(0, 10);
       const wcs         = [...new Set(routingFlat.map(r => r.workcenter))].sort();
       const newSched    = buildWcSchedule(wcs, ps, zpFiltered, scheduleConfig.horizonDays, {}, wcCapacity);
+      setErpZp(parsed);
       setRouting(routingFlat);
       setZP(zpFiltered);
       setWcToWc2(prev => ({ ...prev, ...newWcToWc2 }));
@@ -467,7 +481,12 @@ export default function App() {
       setZpStatusHeaders(calcZpHeaderStatus(records));
       return { rejected };
     }
-  }, [wcLoadMap, scheduleConfig, wcCapacity]);
+    if (type === 'parallel_machines') {
+      const codes = parseParallelMachines(text);
+      setParallelMachines(codes);
+      return { count: codes.length };
+    }
+  }, [wcLoadMap, scheduleConfig, wcCapacity, parallelMachines]);
 
   function _erpRoutingToFlat(routingByProduct) {
     const flat = [];
@@ -483,6 +502,7 @@ export default function App() {
           ct_min:       0,
           sequence:     op.sequence,
           predecessors: op.predecessors || [],
+          _opUid:       op._opUid, // klucz zależności z applyParallelPredecessors — worker musi go dostać, inaczej wraca do numeru OP
           capacity_h:   wcCapacity[op.machine_id] ?? WC_DAILY_CAPACITY[op.machine_id] ?? 16,
           _durH:        op._durH,
           _status:      op._status,
@@ -567,7 +587,7 @@ export default function App() {
             <style>{`@keyframes spin{to{transform:rotate(360deg)}}`}</style>
           </div>
         )}
-        {tab === 'import'       && <ImportTab erpZp={erpZp} zpStatusData={zpStatusData} onLoad={handleLoad} onExportZpStatus={handleExportZpStatus} hybridMode={hybridMode} onHybridModeChange={setHybridMode} />}
+        {tab === 'import'       && <ImportTab erpZp={erpZp} zpStatusData={zpStatusData} parallelMachines={parallelMachines} onLoad={handleLoad} onExportZpStatus={handleExportZpStatus} hybridMode={hybridMode} onHybridModeChange={setHybridMode} />}
         <div style={{display: tab === 'plan' ? 'contents' : 'none'}}>
           <PlanTab routing={routing} zp={zp} globalLookups={globalLookups} wcSchedule={wcSchedule} subZP={subZP} fwdZP={fwdZP} zpStatus={activeZpStatus} ganttDirty={ganttDirty} onRecalc={() => recalcGantt(wcSchedule)} onScheduleChange={updateSchedule} planStart={planStart} onPlanStartChange={setPlanStart} selectedWC={selectedWC} onWCSelect={setSelectedWC} selectedDate={selectedDate} onDateSelect={setSelectedDate} heatmapFilter={heatmapFilter} onHeatmapFilterChange={setHeatmapFilter} />
         </div>

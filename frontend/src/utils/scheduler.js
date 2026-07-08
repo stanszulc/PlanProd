@@ -764,6 +764,47 @@ function _opsSignature(ops) {
     .join('|');
 }
 
+// ─── PARALLEL MACHINES: graf zależności zamiast sztywnego łańcucha ───────────
+// Operacje na maszynach z `parallelMachines` startują niezależnie od siebie
+// (predecessors: []); pierwsza "normalna" operacja czeka na WSZYSTKIE z nich
+// (fan-in). Identyfikacja po `machine_id`/`workcenter`, NIE po numerze OP —
+// numer OP może się dublować (te maszyny bywają zawsze pod tym samym numerem)
+// i nie nadaje się jako unikalny klucz zależności. Zamiast tego każda operacja
+// dostaje świeży, wewnętrzny `_opUid` (indeks w tablicy), po którym referuje
+// predecessors.
+//
+// Maszyna z listy liczy się jako "równoległa" TYLKO gdy faktycznie jest na
+// samym początku trasy — jej numer OP nie jest późniejszy niż pierwsza
+// "normalna" (nie z listy) operacja. Ta sama maszyna użyta w środku/na końcu
+// innego routingu (bo lista jest globalna, nie per-produkt) zostaje zwykłą
+// operacją w łańcuchu — inaczej wymuszalibyśmy, żeby wcześniejsze, realnie
+// pierwsze operacje czekały na coś, co w tym konkretnym routingu dzieje się
+// później, co odwracałoby kolejność zamiast jej nie zmieniać.
+export function applyParallelPredecessors(ops, parallelMachines) {
+  const parallelSet = parallelMachines instanceof Set ? parallelMachines : new Set(parallelMachines);
+  const indexed = ops.map((op, idx) => ({ ...op, _opUid: idx }));
+
+  function matchesList(op) {
+    return parallelSet.has(String(op.machine_id ?? op.workcenter));
+  }
+
+  const candidateNormal = indexed.filter(op => !matchesList(op));
+  const minNormalSeq = candidateNormal.length ? Math.min(...candidateNormal.map(op => op.sequence)) : Infinity;
+
+  const parallelOps = indexed.filter(op => matchesList(op) && op.sequence <= minNormalSeq);
+  const parallelKeys = new Set(parallelOps.map(op => op._opUid));
+  const normalOps    = indexed.filter(op => !parallelKeys.has(op._opUid)).sort((a, b) => a.sequence - b.sequence);
+
+  parallelOps.forEach(op => { op.predecessors = []; });
+  normalOps.forEach((op, i) => {
+    op.predecessors = i === 0
+      ? parallelOps.map(p => p._opUid)
+      : [normalOps[i - 1]._opUid];
+  });
+
+  return indexed;
+}
+
 // ─── ADAPTER: ERP ZP → forwardSchedule ───────────────────────────────────────
 // forwardSchedule oczekuje { zpList, routingByProduct }.
 // volume=1 bo durH jest już całkowitym czasem ZP (nie ct_min per sztukę).
@@ -771,13 +812,26 @@ function _opsSignature(ops) {
 // przyjętego dla danego produktu (pierwszy napotkany ZP), dostaje osobny wpis
 // w routingByProduct pod kluczem `${product}::${zp_id}` (zp._routingKey), żeby
 // nie zgubić jego rzeczywistej sekwencji operacji/maszyn.
-export function erpZpToSchedulerInput(erpZpList) {
+//
+// options.parallelMachines — lista kodów WC (z osobnego pliku wsadowego)
+//   zawsze traktowanych jako niezależne operacje startowe, patrz
+//   applyParallelPredecessors.
+// options.mode — 'graph' (honoruje parallelMachines) | 'legacy' (zachowanie
+//   sprzed tej funkcji — predecessors to naiwny łańcuch po indeksie, i tak
+//   ignorowany przez żywy silnik w tym trybie).
+export function erpZpToSchedulerInput(erpZpList, options = {}) {
+  const { parallelMachines = [], mode = 'legacy' } = options;
+  const parallelSet = new Set(parallelMachines.map(String));
+
   const routingByProduct  = {};
   const canonicalSig      = {}; // product -> sygnatura pierwszego napotkanego ZP
   const zpList = [];
 
   function buildOps(ops) {
-    return ops.map(op => ({
+    const graphOps = mode === 'graph' && parallelSet.size > 0
+      ? applyParallelPredecessors(ops, parallelSet)
+      : ops;
+    return graphOps.map(op => ({
       operation:    op.machine_name || op.op_label,
       workcenter:   op.machine_id,   // scheduler planuje per maszyna
       wc_group:     op.workcenter,   // gniazdo — do widoku
@@ -785,6 +839,7 @@ export function erpZpToSchedulerInput(erpZpList) {
       machine_name: op.machine_name,
       sequence:     op.sequence,
       predecessors: op.predecessors,
+      _opUid:       op._opUid,       // klucz zależności z applyParallelPredecessors (undefined = fallback na sequence)
       ct_min:       0,               // nieużywane — durH z ZP
       capacity_h:   DEFAULT_AVAIL,   // fallback; wcSchedule nadpisze
       _durH:        op.durH,
@@ -820,4 +875,21 @@ export function erpZpToSchedulerInput(erpZpList) {
   }
 
   return { zpList, routingByProduct };
+}
+
+// ─── Parser pliku "maszyny równoległe" ───────────────────────────────────────
+// Osobny plik wsadowy: jedna kolumna WC (kod maszyny) na wiersz, opcjonalny
+// nagłówek "WC", format TSV/CSV/zwykła lista — bierze pierwszą kolumnę,
+// ignoruje puste linie i duplikaty.
+const BOM_RE = new RegExp('^' + String.fromCharCode(0xfeff));
+
+export function parseParallelMachines(text) {
+  const lines = text.replace(BOM_RE, '').split('\n').map(l => l.trim()).filter(Boolean);
+  if (!lines.length) return [];
+  const first = lines[0].toLowerCase();
+  const start = ['wc', 'machine', 'maszyna', 'machine_id'].includes(first) ? 1 : 0;
+  const codes = lines.slice(start)
+    .map(l => l.split(/[,;\t]/)[0].trim())
+    .filter(Boolean);
+  return [...new Set(codes)];
 }

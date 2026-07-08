@@ -301,6 +301,14 @@ export const DEMO_ERP_ZP = `Numer ZP	Klient/zam	Numer ZS	Data zak	Data wys	Kod	N
 7310930520	SMAY REKLAMACJE	0901011826	2026-06-23 00:00	2026-06-24 00:00	95001	Naprawa kielichów NSDZ	1	0	010	30003	Ślusarnia - kanały	Kanały	24	24
 7310930520	SMAY REKLAMACJE	0901011826	2026-06-23 00:00	2026-06-24 00:00	95001	Naprawa kielichów NSDZ	1	0	020	30052	Ślusarnia - iSWAY	iSWAY	16	16`;
 
+// ─── DEMO: maszyny równoległe ─────────────────────────────────────────────────
+// 20005 (Piła taśmowa) i 20059 (Wykrawarko-gilotyna SGe_2) to OP010/OP011 w routingu
+// produktu 1238582 — realnie nie zależą od siebie, mogą pracować jednocześnie,
+// dopiero 30009 (Centrum gięć) czeka aż obie się skończą.
+export const DEMO_PARALLEL_MACHINES = `WC
+20005
+20059`;
+
 // ─── CAPACITY PER MASZYNA [rbh/dzień, pon-pt] ────────────────────────────────
 // Capacity per WC [rbh/dzień] = capacity_brygady / liczba_maszyn_w_brygadzie
 // Suma maszyn gniazda = pełna capacity brygady (BRIGADE_CAPACITY)
