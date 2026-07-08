@@ -284,14 +284,24 @@ function scheduleAll(zpList, routingByProduct, wcSchedule, planStartDt, onProgre
     }, 0);
   }
 
-  const allTotalH = zpList.map(zp => totalH(zp));
+  // Cache per-ZP: totalH i effectiveDue są stałe przez cały przebieg scheduleAll
+  // (nie zależą od cursor/tMs), a urgencyDynamic jest wywoływane w komparatorze
+  // kopca — O(log n) razy na push/pop, więcej razy niż jest ZP. Bez cache totalH()
+  // (pętla reduce po routingu) liczyłoby się od nowa przy każdym porównaniu.
+  const zpCache = new Map();
+  zpList.forEach(zp => {
+    const th = totalH(zp);
+    const bufferMs = (zp.priority === 1 ? VIP_BUFFER_DAYS : 0) * 24 * MS;
+    const effectiveDue = new Date(zp.due_date + 'T23:59:59').getTime() - bufferMs;
+    zpCache.set(zp, { th, effectiveDue });
+  });
+
+  const allTotalH = [...zpCache.values()].map(v => v.th);
   const p_avg = allTotalH.reduce((s, h) => s + h, 0) / Math.max(1, allTotalH.length);
   const ATC_K = config?.atcK ?? 2.5;
 
   function urgencyDynamic(zp, tMs) {
-    const th = totalH(zp);
-    const bufferMs     = (zp.priority === 1 ? VIP_BUFFER_DAYS : 0) * 24 * MS;
-    const effectiveDue = new Date(zp.due_date + 'T23:59:59').getTime() - bufferMs;
+    const { th, effectiveDue } = zpCache.get(zp);
     const dueMs        = effectiveDue - planStartDt.getTime();
     const totalMs      = th * MS;
     const remainMs     = dueMs - tMs;

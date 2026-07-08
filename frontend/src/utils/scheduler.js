@@ -591,7 +591,9 @@ export function calcHybridRealEnd(parentZpId, zpStatusData, routingByProduct, wc
   for (const op of planOps) {
     const routeOp = routingMap.get(op.sequence);
     if (!routeOp) continue;
-    const durH = op.volume_plan * routeOp.ct_min / 60;
+    // ct_min=0 dla routingu z ERP-embedded importu (durH liczony wcześniej, patrz erpZpToSchedulerInput)
+    // — bez tego fallbacku każda operacja PLAN liczyłaby się jako 0h.
+    const durH = routeOp.ct_min > 0 ? op.volume_plan * routeOp.ct_min / 60 : (routeOp._durH ?? 0);
     const { endDt } = forwardScheduleOp(lastEnd, durH, op.workcenter, wcSchedule, occupancy);
     lastEnd = endDt;
   }
