@@ -247,16 +247,28 @@ export default function App() {
     }
   }, [routing.length, planStart, zp.length, Object.keys(wcToWc2).length]);
 
-  // Zmiana listy maszyn równoległych / trybu grafu po imporcie -> przelicz routing
-  // (nie dotyka zp/wcSchedule, patrz ograniczenie opisane w planie).
+  // Zmiana listy maszyn równoległych / trybu grafu / planStart / horyzontu po imporcie
+  // -> przelicz routing i przefiltruj ZP względem AKTUALNEGO planStart, nie względem
+  // zamrożonej przy imporcie daty "dziś". Bug: okno dziś-30..dziś+horyzont liczone
+  // raz w handleLoad nigdy się nie odświeżało po zmianie "Planuj od" — plan "wyglądał"
+  // jakby wciąż startował od dziś, bo lista branych pod uwagę ZP się nie zmieniała.
   useEffect(() => {
     if (erpZp.length > 0) {
-      const { routingByProduct } = erpZpToSchedulerInput(erpZp, { parallelMachines, mode: scheduleConfig.schedulingGraphMode });
+      const { zpList, routingByProduct } = erpZpToSchedulerInput(erpZp, { parallelMachines, mode: scheduleConfig.schedulingGraphMode });
+      const planStartDate = new Date(planStart + 'T00:00:00');
+      const horizonDate = new Date(planStartDate);
+      horizonDate.setDate(horizonDate.getDate() + (scheduleConfig.horizonDays || 14));
+      const cutoffDate = new Date(planStartDate);
+      cutoffDate.setDate(cutoffDate.getDate() - 30);
+      const horizonStr = horizonDate.toISOString().slice(0, 10);
+      const cutoffStr  = cutoffDate.toISOString().slice(0, 10);
+      const zpFiltered = zpList.filter(z => z.due_date >= cutoffStr && z.due_date <= horizonStr);
       setRouting(_erpRoutingToFlat(routingByProduct));
+      setZP(zpFiltered);
       setWcScheduleVersion(v => v + 1);
       setGanttDirty(true);
     }
-  }, [parallelMachines, scheduleConfig.schedulingGraphMode]);
+  }, [erpZp, parallelMachines, scheduleConfig.schedulingGraphMode, planStart, scheduleConfig.horizonDays]);
 
   const globalLookups = useMemo(() => {
     const routingByProduct = {};
@@ -455,14 +467,19 @@ export default function App() {
       const newWcToWc2  = parsed.wcToWc2 || {};
       const { zpList, routingByProduct } = erpZpToSchedulerInput(parsed, { parallelMachines, mode: scheduleConfig.schedulingGraphMode });
       const routingFlat = _erpRoutingToFlat(routingByProduct);
-      const horizonDate = new Date();
+      // Domyślnie "dziś" przy każdym świeżym imporcie — użytkownik może to potem
+      // zmienić w "Planuj od"; okno ZP poniżej i wcSchedule liczą się od TEJ daty,
+      // nie od zamrożonego "dziś" (patrz też reaktywny useEffect niżej, który
+      // przelicza to samo okno, gdy planStart zmieni się PO imporcie).
+      const ps          = new Date().toISOString().slice(0, 10);
+      const psDate      = new Date(ps + 'T00:00:00');
+      const horizonDate = new Date(psDate);
       horizonDate.setDate(horizonDate.getDate() + (scheduleConfig.horizonDays || 14));
       const horizonStr  = horizonDate.toISOString().slice(0, 10);
-      const cutoffDate  = new Date();
+      const cutoffDate  = new Date(psDate);
       cutoffDate.setDate(cutoffDate.getDate() - 30);
       const cutoffStr   = cutoffDate.toISOString().slice(0, 10);
       const zpFiltered  = zpList.filter(z => z.due_date >= cutoffStr && z.due_date <= horizonStr);
-      const ps          = new Date().toISOString().slice(0, 10);
       const wcs         = [...new Set(routingFlat.map(r => r.workcenter))].sort();
       const newSched    = buildWcSchedule(wcs, ps, zpFiltered, scheduleConfig.horizonDays, {}, wcCapacity);
       setErpZp(parsed);
@@ -472,6 +489,7 @@ export default function App() {
       setWcSchedule(newSched);
       setWcScheduleVersion(v => v + 1);
       setGanttDirty(true);
+      setPlanStart(ps);
       if (parsed.length) setTab('heatmap_plan');
       return { zpList: parsed };
     }

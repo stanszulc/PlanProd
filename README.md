@@ -11,8 +11,9 @@ Demo: [stanszulc.github.io/PlanProd/](https://stanszulc.github.io/PlanProd/)
 | Warstwa | Technologie |
 |---------|------------|
 | Frontend | React 19.2 + Vite, JavaScript, CSS |
-| Wizualizacja | Własne komponenty SVG/D3 (Gantt, Sankey, Heatmapy) |
-| Backend | FastAPI (Python) + OR-Tools CP-SAT |
+| Silnik harmonogramowania | Web Worker (`scheduler.worker.js`) — cała symulacja liczy się w tle, bez blokowania UI |
+| Wizualizacja | Własne komponenty SVG (Gantt, Sankey, macierz przepływów, heatmapy) |
+| Backend | FastAPI (Python) + OR-Tools CP-SAT — eksperymentalny, patrz [Stan projektu](#stan-projektu) |
 | Deploy | GitHub Pages |
 
 ---
@@ -23,21 +24,24 @@ Demo: [stanszulc.github.io/PlanProd/](https://stanszulc.github.io/PlanProd/)
 PlanProd/
 ├── frontend/
 │   └── src/
-│       ├── App.jsx               # Główny router + kontener stanu
+│       ├── App.jsx                    # Główny router + kontener stanu
 │       ├── components/
-│       │   ├── common/           # Atomy UI (Bar, KpiCard, Dot...)
-│       │   └── tabs/             # 15 zakładek funkcjonalnych
+│       │   ├── common/                # Atomy UI (Bar, KpiCard, Dot...)
+│       │   └── tabs/                  # 17 zakładek funkcjonalnych
 │       ├── utils/
-│       │   ├── scheduler.js      # Silnik symulacji harmonogramu
-│       │   └── analysisUtils.js  # KPI, OTIF, analiza strat zdolności
+│       │   ├── scheduler.js           # Parsery ERP/routingu + adaptery wejścia dla workera
+│       │   ├── scheduler.worker.js    # Żywy silnik harmonogramowania (patrz niżej)
+│       │   └── analysisUtils.js       # KPI, OTIF, analiza strat zdolności
 │       └── constants/
-│           ├── theme.js          # Paleta ciemnego motywu, kolory statusów
-│           └── demoData.js       # Przykładowe dane CSV
+│           ├── theme.js               # Paleta ciemnego motywu, kolory statusów
+│           └── demoData.js            # Przykładowe dane ERP + lista maszyn równoległych
 │
 └── backend/
-    ├── main.py                   # FastAPI (health, /optimize endpoint)
+    ├── main.py                        # FastAPI — endpoint /api/optimize to nieużywany stub
+    ├── server.py                      # Żywy serwer eksperymentalny (greedy/SA/CP-SAT)
+    ├── cpsat_tardiness.py             # Solver CP-SAT minimalizujący opóźnienia
     └── core/
-        └── optimizer.py          # Solver CP-SAT — dwufazowa optymalizacja
+        └── optimizer.py               # Martwy kod — samodzielny skrypt demo, niepodłączony do niczego
 ```
 
 ---
@@ -46,44 +50,61 @@ PlanProd/
 
 ### 1. Import danych
 
-Użytkownik wczytuje przez zakładkę **Import** dwa pliki CSV:
+Przez zakładkę **Import / Eksport** wczytuje się:
 
-- **Routing** — Produkt → Operacje → Stanowiska (czasy cyklu, kolejność, warunki poprzedności)
-- **ZP (Zamówienia produkcji)** — ID, produkt, ilość, termin realizacji, priorytet
+- **Eksport ZP z ERP** (TSV) — jeden wiersz na operację: numer ZP, klient, termin, kod i nazwa produktu, numer operacji, kod maszyny/gniazda, planowany i pozostały czas. Routing technologiczny wynika bezpośrednio z tych wierszy — nie ma osobnego pliku routingu.
+- **zp_status.csv** — status realizacji (CNF/WIP/PLAN), daty rzeczywiste, ilości — do trybu REALIZACJA i raportu OTIF.
+- **Maszyny równoległe** — osobna, krótka lista kodów maszyn, które zawsze działają niezależnie od reszty trasy (patrz [Maszyny równoległe](#maszyny-równoległe-fan-outfan-in)).
 
-### 2. Symulacja frontendowa
+### 2. Silnik harmonogramowania (frontend)
 
-`scheduler.js` przelicza lokalnie (bez backendu):
+#### W skrócie
 
-- Obciążenia stanowisk na 30-dniowym horyzoncie
-- Timeline dla wykresu Gantta
-- Obliczenia buforów TOC (Theory of Constraints)
+Każde zlecenie produkcyjne (ZP) to ciąg operacji, z których każda potrzebuje konkretnej maszyny na jakiś czas. Silnik działa jak inteligentna kolejka: w każdym kroku wybiera operację, która **teraz** jest najpilniejsza (licząc priorytet, termin i ile pracy jeszcze zostało), wstawia ją w najbliższe wolne okno na jej maszynie, po czym przelicza pilność na nowo i powtarza — dzięki temu zlecenie, które traci zapas czasu, może "wyprzedzić w kolejce" inne, mniej pilne. Całość liczy się w tle (Web Worker), więc interfejs się nie zawiesza.
 
-### 3. Optymalizacja backendu
+#### Trochę dokładniej
 
-`optimizer.py` — dwufazowy solver OR-Tools CP-SAT:
+`scheduleAll()` w `scheduler.worker.js` to **dynamiczny dyspozytor oparty o kopiec (MinHeap)**, nie jedno sortowanie na starcie:
 
-- **Faza 1** — Testuje stałe warianty zmian (8h/10h/12h) → wybiera Top 3 harmonogramów
-- **Faza 2** — Zachłanna optymalizacja dzień-po-dniu na CCR (zasobie krytycznym) → minimalizuje nadgodziny (**-89% OT** vs baseline)
+1. Każde ZP dostaje "stan": wskaźnik na aktualną operację i kursor czasu (start = `planStart` w trybie **ASAP**, albo wyliczony najpóźniejszy bezpieczny start w trybie **ALAP**).
+2. Kopiec wyciąga zawsze ZP o **najniższej wartości pilności**, planuje mu **tylko jedną, najbliższą operację** (szuka pierwszego wolnego okna na danym gnieździe), przesuwa jego kursor i wrzuca z powrotem do kopca — z pilnością przeliczoną na nowo dla nowego czasu.
+3. Pilność liczona jest jedną z czterech wybieralnych metod (zakładka Ustawienia):
+   - **ATC — Apparent Tardiness Cost** (domyślna): `-(w/p) · exp(-slack / (K · średni_czas_ZP))`, gdzie `w`=waga priorytetu, `p`=czas trwania ZP, `slack`=zapas czasu. Im mniejszy zapas, tym mocniej rośnie pilność.
+   - **Critical Ratio** — `pozostały_czas_do_terminu / pozostała_praca`.
+   - **Due date** — czysto FIFO po terminie.
+   - **Slack** — bezwzględny zapas czasu w milisekundach.
+4. Klienci VIP (`priority = 1`) dostają efektywnie wcześniejszy termin (`due_date − vipBufferDays`), więc wyglądają na pilniejszych, zanim realnie zaczną się spóźniać.
+5. Zasoby dzielą się na dwa typy po kodzie: **maszyny** (`2xxxx`) — zasób ekskluzywny, zajętość liczona co do minuty; **stanowiska/brygady** (`3xxxx`) — zasób pulowany, dzienna zdolność to suma wszystkich maszyn danej brygady, współdzielona przez wiele ZP naraz.
 
-### 4. Wizualizacja — 15 zakładek
+#### Maszyny równoległe (fan-out/fan-in)
+
+Domyślnie operacje jednego ZP idą ściśle jedna-po-drugiej. Jeśli skonfigurujesz listę "maszyn równoległych" (Import / Eksport), operacje na tych maszynach — **o ile faktycznie są na samym początku trasy** — startują niezależnie od siebie (np. dwie różne piły tnące różne elementy), a pierwsza kolejna operacja czeka, aż **wszystkie** się skończą (fan-in), zamiast na nie czekać po kolei. Tryb przełącza się w Ustawieniach (`Graph` — zalecany, domyślny / `Legacy` — dawne, ściśle sekwencyjne zachowanie, zawsze dostępne jako powrót).
+
+### 3. Backend CP-SAT (eksperymentalny, niepodłączony do głównego flow)
+
+`backend/server.py` + `backend/cpsat_tardiness.py` implementują dodatkowe solvery (greedy, symulowane wyżarzanie, CP-SAT minimalizujący sumę opóźnień) — wywoływane wyłącznie z zakładki **Diagnostyka harmonogramu**, jako alternatywa do porównania z wynikiem silnika frontendowego. Wymaga ręcznego uruchomienia (`python server.py`) i działania pod `localhost:8765`. `backend/core/optimizer.py` to starszy, samodzielny skrypt demonstracyjny — nie jest importowany przez żaden inny plik w repo.
+
+### 4. Wizualizacja — 17 zakładek
 
 | Zakładka | Funkcja |
 |----------|---------|
 | Dashboard | KPI, alerty, przegląd zdolności produkcyjnych |
-| Harmonogram | Siatka planowania + symulacja |
-| Gantt | Wykres Gantta zleceń produkcyjnych |
-| Wąskie Gardła | Identyfikacja bottlenecków |
-| Heatmapa Obciążeń | Obciążenie stanowisk × dzień |
+| Harmonogram | Gantt + Grafik brygad + status ZP w jednym widoku |
+| Wąskie gardła | Identyfikacja bottlenecków |
+| Heatmapa obciążeń | Obciążenie stanowisk wg terminów ZP |
+| Heatmapa planu | Obciążenie stanowisk × dni wg rzeczywistego harmonogramu + grafik pracy brygad |
+| Przepływy (macierz) | Macierz przepływów między gniazdami/brygadami, z klastrowaniem |
 | Swimlane | Zdolności per stanowisko |
-| Przepływ (Sankey) | Wizualizacja przepływu materiału |
-| Routing | Edytor struktury routingu |
+| Przepływ (Sankey) | Wizualizacja przepływu materiału między gniazdami |
+| Routing | Wizualizacja struktury tras technologicznych (graf zależności operacji) |
 | Raport OTIF | Realizacja vs plan (On-Time In-Full) |
 | Bufor TOC | Zarządzanie buforami — widok dyspozytora |
 | Bufor ZS | Widok dla handlowca |
 | Spóźnione ZS | Śledzenie opóźnionych zleceń |
 | Analiza Procesu | Historyczne metryki, Pareto, box ploty |
-| Import / Eksport | Ładowanie i zapis CSV |
+| Import / Eksport | Ładowanie i zapis CSV/TSV |
+| Diagnostyka harmonogramu | Porównanie silnika frontendowego z solverami backendu |
+| Ustawienia planowania | Parametry silnika, capacity maszyn, tryb harmonogramowania |
 
 ---
 
@@ -99,23 +120,23 @@ npm run dev
 
 Aplikacja dostępna pod `http://localhost:5173`.
 
-### Backend
+### Backend (opcjonalnie, tylko do zakładki Diagnostyka harmonogramu)
 
 ```bash
 cd backend
 pip install -r requirements.txt
-uvicorn main:app --reload
+python server.py
 ```
 
-API dostępne pod `http://localhost:8000`.
+API dostępne pod `http://localhost:8765`.
 
 ---
 
 ## Stan projektu
 
-- Frontend wdrożony na GitHub Pages
-- Backend (`/optimize`) — solver CP-SAT gotowy w `optimizer.py`, integracja REST frontend↔backend do dokończenia
-- Aktualnie obliczenia harmonogramu wykonują się po stronie frontendu (`scheduler.js`)
+- Frontend wdrożony na GitHub Pages, cała symulacja harmonogramu liczy się lokalnie w przeglądarce (`scheduler.worker.js`).
+- Backend (`server.py` + `cpsat_tardiness.py`) działa i jest wywoływany z zakładki Diagnostyka — ale wyłącznie do porównawczego podglądu, nie zasila głównego flow planowania.
+- `backend/core/optimizer.py` i `backend/main.py` to martwy kod z perspektywy działającej aplikacji.
 
 ---
 
@@ -129,3 +150,6 @@ API dostępne pod `http://localhost:8000`.
 | OTIF | On-Time In-Full |
 | CCR | Capacity Constrained Resource (zasób krytyczny) |
 | OT | Overtime (nadgodziny) |
+| ATC | Apparent Tardiness Cost — metoda liczenia pilności ZP |
+| ASAP / ALAP | As Soon/Late As Possible — tryb startu harmonogramu |
+| Fan-out / fan-in | Rozgałęzienie operacji na niezależne równoległe ścieżki / zbiegnięcie ich w jednej kolejnej operacji |
