@@ -84,22 +84,32 @@ export function FlowMatrixTab({ fwdZP = [], routing = [], wcToWc2 = {}, wcSchedu
       if (!byZP[id]) byZP[id] = [];
       byZP[id].push(op);
     });
+    // Klucz zależności zgodny z silnikiem: _opUid gdy nadany (maszyny równoległe),
+    // inaczej numer OP. Przepływ budowany z rzeczywistych predecessors, nie z
+    // sąsiedztwa po posortowaniu — inaczej dwie niezależne równoległe operacje
+    // (np. piła + gilotyna) wyglądałyby na wzajemnie zależne, a prawdziwe
+    // połączenie do operacji zbiegającej by zniknęło.
+    const opKey = op => op._opUid ?? op.sequence;
     const mFlow = {}, bFlow = {};
     Object.values(byZP).forEach(ops => {
-      const sorted = [...ops].sort((a, b) => (a.sequence || 0) - (b.sequence || 0));
-      for (let i = 0; i < sorted.length - 1; i++) {
-        const from = String(sorted[i].workcenter), to = String(sorted[i+1].workcenter);
-        if (from === to) continue;
-        const durH = sorted[i+1].durH || 0;
-        if (!mFlow[from]) mFlow[from] = {};
-        if (!mFlow[from][to]) mFlow[from][to] = { count: 0, hours: 0 };
-        mFlow[from][to].count++; mFlow[from][to].hours += durH;
-        const bFrom = wcToWc2[from] || from, bTo = wcToWc2[to] || to;
-        if (bFrom === bTo) continue;
-        if (!bFlow[bFrom]) bFlow[bFrom] = {};
-        if (!bFlow[bFrom][bTo]) bFlow[bFrom][bTo] = { count: 0, hours: 0 };
-        bFlow[bFrom][bTo].count++; bFlow[bFrom][bTo].hours += durH;
-      }
+      const byKey = new Map(ops.map(op => [opKey(op), op]));
+      ops.forEach(op => {
+        (op.predecessors || []).forEach(predKey => {
+          const predOp = byKey.get(predKey);
+          if (!predOp) return;
+          const from = String(predOp.workcenter), to = String(op.workcenter);
+          if (from === to) return;
+          const durH = op.durH || 0;
+          if (!mFlow[from]) mFlow[from] = {};
+          if (!mFlow[from][to]) mFlow[from][to] = { count: 0, hours: 0 };
+          mFlow[from][to].count++; mFlow[from][to].hours += durH;
+          const bFrom = wcToWc2[from] || from, bTo = wcToWc2[to] || to;
+          if (bFrom === bTo) return;
+          if (!bFlow[bFrom]) bFlow[bFrom] = {};
+          if (!bFlow[bFrom][bTo]) bFlow[bFrom][bTo] = { count: 0, hours: 0 };
+          bFlow[bFrom][bTo].count++; bFlow[bFrom][bTo].hours += durH;
+        });
+      });
     });
     const wcSet  = new Set([...Object.keys(mFlow), ...Object.values(mFlow).flatMap(r => Object.keys(r))]);
     const wc2Set = new Set([...Object.keys(bFlow), ...Object.values(bFlow).flatMap(r => Object.keys(r))]);

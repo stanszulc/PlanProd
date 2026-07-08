@@ -365,6 +365,8 @@ function scheduleAll(zpList, routingByProduct, wcSchedule, planStartDt, onProgre
         wc_group:   o.wc_group  || '',
         operation:  o.operation || o.machine_name || '',
         sequence:   o.sequence,
+        predecessors: o.predecessors || [], // z routingu — konsumenci (FlowMatrixTab, Sankey) mogą budować graf zamiast zgadywać po sequence
+        _opUid:     o._opUid,
         volume:     zp.volume,
         durH:       dh,
         start_dt:   sd,

@@ -1,6 +1,6 @@
 import { useState, useMemo, useEffect, useRef } from 'react';
 import { T, s } from '../../constants/theme.js';
-import { fmtDt, computeLoads } from '../../utils/scheduler.js';
+import { fmtDt, localDateStr, getAvail } from '../../utils/scheduler.js';
 import { DAY_NAMES } from '../../constants/theme.js';
 import { Dot } from '../common/Dot.jsx';
 import { EmptyState } from '../common/EmptyState.jsx';
@@ -266,11 +266,24 @@ export function GanttTab({ routing, zp, globalLookups, wcSchedule, subZP, fwdZP,
     return result;
   }, [axisStart?.getTime(), axisEnd?.getTime(), scale.tick]);
 
-  // [PERF #1] computeLoads memoizowane — nie przeliczać przy każdym hover/tooltip/render
-  const loads = useMemo(
-    () => computeLoads(globalLookups.routingByProduct, allZP, wcSchedule, dates[0]),
-    [globalLookups.routingByProduct, allZP, wcSchedule, dates[0]]
-  );
+  // Obciążenie do etykiety "wąskie gardło" — liczone z RZECZYWISTYCH segmentów planu
+  // (planBase = pełny, nieprzefiltrowany fwdZP), nie z teoretycznego modelu wg terminów
+  // (computeLoads) — inaczej ta etykieta pokazywałaby co innego niż same paski obok niej
+  // i niż Heatmapa planu, która też liczy z segmentów.
+  const loads = useMemo(() => {
+    const targetDate = dates[0];
+    const byWc = {};
+    if (!targetDate) return byWc;
+    planBase.forEach(s2 => {
+      (s2.segments || []).forEach(seg => {
+        if (!seg.segStart || localDateStr(seg.segStart) !== targetDate) return;
+        if (!byWc[s2.workcenter]) byWc[s2.workcenter] = { load: 0, cap: getAvail(s2.workcenter, targetDate, wcSchedule) };
+        byWc[s2.workcenter].load += seg.durH;
+      });
+    });
+    Object.values(byWc).forEach(v => { v.util = v.cap > 0 ? v.load / v.cap : (v.load > 0 ? 999 : 0); });
+    return byWc;
+  }, [planBase, wcSchedule, dates[0]]);
   const maxUtil = Object.values(loads).length ? Math.max(...Object.values(loads).map(v => v.util)) : 0;
 
   // [PERF #4] Pre-compute segment pixel X positions — oblicza się raz z planBase, NIE z displayZP
