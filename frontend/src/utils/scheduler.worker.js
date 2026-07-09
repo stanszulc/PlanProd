@@ -50,7 +50,7 @@ function tocBuffer(backStart, planStart, dueDate, realEnd) {
 // ─── Occupancy (maszyny 2xxxx) ────────────────────────────────────────────────
 function makeOccupancy() { return Object.create(null); }
 
-function addSlotToOcc(occ, wc, from, to) {
+function addSlotToOcc(occ, wc, from, to, opKey) {
   if (!occ[wc]) occ[wc] = [];
   const slots = occ[wc];
   let lo = 0, hi = slots.length;
@@ -58,7 +58,7 @@ function addSlotToOcc(occ, wc, from, to) {
     const mid = (lo + hi) >> 1;
     if (slots[mid].from < from) lo = mid + 1; else hi = mid;
   }
-  slots.splice(lo, 0, { from: new Date(from), to: new Date(to) });
+  slots.splice(lo, 0, { from: new Date(from), to: new Date(to), opKey });
 }
 
 function lowerBound(slots, t) {
@@ -572,8 +572,6 @@ self.onmessage = function(e) {
       const { wcSchedule, planStart, fwdZP, zpStatus, wcToWc2: wcToWc2Payload, config } = payload;
       const t0 = Date.now();
 
-      console.log('[Worker] OPTIMIZE_INSERT start, fwdZP:', fwdZP?.length, 'zpStatus:', zpStatus?.length);
-
       // Lokalne mapy brygad dla OPTIMIZE_INSERT
       const wcToWc2Local = wcToWc2Payload || {};
       const wc2ToWcsLocal = {};
@@ -600,10 +598,7 @@ self.onmessage = function(e) {
         .filter(z => z.late)
         .sort((a, b) => (b.delayH || 0) - (a.delayH || 0));
 
-      console.log('[Worker] lateList:', lateList.length);
-
       if (!lateList.length) {
-        console.log('[Worker] No late ZPs, skipping');
         self.postMessage({ type: 'DONE', payload: {
           fwdZP, zpStatus, elapsed: Date.now() - t0,
           optimizeStats: { lateStart: 0, lateEnd: 0, moved: 0, skipped: true }
@@ -629,7 +624,7 @@ self.onmessage = function(e) {
               const dateStr = localDateStr(segStart);
               addPoolUsed(poolUsed, occKey, dateStr, seg.durH || 0);
             } else {
-              addSlotToOcc(occ, wc, segStart, segEnd);
+              addSlotToOcc(occ, wc, segStart, segEnd, op.zp_id);
             }
           }
         }
@@ -694,26 +689,24 @@ self.onmessage = function(e) {
         for (const op of zpOps) {
           const wc     = String(op.workcenter);
           const isPool = wc.startsWith('3');
-          for (const seg of (op.segments || [])) {
-            if (!seg.segStart) continue;
-            if (isPool) {
+          if (isPool) {
+            for (const seg of (op.segments || [])) {
+              if (!seg.segStart) continue;
               const occKey  = localGetOccKey(wc);
               const segStart = new Date(typeof seg.segStart === 'number' ? seg.segStart : seg.segStart);
               const dateStr  = localDateStr(segStart);
               if (poolUsed[occKey]) {
                 poolUsed[occKey][dateStr] = Math.max(0, (poolUsed[occKey][dateStr] || 0) - (seg.durH || 0));
               }
-            } else {
-              // Maszyny: usuń slot z occ
-              const slots = occ[wc];
-              if (slots) {
-                const segStart = new Date(typeof seg.segStart === 'number' ? seg.segStart : seg.segStart);
-                const segEnd   = new Date(typeof seg.segEnd   === 'number' ? seg.segEnd   : seg.segEnd);
-                const idx = slots.findIndex(s =>
-                  Math.abs(s.from.getTime() - segStart.getTime()) < 1000 &&
-                  Math.abs(s.to.getTime()   - segEnd.getTime())   < 1000
-                );
-                if (idx >= 0) slots.splice(idx, 1);
+            }
+          } else {
+            // Maszyny: usuń sloty tej operacji po unikalnym op.zp_id, nie po dopasowaniu
+            // czasu z tolerancją — dwie operacje kończące/zaczynające się <1s od siebie
+            // mogłyby inaczej trafić na złą krawędź i cicho rozjechać occupancy.
+            const slots = occ[wc];
+            if (slots) {
+              for (let i = slots.length - 1; i >= 0; i--) {
+                if (slots[i].opKey === op.zp_id) slots.splice(i, 1);
               }
             }
           }
@@ -750,7 +743,7 @@ self.onmessage = function(e) {
               } else {
                 const segStart = new Date(typeof seg.segStart === 'number' ? seg.segStart : seg.segStart);
                 const segEnd   = new Date(typeof seg.segEnd   === 'number' ? seg.segEnd   : seg.segEnd);
-                addSlotToOcc(occ, wc, segStart, segEnd);
+                addSlotToOcc(occ, wc, segStart, segEnd, op.zp_id);
               }
             }
           }
@@ -774,7 +767,7 @@ self.onmessage = function(e) {
             } else {
               const segStart = new Date(typeof seg.segStart === 'number' ? seg.segStart : seg.segStart);
               const segEnd   = new Date(typeof seg.segEnd   === 'number' ? seg.segEnd   : seg.segEnd);
-              addSlotToOcc(occ, wc, segStart, segEnd);
+              addSlotToOcc(occ, wc, segStart, segEnd, op.zp_id);
             }
           }
         }
