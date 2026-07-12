@@ -895,3 +895,45 @@ export function parseParallelMachines(text) {
     .filter(Boolean);
   return [...new Set(codes)];
 }
+
+// ─── Parser pliku "formatki do rozkroju" (nesting BETA) ──────────────────────
+// Jeden wiersz = jedna operacja na wykrawarce (1 element = 1 operacja).
+// Klucz złączenia z operacją: zp_id + sequence (te same wartości co Numer ZP/OP
+// w eksporcie ERP). Wzorowany na parseZpStatus (analysisUtils.js) — nagłówek
+// mapowany po nazwie kolumny, nie po pozycji, auto-detekcja separatora ,/;.
+export function parseBomFormatek(text) {
+  const clean = text.replace(BOM_RE, '');
+  const lines = clean.trim().split('\n').map(l => l.trim()).filter(Boolean);
+  if (lines.length < 2) return { records: [], rejected: [] };
+  const sep     = lines[0].includes(';') ? ';' : ',';
+  const headers = safeSplitCSV(lines[0], sep).map(h => h.toLowerCase());
+
+  const records  = [];
+  const rejected = [];
+
+  lines.slice(1).forEach((line, idx) => {
+    const vals = safeSplitCSV(line, sep);
+    const r    = {};
+    headers.forEach((h, i) => { r[h] = (vals[i] || '').trim(); });
+
+    const raw = {
+      zp_id:                r.zp_id || '',
+      sequence:             parseInt(r.sequence || r.op || '0', 10),
+      szerokosc_mm:         parseFloat((r.szerokosc_mm || '0').replace(',', '.')),
+      wysokosc_mm:          parseFloat((r.wysokosc_mm || '0').replace(',', '.')),
+      material:             r.material || '',
+      grubosc_mm:           parseFloat((r.grubosc_mm || '0').replace(',', '.')),
+      arkusz_szerokosc_mm:  parseFloat((r.arkusz_szerokosc_mm || '0').replace(',', '.')),
+      arkusz_wysokosc_mm:   parseFloat((r.arkusz_wysokosc_mm || '0').replace(',', '.')),
+    };
+
+    if (!raw.zp_id || !raw.sequence || raw.szerokosc_mm <= 0 || raw.wysokosc_mm <= 0
+        || raw.arkusz_szerokosc_mm <= 0 || raw.arkusz_wysokosc_mm <= 0) {
+      rejected.push({ line: idx + 2, data: raw, reason: 'brak zp_id/sequence lub nieprawidłowe wymiary' });
+    } else {
+      records.push(raw);
+    }
+  });
+
+  return { records, rejected };
+}

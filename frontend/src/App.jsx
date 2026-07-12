@@ -2,7 +2,7 @@ import React, { useState, useCallback, useMemo, useEffect, useRef } from 'react'
 import { s, T, PALETTE } from './constants/theme.js';
 import { DEMO_ERP_ZP, DEMO_ZP_STATUS } from './constants/demoData.js';
 import {
-  parseZPFromERP, erpZpToSchedulerInput, parseParallelMachines,
+  parseZPFromERP, erpZpToSchedulerInput, parseParallelMachines, parseBomFormatek,
   tocBuffer, computeLoads, dlCSV,
   calcHybridZpStatus,
 } from './utils/scheduler.js';
@@ -181,6 +181,8 @@ export default function App() {
   const [tab, setTab]               = useState('dashboard');
   const [erpZp, setErpZp]           = useState([]);
   const [parallelMachines, setParallelMachines] = useState([]); // kody WC z osobnego pliku — patrz erpZpToSchedulerInput
+  const [nestingBeta, setNestingBeta] = useState(false); // BETA: rozkrój na wykrawarkach, wyłączone domyślnie — patrz nesting.js
+  const [bomFormatki, setBomFormatki] = useState([]); // formatki do rozkroju (parseBomFormatek) — używane tylko gdy nestingBeta
   const [isScheduling, setIsScheduling] = useState(false);
   const [isOptimizing, setIsOptimizing] = useState(false);
   const workerRef    = useRef(null);
@@ -504,6 +506,11 @@ export default function App() {
       setParallelMachines(codes);
       return { count: codes.length };
     }
+    if (type === 'bom_formatek') {
+      const { records, rejected } = parseBomFormatek(text);
+      setBomFormatki(records);
+      return { count: records.length, rejected };
+    }
   }, [wcLoadMap, scheduleConfig, wcCapacity, parallelMachines]);
 
   function _erpRoutingToFlat(routingByProduct) {
@@ -605,7 +612,7 @@ export default function App() {
             <style>{`@keyframes spin{to{transform:rotate(360deg)}}`}</style>
           </div>
         )}
-        {tab === 'import'       && <ImportTab erpZp={erpZp} zpStatusData={zpStatusData} parallelMachines={parallelMachines} onLoad={handleLoad} onExportZpStatus={handleExportZpStatus} hybridMode={hybridMode} onHybridModeChange={setHybridMode} />}
+        {tab === 'import'       && <ImportTab erpZp={erpZp} zpStatusData={zpStatusData} parallelMachines={parallelMachines} fwdZP={fwdZP} bomFormatki={bomFormatki} nestingBeta={nestingBeta} onNestingBetaChange={setNestingBeta} onLoad={handleLoad} onExportZpStatus={handleExportZpStatus} hybridMode={hybridMode} onHybridModeChange={setHybridMode} />}
         <div style={{display: tab === 'plan' ? 'contents' : 'none'}}>
           <PlanTab routing={routing} zp={zp} globalLookups={globalLookups} wcSchedule={wcSchedule} subZP={subZP} fwdZP={fwdZP} zpStatus={activeZpStatus} ganttDirty={ganttDirty} onRecalc={() => recalcGantt(wcSchedule)} onScheduleChange={updateSchedule} planStart={planStart} onPlanStartChange={setPlanStart} selectedWC={selectedWC} onWCSelect={setSelectedWC} selectedDate={selectedDate} onDateSelect={setSelectedDate} heatmapFilter={heatmapFilter} onHeatmapFilterChange={setHeatmapFilter} />
         </div>
