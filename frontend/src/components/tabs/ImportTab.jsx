@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useState, Fragment } from 'react';
 import { T, s } from '../../constants/theme.js';
 import { DEMO_ZP_STATUS, DEMO_PARALLEL_MACHINES, DEMO_BOM_FORMATKI } from '../../constants/demoData.js';
 import { runNestingConsolidation, buildBomIndex } from '../../utils/nesting.js';
@@ -65,6 +65,7 @@ export function ImportTab({
   const [bomCount, setBomCount] = useState(bomFormatki?.length || 0);
   const [nestingResults, setNestingResults] = useState(null);
   const [nestingError, setNestingError] = useState(null);
+  const [expandedResult, setExpandedResult] = useState(null); // indeks wiersza z rozwiniętą zawartością arkusza
 
   function readFile(file, type) {
     const reader = new FileReader();
@@ -108,9 +109,13 @@ export function ImportTab({
   function runNesting() {
     try {
       const bomByOp = buildBomIndex(bomFormatki);
-      const results = runNestingConsolidation({ fwdZP, bomByOp, parallelMachines });
+      // zpMeta: prawdziwa ilość + nazwa produktu z surowego importu ERP —
+      // fwdZP niesie tylko volume=1 (patrz komentarz w nesting.js) i kod produktu.
+      const zpMeta = new Map((erpZp || []).map(z => [z.zp_id, { volume: z.volume, product_name: z.product_name }]));
+      const results = runNestingConsolidation({ fwdZP, bomByOp, parallelMachines, zpMeta });
       setNestingResults(results);
       setNestingError(null);
+      setExpandedResult(null);
     } catch (err) {
       setNestingError(err.message);
       setNestingResults(null);
@@ -509,6 +514,7 @@ export function ImportTab({
                     <table style={{ width: '100%', fontSize: 11, borderCollapse: 'collapse' }}>
                       <thead>
                         <tr style={{ color: T.text3, textAlign: 'left' }}>
+                          <th style={{ padding: '4px 8px' }}></th>
                           <th style={{ padding: '4px 8px' }}>Dzień (kotwica)</th>
                           <th style={{ padding: '4px 8px' }}>Materiał</th>
                           <th style={{ padding: '4px 8px' }}>Grubość</th>
@@ -519,19 +525,61 @@ export function ImportTab({
                         </tr>
                       </thead>
                       <tbody>
-                        {nestingResults.map((r, i) => (
-                          <tr key={i} style={{ borderTop: `1px solid ${T.border}` }}>
-                            <td style={{ padding: '4px 8px', color: T.text }}>{r.anchorDate}</td>
-                            <td style={{ padding: '4px 8px', color: T.text }}>{r.material}</td>
-                            <td style={{ padding: '4px 8px', color: T.text2 }}>{r.grubosc_mm}mm</td>
-                            <td style={{ padding: '4px 8px', color: T.text2 }}>{r.formatkiCount}</td>
-                            <td style={{ padding: '4px 8px', color: T.text2 }}>{r.sheetsUsed}</td>
-                            <td style={{ padding: '4px 8px', color: r.wastePct > 0.05 ? T.bn : T.ok, fontWeight: 600 }}>
-                              {(r.wastePct * 100).toFixed(1)}%
-                            </td>
-                            <td style={{ padding: '4px 8px', color: T.text2 }}>{r.usedDaysSpan}</td>
-                          </tr>
-                        ))}
+                        {nestingResults.map((r, i) => {
+                          const isOpen = expandedResult === i;
+                          return (
+                          <Fragment key={i}>
+                            <tr
+                              style={{ borderTop: `1px solid ${T.border}`, cursor: 'pointer' }}
+                              onClick={() => setExpandedResult(isOpen ? null : i)}>
+                              <td style={{ padding: '4px 8px', color: T.text3 }}>{isOpen ? '▾' : '▸'}</td>
+                              <td style={{ padding: '4px 8px', color: T.text }}>{r.anchorDate}</td>
+                              <td style={{ padding: '4px 8px', color: T.text }}>{r.material}</td>
+                              <td style={{ padding: '4px 8px', color: T.text2 }}>{r.grubosc_mm}mm</td>
+                              <td style={{ padding: '4px 8px', color: T.text2 }}>{r.formatkiCount}</td>
+                              <td style={{ padding: '4px 8px', color: T.text2 }}>{r.sheetsUsed}</td>
+                              <td style={{ padding: '4px 8px', color: r.wastePct > 0.05 ? T.bn : T.ok, fontWeight: 600 }}>
+                                {(r.wastePct * 100).toFixed(1)}%
+                              </td>
+                              <td style={{ padding: '4px 8px', color: T.text2 }}>{r.usedDaysSpan}</td>
+                            </tr>
+                            {isOpen && (
+                              <tr>
+                                <td colSpan={8} style={{ padding: '4px 8px 14px 24px', background: T.surface2 }}>
+                                  <table style={{ width: '100%', fontSize: 10, borderCollapse: 'collapse' }}>
+                                    <thead>
+                                      <tr style={{ color: T.text3, textAlign: 'left' }}>
+                                        <th style={{ padding: '3px 6px' }}>ID ZP</th>
+                                        <th style={{ padding: '3px 6px' }}>Klient</th>
+                                        <th style={{ padding: '3px 6px' }}>Nazwa detalu</th>
+                                        <th style={{ padding: '3px 6px' }}>Rozmiar (mm)</th>
+                                        <th style={{ padding: '3px 6px' }}>Sztuk</th>
+                                        <th style={{ padding: '3px 6px' }}>Priorytet</th>
+                                        <th style={{ padding: '3px 6px' }}>Dzień pierwotny</th>
+                                      </tr>
+                                    </thead>
+                                    <tbody>
+                                      {r.formatki.map((f, fi) => (
+                                        <tr key={fi} style={{ borderTop: `1px solid ${T.border}` }}>
+                                          <td style={{ padding: '3px 6px', color: T.accent, fontFamily: 'monospace' }}>{f.zpId}</td>
+                                          <td style={{ padding: '3px 6px', color: T.text2 }}>{f.klient}</td>
+                                          <td style={{ padding: '3px 6px', color: T.text2 }}>{f.produkt}</td>
+                                          <td style={{ padding: '3px 6px', color: T.text }}>{f.szerokosc_mm} × {f.wysokosc_mm}</td>
+                                          <td style={{ padding: '3px 6px', color: T.text }}>{f.qty}</td>
+                                          <td style={{ padding: '3px 6px' }}>{f.priority === 1 ? '🔴 VIP' : '🟢 Standard'}</td>
+                                          <td style={{ padding: '3px 6px', color: T.text2 }}>
+                                            {f.origDay}{f.origDay !== r.anchorDate ? ' (dociągnięte)' : ''}
+                                          </td>
+                                        </tr>
+                                      ))}
+                                    </tbody>
+                                  </table>
+                                </td>
+                              </tr>
+                            )}
+                          </Fragment>
+                          );
+                        })}
                       </tbody>
                     </table>
                   )}

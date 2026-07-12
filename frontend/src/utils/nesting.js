@@ -50,10 +50,17 @@ export function packDay(formatki, sheetW, sheetH) {
 // bomByOp   — Map<`${zp_id}/${sequence}`, rekord z parseBomFormatek>.
 // parallelMachines — lista kodów maszyn (te same co dla fan-out/fan-in) — tu
 //   pełnią rolę "które maszyny robią rozkrój" (wykrawarki).
+// zpMeta — (opcjonalna) Map<zp_id, {volume, product_name}> z surowego importu
+//   ERP (przed erpZpToSchedulerInput). Potrzebna z dwóch powodów: (1) `op.volume`
+//   w fwdZP jest ZAWSZE 1 (erpZpToSchedulerInput celowo nie mnoży — durH to już
+//   czas całkowity partii, nie per sztukę) — bez realnej ilości nesting liczyłby
+//   zawsze 1 sztukę na formatkę; (2) fwdZP niesie tylko kod produktu, nie jego
+//   opisową nazwę. Fallback na op.volume||1 / op.product dla testów syntetycznych.
 export function runNestingConsolidation({
   fwdZP,
   bomByOp,
   parallelMachines,
+  zpMeta,
   wasteThreshold = DEFAULT_WASTE_THRESHOLD,
   maxLookaheadDays = DEFAULT_MAX_LOOKAHEAD_DAYS,
 }) {
@@ -73,6 +80,8 @@ export function runNestingConsolidation({
     const seg = (op.segments || [])[0];
     if (!seg || !seg.segStart) return;
     const day = localDateStr(seg.segStart);
+    const meta = zpMeta?.get(zpKey);
+    const qty = meta?.volume ?? op.volume ?? 1;
 
     const matKey = `${bom.material}/${bom.grubosc_mm}`;
     if (!byMaterial.has(matKey)) byMaterial.set(matKey, new Map());
@@ -80,9 +89,15 @@ export function runNestingConsolidation({
     if (!dayMap.has(day)) dayMap.set(day, []);
     dayMap.get(day).push({
       key: op.zp_id,
+      zpId: zpKey,
+      klient: op.klient || '',
+      produkt: meta?.product_name || op.product || '',
+      priority: op.priority,
+      dueDate: op.due_date,
+      origDay: day,
       w: bom.szerokosc_mm,
       h: bom.wysokosc_mm,
-      qty: op.volume || 1,
+      qty,
       sheetW: bom.arkusz_szerokosc_mm,
       sheetH: bom.arkusz_wysokosc_mm,
     });
@@ -126,6 +141,12 @@ export function runNestingConsolidation({
         formatkiCount,  // suma sztuk (qty), nie liczba wpisów w puli
         usedDaysSpan:   usedDays.length,
         usedDays,
+        // Zawartość arkusza — do rozwijanej tabeli szczegółów (Sekcja C).
+        formatki: pool.map(f => ({
+          zpId: f.zpId, klient: f.klient, produkt: f.produkt,
+          szerokosc_mm: f.w, wysokosc_mm: f.h, qty: Math.max(1, Math.round(f.qty || 1)),
+          priority: f.priority, dueDate: f.dueDate, origDay: f.origDay,
+        })),
       });
     });
   });
