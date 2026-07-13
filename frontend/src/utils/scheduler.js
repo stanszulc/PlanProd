@@ -775,13 +775,14 @@ function _opsSignature(ops) {
 // dostaje świeży, wewnętrzny `_opUid` (indeks w tablicy), po którym referuje
 // predecessors.
 //
-// Maszyna z listy liczy się jako "równoległa" TYLKO gdy faktycznie jest na
-// samym początku trasy — jej numer OP nie jest późniejszy niż pierwsza
-// "normalna" (nie z listy) operacja. Ta sama maszyna użyta w środku/na końcu
-// innego routingu (bo lista jest globalna, nie per-produkt) zostaje zwykłą
-// operacją w łańcuchu — inaczej wymuszalibyśmy, żeby wcześniejsze, realnie
-// pierwsze operacje czekały na coś, co w tym konkretnym routingu dzieje się
-// później, co odwracałoby kolejność zamiast jej nie zmieniać.
+// Maszyna z listy ZAWSZE liczy się jako "równoległa" (koncepcyjnie "OP=0") —
+// niezależnie od jej faktycznego numeru OP w konkretnej trasie. Zasada
+// uzgodniona z użytkownikiem: lista maszyn równoległych to zamknięty,
+// świadomie utrzymywany zbiór (np. wykrawarki/piły przygotowawcze), które
+// zawsze startują na samym początku produkcji, niezależnie od siebie —
+// wszystkie razem, bez względu na to, gdzie w surowej kolejności ERP akurat
+// wypadł ich numer operacji. Pierwsza "normalna" (nie z listy) operacja
+// czeka na WSZYSTKIE naraz (fan-in).
 export function applyParallelPredecessors(ops, parallelMachines) {
   const parallelSet = parallelMachines instanceof Set ? parallelMachines : new Set(parallelMachines);
   const indexed = ops.map((op, idx) => ({ ...op, _opUid: idx }));
@@ -790,10 +791,7 @@ export function applyParallelPredecessors(ops, parallelMachines) {
     return parallelSet.has(String(op.machine_id ?? op.workcenter));
   }
 
-  const candidateNormal = indexed.filter(op => !matchesList(op));
-  const minNormalSeq = candidateNormal.length ? Math.min(...candidateNormal.map(op => op.sequence)) : Infinity;
-
-  const parallelOps = indexed.filter(op => matchesList(op) && op.sequence <= minNormalSeq);
+  const parallelOps = indexed.filter(matchesList);
   const parallelKeys = new Set(parallelOps.map(op => op._opUid));
   const normalOps    = indexed.filter(op => !parallelKeys.has(op._opUid)).sort((a, b) => a.sequence - b.sequence);
 
