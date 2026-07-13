@@ -109,7 +109,7 @@ export function DashboardTab({ routing, zp, zpStatus, wcSchedule, historyData, g
           Przejdź do importu →
         </button>
         <div style={{ fontSize: 10, color: T.text3, marginTop: 28, fontFamily: 'monospace' }}>
-          wersja {__COMMIT_HASH__} · {__COMMIT_DATE__}
+          wersja {window.__COMMIT_HASH__ || 'dev'} · {window.__COMMIT_DATE__ || ''}
         </div>
       </div>
     );
