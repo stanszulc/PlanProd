@@ -2,6 +2,9 @@ import { useMemo } from 'react';
 import { T, s, tocColor, uStatus } from '../../constants/theme.js';
 import { computeLoads } from '../../utils/scheduler.js';
 
+// Wersja aplikacji — ręcznie podbijana (V1.1 -> V1.2 -> ...), bez powiązania z commitami.
+const APP_VERSION = 'V1.1';
+
 function tocZone(toc) {
   if (!toc) return 'green';
   if (typeof toc === 'string') return toc;
@@ -109,7 +112,7 @@ export function DashboardTab({ routing, zp, zpStatus, wcSchedule, historyData, g
           Przejdź do importu →
         </button>
         <div style={{ fontSize: 10, color: T.text3, marginTop: 28, fontFamily: 'monospace' }}>
-          wersja {window.__COMMIT_HASH__ || 'dev'} · {window.__COMMIT_DATE__ || ''}
+          wersja {APP_VERSION}
         </div>
       </div>
     );
