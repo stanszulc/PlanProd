@@ -2,6 +2,7 @@ import { useState, Fragment } from 'react';
 import { T, s } from '../../constants/theme.js';
 import { DEMO_ZP_STATUS, DEMO_PARALLEL_MACHINES, DEMO_BOM_FORMATKI } from '../../constants/demoData.js';
 import { runNestingConsolidation, buildBomIndex } from '../../utils/nesting.js';
+import { xlsxPivotCacheToZpTsv } from '../../utils/pivotXlsxImport.js';
 
 function dlCSV(content, filename) {
   const a = document.createElement('a');
@@ -66,25 +67,52 @@ export function ImportTab({
   const [nestingResults, setNestingResults] = useState(null);
   const [nestingError, setNestingError] = useState(null);
   const [expandedResult, setExpandedResult] = useState(null); // indeks wiersza z rozwiniętą zawartością arkusza
+  const [xlsxError, setXlsxError] = useState(null);
+  const [xlsxSourceInfo, setXlsxSourceInfo] = useState(null); // { rowCount } — ostatni import z xlsx
+
+  function applyErpTsv(tsvText) {
+    const result = onLoad(tsvText, 'erp_zp');
+    setErpLoaded(true);
+    if (result?.zpList) {
+      const machines = new Set(
+        result.zpList.flatMap(z => (z.ops || []).map(op => op.machine_id))
+      );
+      setErpInfo({
+        zpCount:      result.zpList.length,
+        machineCount: machines.size,
+        opCount:      result.zpList.reduce((s, z) => s + (z.ops?.length || 0), 0),
+      });
+    }
+  }
 
   function readFile(file, type) {
+    // Eksport ZP można też podać jako xlsx (skoroszyt "Pulpit produkcji") —
+    // czytamy wtedy cache tabeli przestawnej OBCIĄŻENIE zamiast ręcznie
+    // eksportowanego TSV, żeby dane zawsze odzwierciedlały ostatnie
+    // "Dane → Odśwież wszystko" w Excelu.
+    if (type === 'erp_zp' && /\.xlsx$/i.test(file.name)) {
+      setXlsxError(null);
+      const reader = new FileReader();
+      reader.onload = async e => {
+        try {
+          const { tsv, rowCount } = await xlsxPivotCacheToZpTsv(e.target.result);
+          applyErpTsv(tsv);
+          setXlsxSourceInfo({ rowCount });
+        } catch (err) {
+          setXlsxError(err.message);
+        }
+      };
+      reader.readAsArrayBuffer(file);
+      return;
+    }
+
     const reader = new FileReader();
     reader.onload = e => {
-      const result = onLoad(e.target.result, type);
       if (type === 'erp_zp') {
-        setErpLoaded(true);
-        // Podsumowanie wczytanych danych
-        if (result?.zpList) {
-          const machines = new Set(
-            result.zpList.flatMap(z => (z.ops || []).map(op => op.machine_id))
-          );
-          setErpInfo({
-            zpCount:      result.zpList.length,
-            machineCount: machines.size,
-            opCount:      result.zpList.reduce((s, z) => s + (z.ops?.length || 0), 0),
-          });
-        }
+        applyErpTsv(e.target.result);
+        return;
       }
+      const result = onLoad(e.target.result, type);
       if (type === 'zp_status') {
         setZpLoaded(true);
         if (result?.rejected?.length) setRejectLog(result.rejected);
@@ -158,7 +186,8 @@ export function ImportTab({
         </div>
       )}
       <input
-        id={`file_${type}`} type="file" accept=".csv,.tsv,.txt"
+        id={`file_${type}`} type="file"
+        accept={type === 'erp_zp' ? '.csv,.tsv,.txt,.xlsx' : '.csv,.tsv,.txt'}
         style={{ display: 'none' }}
         onChange={e => { const f = e.target.files[0]; if (f) readFile(f, type); }}
       />
@@ -180,8 +209,9 @@ export function ImportTab({
             loaded={erpLoaded || hasErpData}
             label="Eksport ZP z ERP"
             icon="🏭"
-            desc="Plik TSV z ERP: ZP + operacje + maszyny + czasy."
+            desc="Plik TSV z ERP (ZP + operacje + maszyny + czasy) — albo skoroszyt .xlsx z zakładką OBCIĄŻENIE: dane wczytywane są wtedy z cache pivota, więc odzwierciedlają ostatnie Dane → Odśwież wszystko w Excelu."
             info={erpInfo}
+            infoText={xlsxSourceInfo ? `Źródło: cache pivota xlsx · ${xlsxSourceInfo.rowCount} rekordów` : undefined}
             cols={[
               { n: 'Numer ZP',   req: true  },
               { n: 'OP',         req: true  },
@@ -238,6 +268,18 @@ export function ImportTab({
             ]}
           />
         </div>
+
+        {/* Błąd importu z xlsx (cache pivota) */}
+        {xlsxError && (
+          <div style={{
+            background: 'rgba(248,113,113,0.07)',
+            border: `1px solid ${T.bn}`,
+            borderRadius: 10, padding: '12px 16px', marginTop: 14,
+            fontSize: 12, color: T.bn,
+          }}>
+            ⚠ Nie udało się wczytać xlsx: {xlsxError}
+          </div>
+        )}
 
         {/* Log odrzuconych */}
         {rejectLog.length > 0 && (

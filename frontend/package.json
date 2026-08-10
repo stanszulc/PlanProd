@@ -11,6 +11,7 @@
     "deploy": "npm run build && gh-pages -d dist"
   },
   "dependencies": {
+    "jszip": "^3.10.1",
     "maxrects-packer": "^2.7.3",
     "react": "^19.2.6",
     "react-dom": "^19.2.6"
