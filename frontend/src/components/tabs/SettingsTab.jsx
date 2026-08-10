@@ -99,6 +99,11 @@ export function SettingsTab({ config, onConfigChange, wcCapacity = {}, onWcCapac
           <NumInput value={localConfig.shiftStart ?? 6}
             onChange={v => update('shiftStart', v)} min={0} max={12} unit="h" />
         </Row>
+        <Row label="Czas logistyki między operacjami"
+          desc="Minimalny odstęp doliczany do startu kolejnej operacji, gdy zmienia się gniazdo/maszyna (transport). Próg minimalny, nie bezwarunkowy dodatek — jeśli maszyna docelowa jest zajęta dłużej niż ten czas, nie sumuje się z oczekiwaniem.">
+          <NumInput value={localConfig.transferTimeH ?? 2}
+            onChange={v => update('transferTimeH', v)} min={0} max={24} unit="h" />
+        </Row>
         <Row label="Metoda sortowania ZP"
           desc="Kolejność w jakiej ZP wchodzi na maszyny.">
           <select value={localConfig.urgencyMethod}

@@ -250,6 +250,12 @@ function scheduleAll(zpList, routingByProduct, wcSchedule, planStartDt, onProgre
   const URGENCY_METHOD     = config?.urgencyMethod ?? 'cr';
   const SHIFT_START        = config?.shiftStart ?? 6;
   const GRAPH_MODE         = (config?.schedulingGraphMode ?? 'graph') === 'graph';
+  // Czas logistyki (transport) między operacjami — próg minimalny, nie bezwarunkowe
+  // wydłużenie: dodaje się do kursora PRZED szukaniem wolnego okna, więc jeśli
+  // maszyna docelowa i tak jest zajęta dłużej, transfer nie sumuje się z tym
+  // oczekiwaniem. Stosowany tylko gdy operacja faktycznie zmienia gniazdo/maszynę
+  // (ta sama maszyna pod rząd = nic do przewiezienia).
+  const TRANSFER_TIME_H    = config?.transferTimeH ?? 2;
   const occ      = makeOccupancy();
   const poolUsed = makePoolUsed();                      // sesja 9: pool capacity
   const result   = [];
@@ -471,7 +477,9 @@ function scheduleAll(zpList, routingByProduct, wcSchedule, planStartDt, onProgre
 
       state.opResults.push({ op, startDt, endDt, segs, durH });
       state.opIdx++;
-      state.cursor = new Date(endDt);
+      const nextOp = ops[state.opIdx];
+      const transferMs = (nextOp && nextOp.workcenter !== op.workcenter) ? TRANSFER_TIME_H * MS : 0;
+      state.cursor = new Date(endDt.getTime() + transferMs);
 
       if (state.opIdx < ops.length) {
         heap.push(state);
@@ -492,7 +500,8 @@ function scheduleAll(zpList, routingByProduct, wcSchedule, planStartDt, onProgre
       ? calcAlapStart(zp, ops, wcSchedule, planStartDt, SAFETY_BUFFER_DAYS)
       : planStartDt);
 
-    const zpCtx = { zp, ops, doneEnds: {}, dispatched: new Set(), remaining: ops.length, opResults: [] };
+    const opByKey = new Map(ops.map(o => [o._opUid ?? o.sequence, o]));
+    const zpCtx = { zp, ops, opByKey, doneEnds: {}, dispatched: new Set(), remaining: ops.length, opResults: [] };
 
     ops.forEach(op => {
       if (!op.predecessors || op.predecessors.length === 0) {
@@ -528,10 +537,15 @@ function scheduleAll(zpList, routingByProduct, wcSchedule, planStartDt, onProgre
       const preds = candidate.predecessors || [];
       if (preds.length === 0) continue; // już obsłużona przy seedowaniu
       if (preds.every(p => zpCtx.doneEnds[p] !== undefined)) {
-        const joinCursor = preds.reduce(
-          (max, p) => (zpCtx.doneEnds[p] > max ? zpCtx.doneEnds[p] : max),
-          zpCtx.doneEnds[preds[0]]
-        );
+        // Czas logistyki liczony per-poprzednik (jego gniazdo -> gniazdo kandydata),
+        // dopiero potem bierzemy max — inaczej jeden poprzednik na tej samej maszynie
+        // dostałby niepotrzebny transfer tylko dlatego, że INNY poprzednik zmienia gniazdo.
+        const readyTimes = preds.map(p => {
+          const predOp = zpCtx.opByKey.get(p);
+          const transferMs = (predOp && predOp.workcenter !== candidate.workcenter) ? TRANSFER_TIME_H * MS : 0;
+          return zpCtx.doneEnds[p].getTime() + transferMs;
+        });
+        const joinCursor = Math.max(...readyTimes);
         zpCtx.dispatched.add(candKey);
         heap.push({ zpCtx, zp: zpCtx.zp, op: candidate, cursor: new Date(joinCursor) });
       }
