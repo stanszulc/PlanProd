@@ -640,12 +640,13 @@ export function dlCSV(rows, filename) {
 // ─── PARSER ZP Z ERP ──────────────────────────────────────────────────────────
 // Format TSV (tab-separated) z ERP:
 //   Numer ZP | Klient/zam | Numer ZS | Data zak | Data wys | Kod | Nazwa |
-//   Ilość ZP | Wyprod. | OP | WC | WCname | WC2 | CzasPlan | CzasPozost
+//   Ilość ZP | Wyprod. | OP | WC | WCname | WC2 | WC3 | CzasPlan | CzasPozost
 //
 // Mapowanie kolumn:
 //   WC     → machine_id   (numer maszyny, np. 20043)
 //   WCname → machine_name (pełna nazwa, np. "Wykrawarko-gilotyna SG6 M107")
-//   WC2    → workcenter   (gniazdo/linia, np. "Maszyny", "Kanały")
+//   WC3    → workcenter   (gniazdo/brygada, aktualna od 2026-08 — WC2 jako fallback
+//                          dla starszych eksportów bez tej kolumny)
 //   OP     → sequence     (numer operacji, np. 010, 020, 040)
 //   CzasPlan   → durH     (czas całkowity ZP [h], przecinek dziesiętny)
 //   CzasPozost → durRemH  (czas pozostały [h])
@@ -716,7 +717,7 @@ export function parseZPFromERP(text) {
 
     const machineId   = get(r, 'wc', 'machine_id');    // WC  = numer maszyny
     const machineName = get(r, 'wcname', 'wc_name');   // WCname = pełna nazwa
-    const workcenter  = get(r, 'wc2', 'workcenter');   // WC2 = gniazdo
+    const workcenter  = get(r, 'wc3', 'wc2', 'workcenter');   // WC3 = aktualna brygada, WC2 fallback
 
     if (!machineId && !workcenter) continue;
 
