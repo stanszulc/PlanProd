@@ -79,22 +79,20 @@ export function HeatmapPlanTab({ fwdZP = [], routing = [], wcSchedule = {}, onSc
   // wc → { group, name }
   const wcMeta = useMemo(() => {
     const map = {};
-    // Najpierw WC_TO_WC2 — zawsze poprawne mapowanie wc → brygada
+    // Najpierw statyczny WC_TO_WC2 — tylko jako fallback dla maszyn spoza
+    // aktualnie wczytanego pliku (np. widoczne wcześniej w innym imporcie).
     Object.entries(WC_TO_WC2).forEach(([wc, wc2]) => {
       map[wc] = { group: wc2, name: wc };
     });
-    // Uzupełnij nazwami z routingu (ale nie nadpisuj group z WC_TO_WC2)
+    // Routing z aktualnie wczytanego pliku ZAWSZE nadpisuje fallback —
+    // wc_group pochodzi z op.workcenter (WC3, patrz scheduler.js), więc to
+    // jest jedyne źródło zgodne z bieżącym podziałem na brygady.
     routing.forEach(r => {
       if (!r.workcenter) return;
-      if (!map[r.workcenter]) {
-        map[r.workcenter] = {
-          group: r.wc_group || r.workcenter,
-          name:  r.machine_name || r.workcenter,
-        };
-      } else {
-        // Zachowaj group z WC_TO_WC2, tylko zaktualizuj name
-        map[r.workcenter].name = r.machine_name || map[r.workcenter].name;
-      }
+      map[r.workcenter] = {
+        group: r.wc_group || r.workcenter,
+        name:  r.machine_name || r.workcenter,
+      };
     });
     return map;
   }, [routing.length]);
