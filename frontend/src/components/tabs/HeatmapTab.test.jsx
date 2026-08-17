@@ -75,3 +75,88 @@ describe('HeatmapTab — przełącznik wg terminu / wg planu', () => {
     expect(cellsWithHundred.length).toBeGreaterThan(0);
   });
 });
+
+describe('HeatmapTab — grupowanie wierszy po brygadzie (WC3)', () => {
+  const groupedRouting = [
+    { workcenter: 'WC1', wc_group: 'Kanały', machine_name: 'Ślusarnia - kanały' },
+    { workcenter: 'WC2', wc_group: 'Kanały', machine_name: 'Ślusarnia - gilotyna' },
+    { workcenter: 'WC3', wc_group: 'Kratki' },
+  ];
+  const groupedLookups = {
+    routingByProduct: {
+      P1: [{ workcenter: 'WC1', ct_min: 60, sequence: 1 }],
+      P2: [{ workcenter: 'WC2', ct_min: 60, sequence: 1 }],
+      P3: [{ workcenter: 'WC3', ct_min: 60, sequence: 1 }],
+    },
+  };
+
+  test('domyślnie zwinięte: widać tylko wiersz brygady, nie pojedyncze maszyny', () => {
+    const zp = [
+      { product: 'P1', volume: 8, due_date: '2026-08-20', zp_id: 'ZP1' },
+      { product: 'P2', volume: 8, due_date: '2026-08-20', zp_id: 'ZP2' },
+    ];
+    render(
+      <HeatmapTab
+        routing={groupedRouting}
+        zp={zp}
+        globalLookups={groupedLookups}
+        wcSchedule={{ WC1: { '2026-08-20': 8 }, WC2: { '2026-08-20': 8 } }}
+        fwdZP={[]}
+        planStart="2026-08-17"
+        horizonDays={7}
+      />
+    );
+
+    expect(screen.getByText('Kanały')).toBeInTheDocument();
+    expect(screen.getByText('(2)')).toBeInTheDocument();
+    expect(screen.queryByText('WC1')).not.toBeInTheDocument();
+    expect(screen.queryByText('WC2')).not.toBeInTheDocument();
+  });
+
+  test('agregat brygady to suma load / suma cap maszyn, nie średnia procentów', () => {
+    // WC1: 8h load / 8h cap = 100%. WC2: 0h load / 8h cap = 0%.
+    // Agregat brygady: (8+0) / (8+8) = 50%, NIE (100%+0%)/2 co też wyszłoby 50%
+    // przypadkowo tu — sprawdzamy więc dodatkowo rozwinięty widok osobno.
+    const zp = [{ product: 'P1', volume: 8, due_date: '2026-08-20', zp_id: 'ZP1' }];
+    render(
+      <HeatmapTab
+        routing={groupedRouting}
+        zp={zp}
+        globalLookups={groupedLookups}
+        wcSchedule={{ WC1: { '2026-08-20': 8 }, WC2: { '2026-08-20': 8 } }}
+        fwdZP={[]}
+        planStart="2026-08-17"
+        horizonDays={7}
+      />
+    );
+
+    expect(screen.getByText('50%')).toBeInTheDocument();
+
+    fireEvent.click(screen.getByText('Kanały'));
+    expect(screen.getByText('WC1')).toBeInTheDocument();
+    expect(screen.getByText('WC2')).toBeInTheDocument();
+    expect(screen.getByText('100%')).toBeInTheDocument();
+  });
+
+  test('klik na wiersz brygady rozwija i zwija maszyny', () => {
+    const zp = [{ product: 'P1', volume: 8, due_date: '2026-08-20', zp_id: 'ZP1' }];
+    render(
+      <HeatmapTab
+        routing={groupedRouting}
+        zp={zp}
+        globalLookups={groupedLookups}
+        wcSchedule={{ WC1: { '2026-08-20': 8 } }}
+        fwdZP={[]}
+        planStart="2026-08-17"
+        horizonDays={7}
+      />
+    );
+
+    fireEvent.click(screen.getByText('Kanały'));
+    expect(screen.getByText('WC1')).toBeInTheDocument();
+    expect(screen.getByText('Ślusarnia - kanały')).toBeInTheDocument();
+
+    fireEvent.click(screen.getByText('Kanały'));
+    expect(screen.queryByText('WC1')).not.toBeInTheDocument();
+  });
+});

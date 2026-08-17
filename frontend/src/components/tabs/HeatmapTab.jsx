@@ -1,12 +1,48 @@
 import { useState, useMemo } from 'react';
 import { T, s } from '../../constants/theme.js';
 import { computeLoads, getAvail, localDateStr } from '../../utils/scheduler.js';
+import { WC_TO_WC2 } from '../../constants/demoData.js';
 import { EmptyState } from '../common/EmptyState.jsx';
 
 export function HeatmapTab({ routing, zp, globalLookups, wcSchedule, fwdZP = [], planStart, horizonDays = 14 }) {
   const [groupBy, setGroupBy] = useState('due'); // 'due' (wg terminu) | 'plan' (wg planu)
+  const [expanded, setExpanded] = useState(new Set());
 
   const allWC = useMemo(() => [...new Set(routing.map(r => r.workcenter))].sort(), [routing.length]);
+
+  // wc → { group, name } — WC_TO_WC2 jako fallback dla maszyn spoza aktualnie
+  // wczytanego routingu, wc_group z routingu (WC3, patrz scheduler.js) ma priorytet.
+  const wcMeta = useMemo(() => {
+    const map = {};
+    Object.entries(WC_TO_WC2).forEach(([wc, wc2]) => { map[wc] = { group: wc2, name: wc }; });
+    routing.forEach(r => {
+      if (!r.workcenter) return;
+      map[r.workcenter] = { group: r.wc_group || r.workcenter, name: r.machine_name || r.workcenter };
+    });
+    return map;
+  }, [routing.length]);
+
+  // Gniazda pogrupowane po brygadzie, zwinięte domyślnie do jednego wiersza
+  // z agregatem — ten sam wzorzec co w Heatmapie planu.
+  const groups = useMemo(() => {
+    const byBrigade = {};
+    allWC.forEach(wc => {
+      const brygada = wcMeta[wc]?.group || wc;
+      if (!byBrigade[brygada]) byBrigade[brygada] = [];
+      byBrigade[brygada].push(wc);
+    });
+    return Object.entries(byBrigade)
+      .map(([brygada, machines]) => ({ brygada, machines }))
+      .sort((a, b) => a.brygada.localeCompare(b.brygada));
+  }, [allWC, wcMeta]);
+
+  function toggleExpand(brygada) {
+    setExpanded(prev => {
+      const next = new Set(prev);
+      next.has(brygada) ? next.delete(brygada) : next.add(brygada);
+      return next;
+    });
+  }
 
   // Cały zakres czasu planowania — od "Planuj od" do końca horyzontu (albo do
   // najpóźniejszego due_date, jeśli wykracza poza horyzont) — bez dziur, nawet
@@ -58,13 +94,24 @@ export function HeatmapTab({ routing, zp, globalLookups, wcSchedule, fwdZP = [],
     return m;
   }, [fwdZP]);
 
-  function utilFor(wc, d) {
+  // load/cap surowe (nie tylko %) — potrzebne do zsumowania po maszynach grupy
+  // przed policzeniem agregatu, żeby % brygady nie był średnią z %, tylko
+  // rzeczywistym (suma load / suma cap).
+  function loadCapFor(wc, d) {
     if (groupBy === 'plan') {
-      const load = plannedLoadByWc[wc]?.[d] || 0;
-      const cap  = getAvail(wc, d + 'T12:00:00', wcSchedule);
-      return cap > 0 ? load / cap : (load > 0 ? 999 : 0);
+      return { load: plannedLoadByWc[wc]?.[d] || 0, cap: getAvail(wc, d + 'T12:00:00', wcSchedule) };
     }
-    return loadsByDueDate[d]?.[wc]?.util || 0;
+    const entry = loadsByDueDate[d]?.[wc];
+    return { load: entry?.load || 0, cap: entry?.cap ?? getAvail(wc, d + 'T12:00:00', wcSchedule) };
+  }
+
+  function utilFrom(load, cap) {
+    return cap > 0 ? load / cap : (load > 0 ? 999 : 0);
+  }
+
+  function utilFor(wc, d) {
+    const { load, cap } = loadCapFor(wc, d);
+    return utilFrom(load, cap);
   }
 
   if (!dates.length) return <EmptyState icon="🌡️" title="Brak danych" sub="Wgraj pliki CSV" />;
@@ -76,6 +123,18 @@ export function HeatmapTab({ routing, zp, globalLookups, wcSchedule, fwdZP = [],
     if (u <= 1.1) return { bg: 'rgba(249,115,22,0.15)', color: '#f97316' };
     if (u <= 1.3) return { bg: 'rgba(239,68,68,0.15)',  color: '#ef4444' };
     return               { bg: 'rgba(220,38,38,0.25)',  color: '#fca5a5' };
+  }
+
+  function Cell({ u, height = 28 }) {
+    const hs = hmStyle(u);
+    return (
+      <div style={{ display: 'inline-flex', alignItems: 'center',
+        justifyContent: 'center', width: 68, height,
+        borderRadius: 6, background: hs.bg, color: hs.color,
+        fontSize: 11, fontWeight: 600, fontFamily: 'monospace' }}>
+        {u > 0 ? `${Math.round(u * 100)}%` : '–'}
+      </div>
+    );
   }
 
   return (
@@ -104,26 +163,46 @@ export function HeatmapTab({ routing, zp, globalLookups, wcSchedule, fwdZP = [],
             </tr>
           </thead>
           <tbody>
-            {allWC.map(w => (
-              <tr key={w}>
-                <td style={{ padding: '6px 16px 6px 0', fontWeight: 700,
-                  color: T.text, fontSize: 13 }}>{w}</td>
-                {dates.map(d => {
-                  const u = utilFor(w, d);
-                  const hs = hmStyle(u);
-                  return (
-                    <td key={d} style={{ padding: 4 }}>
-                      <div style={{ display: 'inline-flex', alignItems: 'center',
-                        justifyContent: 'center', width: 68, height: 28,
-                        borderRadius: 6, background: hs.bg, color: hs.color,
-                        fontSize: 11, fontWeight: 600, fontFamily: 'monospace' }}>
-                        {u > 0 ? `${Math.round(u * 100)}%` : '–'}
-                      </div>
+            {groups.map(({ brygada, machines }) => {
+              const isOpen = expanded.has(brygada);
+              const agg = dates.map(d => machines.reduce((acc, wc) => {
+                const { load, cap } = loadCapFor(wc, d);
+                acc.load += load; acc.cap += cap;
+                return acc;
+              }, { load: 0, cap: 0 }));
+              return [
+                <tr key={brygada} onClick={() => toggleExpand(brygada)} style={{ cursor: 'pointer' }}>
+                  <td style={{ padding: '6px 16px 6px 0', fontWeight: 700,
+                    color: T.text, fontSize: 13, whiteSpace: 'nowrap' }}>
+                    <span style={{ fontSize: 9, color: T.text3, marginRight: 6, display: 'inline-block',
+                      transform: isOpen ? 'rotate(90deg)' : 'none', transition: 'transform .15s' }}>▶</span>
+                    {brygada}
+                    <span style={{ fontSize: 10, color: T.text3, fontWeight: 400, marginLeft: 4 }}>({machines.length})</span>
+                  </td>
+                  {agg.map(({ load, cap }, i) => (
+                    <td key={dates[i]} style={{ padding: 4 }}>
+                      <Cell u={utilFrom(load, cap)} />
                     </td>
-                  );
-                })}
-              </tr>
-            ))}
+                  ))}
+                </tr>,
+                ...(isOpen ? machines.map(wc => (
+                  <tr key={wc}>
+                    <td style={{ padding: '4px 16px 4px 20px', color: T.text2, fontSize: 12, whiteSpace: 'nowrap' }}>
+                      <span style={{ color: T.text3, marginRight: 5 }}>└</span>
+                      <span style={{ fontFamily: 'monospace', fontWeight: 600 }}>{wc}</span>
+                      {wcMeta[wc]?.name && wcMeta[wc].name !== wc && (
+                        <span style={{ color: T.text3, marginLeft: 6, fontSize: 10 }}>{wcMeta[wc].name}</span>
+                      )}
+                    </td>
+                    {dates.map(d => (
+                      <td key={d} style={{ padding: 4 }}>
+                        <Cell u={utilFor(wc, d)} height={24} />
+                      </td>
+                    ))}
+                  </tr>
+                )) : []),
+              ];
+            })}
           </tbody>
         </table>
       </div>
