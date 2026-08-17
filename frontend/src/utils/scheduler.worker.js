@@ -6,13 +6,14 @@
 //   - OPTIMIZE_INSERT: buildOcc ujednolicony, wcToBrygada przekazywane z App.jsx
 // ─────────────────────────────────────────────────────────────────────────────
 
-const MS            = 3_600_000;
-const DEFAULT_AVAIL = 16;
-const DEFAULT_CAP   = 8;         // h/dzień fallback capacity — używane do przeliczania delayH -> delayDays
-const EPSILON       = 0.0001;
-const SAFETY_LIMIT  = 50_000;
-const TOC_YELLOW    = 0.33;
-const TOC_RED       = 0.67;
+const MS               = 3_600_000;
+const DEFAULT_AVAIL    = 16;
+const DEFAULT_CAP      = 8;         // h/dzień fallback capacity — używane do przeliczania delayH -> delayDays
+const EPSILON          = 0.0001;
+const SAFETY_LIMIT     = 50_000;
+const TOC_YELLOW       = 0.33;
+const TOC_RED          = 0.67;
+const MACHINE_CEILING_H = 24;        // maszyna 2xxxx: jeden operator, fizyczny sufit kalendarzowy
 
 function localDateStr(dt) {
   const d = new Date(dt);
@@ -91,28 +92,103 @@ function nextSlotAfter(slots, windowStart) {
   return null;
 }
 
-// ─── Pool used (kanały / montaż 3xxxx) ───────────────────────────────────────
-// Zamiast blokować przedział czasowy, liczymy zużyte godziny per dzień.
-// Wiele ZP może wchodzić w ten sam dzień dopóki usedH < avail.
-function makePoolUsed() { return Object.create(null); }  // occKey → {dateStr → usedH}
+// ─── Pool used (kanały / montaż 3xxxx + maszyna 2xxxx w brygadzie mieszanej) ──
+// Zamiast blokować przedział czasowy, liczymy zużyte godziny per dzień. Wiele ZP
+// może wchodzić w ten sam dzień dopóki usedH < avail. `byWc` (per-zasób) istnieje
+// TYLKO żeby dać maszynie sufit 24h/dobę WEWNĄTRZ wspólnej puli — bez tego pool
+// wie tylko "ile zużyto łącznie", nie "ile zużyła KONKRETNIE ta maszyna" (patrz
+// POOL_BRYGADY_2xxxx_3xxxx.md).
+function makePoolUsed() { return Object.create(null); }  // occKey → {dateStr → {total, byWc}}
 
-function addPoolUsed(poolUsed, occKey, dateStr, durH) {
+function addPoolUsed(poolUsed, occKey, dateStr, wc, durH) {
   if (!poolUsed[occKey]) poolUsed[occKey] = Object.create(null);
-  poolUsed[occKey][dateStr] = (poolUsed[occKey][dateStr] || 0) + durH;
+  if (!poolUsed[occKey][dateStr]) poolUsed[occKey][dateStr] = { total: 0, byWc: Object.create(null) };
+  const entry = poolUsed[occKey][dateStr];
+  entry.total += durH;
+  entry.byWc[wc] = (entry.byWc[wc] || 0) + durH;
+}
+
+function removePoolUsed(poolUsed, occKey, dateStr, wc, durH) {
+  const entry = poolUsed?.[occKey]?.[dateStr];
+  if (!entry) return;
+  entry.total = Math.max(0, entry.total - durH);
+  entry.byWc[wc] = Math.max(0, (entry.byWc[wc] || 0) - durH);
 }
 
 function getPoolUsedToday(poolUsed, occKey, dateStr) {
-  return poolUsed?.[occKey]?.[dateStr] || 0;
+  return poolUsed?.[occKey]?.[dateStr]?.total || 0;
+}
+
+function getPoolUsedForWcToday(poolUsed, occKey, dateStr, wc) {
+  return poolUsed?.[occKey]?.[dateStr]?.byWc?.[wc] || 0;
+}
+
+// ─── Pool brygady (3xxxx + maszyna 2xxxx w brygadzie mieszanej) ──────────────
+// Wspólna implementacja dla scheduleAll i OPTIMIZE_INSERT — dawniej dwie osobne,
+// identyczne kopie (ryzyko rozjazdu przy każdej przyszłej zmianie tej logiki).
+//
+// Model (patrz POOL_BRYGADY_2xxxx_3xxxx.md): jedna wspólna pula godzin (RCP) na
+// brygadę. Gniazda (3xxxx) nadal poolują się przez remapowanie occKey na
+// `POOL_<brygada>` (bez zmian vs wcześniej). Maszyna (2xxxx) NIE zmienia occKey —
+// zostaje w swojej slotowej gałęzi w findSlotForward (żeby dwie różne ZP nigdy
+// nie dostały nakładających się w czasie segmentów na jednym operatorze) — ale
+// w brygadzie mieszanej WIDZI i ZASILA tę samą wspólną pulę co gniazda, przez
+// getPoolAvail (suma WSZYSTKICH zasobów brygady, nie tylko gniazd) i
+// getSharedPoolKey (klucz do wspólnego licznika zużycia, patrz findSlotForward).
+function buildBrygadaPool(wcToBrygada, wcSchedule) {
+  const membersByBrygada = {};
+  Object.entries(wcToBrygada).forEach(([wc, brygada]) => {
+    if (!membersByBrygada[brygada]) membersByBrygada[brygada] = [];
+    membersByBrygada[brygada].push(wc);
+  });
+
+  // Brygada jest "poolowalna" tylko jeśli ma choć jedno gniazdo 3xxxx — czysto-
+  // maszynowe brygady (pojedyncza maszyna bez sąsiadów, np. Heager/Klinczarka)
+  // zostają całkowicie bez zmian, bez wspólnej puli.
+  function isPoolableBrygada(brygada) {
+    const members = membersByBrygada[brygada];
+    return !!members && members.some(w => String(w).startsWith('3'));
+  }
+
+  function getOccKey(wc) {
+    if (!String(wc).startsWith('3')) return String(wc); // maszyna: zawsze własny slot
+    const brygada = wcToBrygada[wc];
+    return brygada && isPoolableBrygada(brygada) ? `POOL_${brygada}` : String(wc);
+  }
+
+  // Suma dostępności WSZYSTKICH zasobów brygady (maszyny + gniazda) — prawdziwy
+  // wspólny budżet dnia. Dla brygady czysto-3xxxx to dokładnie to samo co dawniej
+  // (brygadaToWcs miało tylko gniazda, bo maszyn tam po prostu nie było).
+  function getPoolAvail(wc, dt) {
+    const brygada = wcToBrygada[wc];
+    if (!brygada || !isPoolableBrygada(brygada)) return getAvail(wc, dt, wcSchedule);
+    return membersByBrygada[brygada].reduce((s, w) => s + getAvail(w, dt, wcSchedule), 0);
+  }
+
+  // Klucz wspólnego licznika zużycia dla MASZYNY w mieszanej brygadzie — gniazda
+  // dostają ten sam klucz już przez getOccKey (POOL_<brygada>). null = maszyna
+  // bez gniazd-sąsiadów (nic się nie zmienia, brak wspólnej puli).
+  function getSharedPoolKey(wc) {
+    if (String(wc).startsWith('3')) return null;
+    const brygada = wcToBrygada[wc];
+    return brygada && isPoolableBrygada(brygada) ? `POOL_${brygada}` : null;
+  }
+
+  return { getOccKey, getPoolAvail, getSharedPoolKey };
 }
 
 // ─── findSlotForward ──────────────────────────────────────────────────────────
-// poolUsed: Object z makePoolUsed() — tylko dla 3xxxx (isPool)
-// Maszyny 2xxxx: oryginalna logika slot-based (occ [{from,to}])
-// Pool   3xxxx: nowa logika capacity-based (poolUsed {dateStr→usedH})
-function findSlotForward(fromDt, needH, wc, wcSchedule, occ, getOccKey, getPoolAvail, poolUsed, shiftStart = 0) {
-  const occKey  = getOccKey    ? getOccKey(wc)         : wc;
-  const isPool  = occKey !== wc;                        // 3xxxx: POOL_<brygada> ≠ wc
-  const availFn = getPoolAvail ? (dt) => getPoolAvail(wc, dt) : (dt) => getAvail(wc, dt, wcSchedule);
+// poolUsed: Object z makePoolUsed() — dla 3xxxx (isPool) ORAZ dla maszyny 2xxxx
+// w brygadzie mieszanej (sharedKey, patrz niżej).
+// Maszyny 2xxxx: oryginalna logika slot-based (occ [{from,to}]) — bez zmian, żeby
+// dwie różne ZP nigdy nie dostały nakładających się w czasie segmentów na jednym
+// operatorze. Sufit dzienny liczy się jednak ze wspólnej puli brygady, gdy istnieje.
+// Pool   3xxxx: capacity-based (poolUsed {dateStr→{total,byWc}})
+function findSlotForward(fromDt, needH, wc, wcSchedule, occ, getOccKey, getPoolAvail, poolUsed, shiftStart = 0, getSharedPoolKey) {
+  const occKey    = getOccKey    ? getOccKey(wc)         : wc;
+  const isPool    = occKey !== wc;                      // 3xxxx: POOL_<brygada> ≠ wc
+  const sharedKey = getSharedPoolKey ? getSharedPoolKey(wc) : null; // maszyna w brygadzie mieszanej
+  const availFn   = getPoolAvail ? (dt) => getPoolAvail(wc, dt) : (dt) => getAvail(wc, dt, wcSchedule);
 
   let cursor    = new Date(fromDt);
   let remaining = needH;
@@ -153,7 +229,7 @@ function findSlotForward(fromDt, needH, wc, wcSchedule, occ, getOccKey, getPoolA
       const segEnd   = new Date(Math.min(segStart.getTime() + take * MS, midnight.getTime()));
 
       segs.push({ segStart: new Date(segStart), segEnd: new Date(segEnd), durH: take });
-      addPoolUsed(poolUsed, occKey, dateStr, take);
+      addPoolUsed(poolUsed, occKey, dateStr, wc, take);
       // Pool NIE dodaje do occ (brak bloków czasowych per-segment — zasoby wymienne)
       cursor = new Date(segEnd);
 
@@ -165,7 +241,19 @@ function findSlotForward(fromDt, needH, wc, wcSchedule, occ, getOccKey, getPoolA
     }
 
     // ── MASZYNA (2xxxx): slot-based, max 24h/dobę ────────────────────────────
-    const dayCapH = Math.min(avail, 24);                // hard cap: 1 maszyna max 24h
+    // Bez brygady mieszanej: sufit = własny wiersz (jak dawniej). W brygadzie
+    // mieszanej: sufit = min(wolne w WSPÓLNEJ puli brygady, 24h minus to co TA
+    // maszyna już dziś zużyła z tej puli) — `avail` to już suma całej brygady
+    // (patrz getPoolAvail w buildBrygadaPool), więc samo się skaluje z realną
+    // dostępnością gniazd-sąsiadów, nie z płaskim, statycznym wierszem maszyny.
+    let dayCapH;
+    if (sharedKey) {
+      const poolFreeToday = avail - getPoolUsedToday(poolUsed, sharedKey, dateStr);
+      const selfUsedToday = getPoolUsedForWcToday(poolUsed, sharedKey, dateStr, wc);
+      dayCapH = Math.max(0, Math.min(poolFreeToday, MACHINE_CEILING_H - selfUsedToday));
+    } else {
+      dayCapH = Math.min(avail, MACHINE_CEILING_H);
+    }
     const dayEnd  = new Date(Math.min(dayStart.getTime() + dayCapH * MS, midnight.getTime()));
 
     if (cursor >= dayEnd) {
@@ -192,6 +280,7 @@ function findSlotForward(fromDt, needH, wc, wcSchedule, occ, getOccKey, getPoolA
     const segEnd = new Date(windowStart.getTime() + take * MS);
     segs.push({ segStart: new Date(windowStart), segEnd, durH: take });
     addSlotToOcc(occ, occKey, new Date(windowStart), segEnd);
+    if (sharedKey) addPoolUsed(poolUsed, sharedKey, dateStr, wc, take);
     cursor = new Date(segEnd);
   }
 
@@ -250,6 +339,11 @@ function scheduleAll(zpList, routingByProduct, wcSchedule, planStartDt, onProgre
   const URGENCY_METHOD     = config?.urgencyMethod ?? 'cr';
   const SHIFT_START        = config?.shiftStart ?? 6;
   const GRAPH_MODE         = (config?.schedulingGraphMode ?? 'graph') === 'graph';
+  // Domyślny priorytet maszyny (2xxxx) w brygadzie mieszanej — handicap odjęty od
+  // pilności operacji na gniazdach 3xxxx tej samej brygady, tak żeby maszyna wygrywała
+  // typową konkurencję o wspólną pulę, ale przegrywała gdy konkurencyjne ZP na gnieździe
+  // ma realnie wyższą pilność (VIP/bliski termin) — patrz urgencyDynamic(biasH).
+  const MACHINE_BIAS_H     = config?.machineBiasH ?? 8;
   // Czas logistyki (transport) między operacjami — próg minimalny, nie bezwarunkowe
   // wydłużenie: dodaje się do kursora PRZED szukaniem wolnego okna, więc jeśli
   // maszyna docelowa i tak jest zajęta dłużej, transfer nie sumuje się z tym
@@ -261,26 +355,7 @@ function scheduleAll(zpList, routingByProduct, wcSchedule, planStartDt, onProgre
   const result   = [];
   const zpStatus = [];
 
-  // Mapa brygad: brygada (WC3) → [wc, ...] (tylko 3xxxx)
-  const brygadaToWcs = {};
-  Object.entries(wcToBrygada).forEach(([wc, brygada]) => {
-    if (!String(wc).startsWith('3')) return;
-    if (!brygadaToWcs[brygada]) brygadaToWcs[brygada] = [];
-    brygadaToWcs[brygada].push(wc);
-  });
-
-  function getOccKey(wc) {
-    if (!String(wc).startsWith('3')) return wc;
-    const brygada = wcToBrygada[wc];
-    return brygada ? `POOL_${brygada}` : wc;
-  }
-
-  function getPoolAvail(wc, dt) {
-    if (!String(wc).startsWith('3')) return getAvail(wc, dt, wcSchedule);
-    const brygada = wcToBrygada[wc];
-    if (!brygada || !brygadaToWcs[brygada]) return getAvail(wc, dt, wcSchedule);
-    return brygadaToWcs[brygada].reduce((s, w) => s + getAvail(w, dt, wcSchedule), 0);
-  }
+  const { getOccKey, getPoolAvail, getSharedPoolKey } = buildBrygadaPool(wcToBrygada, wcSchedule);
 
   function totalH(zp) {
     const ops = routingByProduct[zp._routingKey || zp.product] || [];
@@ -306,21 +381,25 @@ function scheduleAll(zpList, routingByProduct, wcSchedule, planStartDt, onProgre
   const p_avg = allTotalH.reduce((s, h) => s + h, 0) / Math.max(1, allTotalH.length);
   const ATC_K = config?.atcK ?? 2.5;
 
-  function urgencyDynamic(zp, tMs) {
+  // biasH (godziny, patrz MACHINE_BIAS_H) — handicap dodawany do pilności operacji na
+  // maszynie w brygadzie mieszanej. Przeliczany do jednostek AKTYWNEJ metody, bo każda
+  // liczy pilność w innej skali (ms, ms, godziny-w-wykładniku, bezwymiarowy ratio) —
+  // stałe odjęcie tej samej liczby od wyniku byłoby niespójne między metodami.
+  function urgencyDynamic(zp, tMs, biasH = 0) {
     const { th, effectiveDue } = zpCache.get(zp);
     const dueMs        = effectiveDue - planStartDt.getTime();
     const totalMs      = th * MS;
     const remainMs     = dueMs - tMs;
 
-    if (URGENCY_METHOD === 'due_date') return effectiveDue;
-    if (URGENCY_METHOD === 'slack')    return remainMs - totalMs;
+    if (URGENCY_METHOD === 'due_date') return effectiveDue - biasH * MS;
+    if (URGENCY_METHOD === 'slack')    return (remainMs - totalMs) - biasH * MS;
     if (URGENCY_METHOD === 'atc') {
       const w     = zp.priority === 1 ? 2 : 1;
       const p     = th || 0.001;
-      const slack = Math.max(0, remainMs - totalMs) / MS;
+      const slack = Math.max(0, remainMs - totalMs) / MS - biasH;
       return -(w / p) * Math.exp(-slack / (ATC_K * Math.max(p_avg, 0.001)));
     }
-    return totalMs > 0 ? remainMs / totalMs : 999;
+    return totalMs > 0 ? (remainMs / totalMs) - (biasH / Math.max(th, 0.001)) : 999;
   }
 
   class MinHeap {
@@ -440,10 +519,18 @@ function scheduleAll(zpList, routingByProduct, wcSchedule, planStartDt, onProgre
     zpsWithOps.push({ zp, ops });
   }
 
+  // Wpis w kopcu wskazuje "aktualną" (następną do zaplanowania) operację inaczej w obu
+  // trybach: legacy = ops[opIdx], graph = op wprost. Bias dotyczy TYLKO tej operacji,
+  // nie całego ZP — inny op tego samego ZP może być na zupełnie innym zasobie.
+  function biasFor(entry) {
+    const op = entry.op ?? entry.ops[entry.opIdx];
+    return (op && getSharedPoolKey(op.workcenter) !== null) ? MACHINE_BIAS_H : 0;
+  }
+
   const heap = new MinHeap((a, b) => {
     const tA = a.cursor.getTime() - planStartDt.getTime();
     const tB = b.cursor.getTime() - planStartDt.getTime();
-    return urgencyDynamic(a.zp, tA) - urgencyDynamic(b.zp, tB);
+    return urgencyDynamic(a.zp, tA, biasFor(a)) - urgencyDynamic(b.zp, tB, biasFor(b));
   });
 
   const total = zpsWithOps.length;
@@ -472,7 +559,7 @@ function scheduleAll(zpList, routingByProduct, wcSchedule, planStartDt, onProgre
       const durH = op.ct_min > 0 ? zp.volume * op.ct_min / 60 : (op._durH ?? 0);
 
       const { startDt, endDt, segs } = findSlotForward(
-        cursor, durH, op.workcenter, wcSchedule, occ, getOccKey, getPoolAvail, poolUsed, SHIFT_START
+        cursor, durH, op.workcenter, wcSchedule, occ, getOccKey, getPoolAvail, poolUsed, SHIFT_START, getSharedPoolKey
       );
 
       state.opResults.push({ op, startDt, endDt, segs, durH });
@@ -522,7 +609,7 @@ function scheduleAll(zpList, routingByProduct, wcSchedule, planStartDt, onProgre
 
     const durH = op.ct_min > 0 ? zp.volume * op.ct_min / 60 : (op._durH ?? 0);
     const { startDt, endDt, segs } = findSlotForward(
-      cursor, durH, op.workcenter, wcSchedule, occ, getOccKey, getPoolAvail, poolUsed, SHIFT_START
+      cursor, durH, op.workcenter, wcSchedule, occ, getOccKey, getPoolAvail, poolUsed, SHIFT_START, getSharedPoolKey
     );
 
     zpCtx.opResults.push({ op, startDt, endDt, segs, durH });
@@ -586,27 +673,8 @@ self.onmessage = function(e) {
       const { wcSchedule, planStart, fwdZP, zpStatus, wcToBrygada: wcToBrygadaPayload, config } = payload;
       const t0 = Date.now();
 
-      // Lokalne mapy brygad dla OPTIMIZE_INSERT
-      const wcToBrygadaLocal = wcToBrygadaPayload || {};
-      const brygadaToWcsLocal = {};
-      Object.entries(wcToBrygadaLocal).forEach(([wc, brygada]) => {
-        if (!String(wc).startsWith('3')) return;
-        if (!brygadaToWcsLocal[brygada]) brygadaToWcsLocal[brygada] = [];
-        brygadaToWcsLocal[brygada].push(wc);
-      });
-
-      // getOccKey / getPoolAvail lokalne (mirror scheduleAll)
-      function localGetOccKey(wc) {
-        if (!String(wc).startsWith('3')) return String(wc);
-        const brygada = wcToBrygadaLocal[wc];
-        return brygada ? `POOL_${brygada}` : String(wc);
-      }
-      function localGetPoolAvail(wc, dt) {
-        if (!String(wc).startsWith('3')) return getAvail(wc, dt, wcSchedule);
-        const brygada = wcToBrygadaLocal[wc];
-        if (!brygada || !brygadaToWcsLocal[brygada]) return getAvail(wc, dt, wcSchedule);
-        return brygadaToWcsLocal[brygada].reduce((s, m) => s + getAvail(m, dt, wcSchedule), 0);
-      }
+      const { getOccKey: localGetOccKey, getPoolAvail: localGetPoolAvail, getSharedPoolKey: localGetSharedPoolKey } =
+        buildBrygadaPool(wcToBrygadaPayload || {}, wcSchedule);
 
       const lateList = zpStatus
         .filter(z => z.late)
@@ -623,12 +691,14 @@ self.onmessage = function(e) {
       const lateStart = lateList.length;
 
       // buildOcc — ujednolicony format: {from,to} dla maszyn, poolUsed dla 3xxxx
+      // (oraz dla maszyny 2xxxx w brygadzie mieszanej, przez sharedKey).
       function buildOcc(ops) {
         const occ      = makeOccupancy();
         const poolUsed = makePoolUsed();
         for (const op of ops) {
-          const wc     = String(op.workcenter);
-          const isPool = wc.startsWith('3');
+          const wc        = String(op.workcenter);
+          const isPool    = wc.startsWith('3');
+          const sharedKey = isPool ? null : localGetSharedPoolKey(wc);
           for (const seg of (op.segments || [])) {
             if (!seg.segStart || !seg.segEnd) continue;
             const segStart = new Date(typeof seg.segStart === 'number' ? seg.segStart : seg.segStart);
@@ -636,9 +706,10 @@ self.onmessage = function(e) {
             if (isPool) {
               const occKey  = localGetOccKey(wc);
               const dateStr = localDateStr(segStart);
-              addPoolUsed(poolUsed, occKey, dateStr, seg.durH || 0);
+              addPoolUsed(poolUsed, occKey, dateStr, wc, seg.durH || 0);
             } else {
               addSlotToOcc(occ, wc, segStart, segEnd, op.zp_id);
+              if (sharedKey) addPoolUsed(poolUsed, sharedKey, localDateStr(segStart), wc, seg.durH || 0);
             }
           }
         }
@@ -651,7 +722,8 @@ self.onmessage = function(e) {
           localGetOccKey,
           localGetPoolAvail,
           poolUsed,
-          config?.shiftStart ?? 6
+          config?.shiftStart ?? 6,
+          localGetSharedPoolKey
         );
         if (!result.segs.length) return null;
         return {
@@ -701,17 +773,16 @@ self.onmessage = function(e) {
 
         // Usuń occupancy tego ZP
         for (const op of zpOps) {
-          const wc     = String(op.workcenter);
-          const isPool = wc.startsWith('3');
+          const wc        = String(op.workcenter);
+          const isPool    = wc.startsWith('3');
+          const sharedKey = isPool ? null : localGetSharedPoolKey(wc);
           if (isPool) {
             for (const seg of (op.segments || [])) {
               if (!seg.segStart) continue;
-              const occKey  = localGetOccKey(wc);
+              const occKey   = localGetOccKey(wc);
               const segStart = new Date(typeof seg.segStart === 'number' ? seg.segStart : seg.segStart);
               const dateStr  = localDateStr(segStart);
-              if (poolUsed[occKey]) {
-                poolUsed[occKey][dateStr] = Math.max(0, (poolUsed[occKey][dateStr] || 0) - (seg.durH || 0));
-              }
+              removePoolUsed(poolUsed, occKey, dateStr, wc, seg.durH || 0);
             }
           } else {
             // Maszyny: usuń sloty tej operacji po unikalnym op.zp_id, nie po dopasowaniu
@@ -721,6 +792,14 @@ self.onmessage = function(e) {
             if (slots) {
               for (let i = slots.length - 1; i >= 0; i--) {
                 if (slots[i].opKey === op.zp_id) slots.splice(i, 1);
+              }
+            }
+            if (sharedKey) {
+              for (const seg of (op.segments || [])) {
+                if (!seg.segStart) continue;
+                const segStart = new Date(typeof seg.segStart === 'number' ? seg.segStart : seg.segStart);
+                const dateStr  = localDateStr(segStart);
+                removePoolUsed(poolUsed, sharedKey, dateStr, wc, seg.durH || 0);
               }
             }
           }
@@ -745,19 +824,20 @@ self.onmessage = function(e) {
         if (!ok || (oldRealEnd && newRealEnd >= oldRealEnd)) {
           // Nie poprawia — przywróć occupancy
           for (const op of zpOps) {
-            const wc     = String(op.workcenter);
-            const isPool = wc.startsWith('3');
+            const wc        = String(op.workcenter);
+            const isPool    = wc.startsWith('3');
+            const sharedKey = isPool ? null : localGetSharedPoolKey(wc);
             for (const seg of (op.segments || [])) {
               if (!seg.segStart) continue;
+              const segStart = new Date(typeof seg.segStart === 'number' ? seg.segStart : seg.segStart);
+              const dateStr  = localDateStr(segStart);
               if (isPool) {
-                const occKey   = localGetOccKey(wc);
-                const segStart = new Date(typeof seg.segStart === 'number' ? seg.segStart : seg.segStart);
-                const dateStr  = localDateStr(segStart);
-                addPoolUsed(poolUsed, occKey, dateStr, seg.durH || 0);
+                const occKey = localGetOccKey(wc);
+                addPoolUsed(poolUsed, occKey, dateStr, wc, seg.durH || 0);
               } else {
-                const segStart = new Date(typeof seg.segStart === 'number' ? seg.segStart : seg.segStart);
-                const segEnd   = new Date(typeof seg.segEnd   === 'number' ? seg.segEnd   : seg.segEnd);
+                const segEnd = new Date(typeof seg.segEnd === 'number' ? seg.segEnd : seg.segEnd);
                 addSlotToOcc(occ, wc, segStart, segEnd, op.zp_id);
+                if (sharedKey) addPoolUsed(poolUsed, sharedKey, dateStr, wc, seg.durH || 0);
               }
             }
           }
@@ -766,22 +846,23 @@ self.onmessage = function(e) {
 
         // Zaakceptuj — zaktualizuj workOps i occupancy
         for (const { op, slot } of newSlots) {
-          const wc     = String(op.workcenter);
-          const isPool = wc.startsWith('3');
+          const wc        = String(op.workcenter);
+          const isPool    = wc.startsWith('3');
+          const sharedKey = isPool ? null : localGetSharedPoolKey(wc);
           const idx    = workOps.findIndex(o => o.zp_id === op.zp_id);
           if (idx >= 0) {
             workOps[idx] = { ...workOps[idx], start_dt: slot.start, end_dt: slot.end, segments: slot.segs, realEnd: newRealEnd };
           }
           for (const seg of slot.segs) {
+            const segStart = new Date(typeof seg.segStart === 'number' ? seg.segStart : seg.segStart);
+            const dateStr  = localDateStr(segStart);
             if (isPool) {
-              const occKey   = localGetOccKey(wc);
-              const segStart = new Date(typeof seg.segStart === 'number' ? seg.segStart : seg.segStart);
-              const dateStr  = localDateStr(segStart);
-              addPoolUsed(poolUsed, occKey, dateStr, seg.durH || 0);
+              const occKey = localGetOccKey(wc);
+              addPoolUsed(poolUsed, occKey, dateStr, wc, seg.durH || 0);
             } else {
-              const segStart = new Date(typeof seg.segStart === 'number' ? seg.segStart : seg.segStart);
-              const segEnd   = new Date(typeof seg.segEnd   === 'number' ? seg.segEnd   : seg.segEnd);
+              const segEnd = new Date(typeof seg.segEnd === 'number' ? seg.segEnd : seg.segEnd);
               addSlotToOcc(occ, wc, segStart, segEnd, op.zp_id);
+              if (sharedKey) addPoolUsed(poolUsed, sharedKey, dateStr, wc, seg.durH || 0);
             }
           }
         }

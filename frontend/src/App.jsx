@@ -490,10 +490,10 @@ export default function App() {
       // Literalne daty z pliku scalają się do wcExplicit (rzadkie, trwałe) —
       // reszta dni w horyzoncie planowania dostanie te same godziny automatycznie
       // przez szablon (wcSchedule useMemo wyżej), bez potrzeby "dopełniania" tu.
-      const { schedule: mergedExplicit, warnings } = mergeGrafikGodzinIntoSchedule(text, wcToBrygada, wcExplicit);
+      const { schedule: mergedExplicit, warnings } = mergeGrafikGodzinIntoSchedule(text, wcToBrygada, wcExplicit, wcCapacity);
       // Nowy import nadpisuje szablon tylko dla maszyn, których dotyczy — reszta
       // (z wcześniejszego importu, inna brygada) zostaje bez zmian.
-      const newTemplate = { ...wcTemplate, ...buildWeeklyTemplateFromGrafik(text, wcToBrygada) };
+      const newTemplate = { ...wcTemplate, ...buildWeeklyTemplateFromGrafik(text, wcToBrygada, wcCapacity) };
       setWcTemplate(newTemplate);
       setWcExplicit(mergedExplicit);
       setWcScheduleVersion(v => v + 1);

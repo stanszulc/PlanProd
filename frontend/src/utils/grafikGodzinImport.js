@@ -8,12 +8,67 @@
 //
 // planprod planuje per maszyna (patrz erpZpToSchedulerInput: workcenter =
 // machine_id), a brygada to tylko grupowanie (wc_group/wcToBrygada) używane przez
-// mechanizm "pool" (AddCumulative/getPoolAvail sumuje dostępność wszystkich
-// maszyn brygady). Import więc rozdziela godziny brygady równo na jej maszyny
-// — podział wewnętrzny nie musi być "prawdziwy", bo pool liczy tylko sumę.
+// mechanizm "pool" (getPoolAvail sumuje dostępność wszystkich zasobów brygady).
+//
+// Podział godzin brygady na jej zasoby NIE jest już czysto równy (patrz
+// splitBrigadeHours niżej) — maszyna (2xxxx, jeden operator) dostaje swoje
+// skonfigurowane zapotrzebowanie (capowane na fizyczny sufit 24h/dobę), a
+// dopiero reszta dzieli się równo na gniazda (3xxxx). Patrz POOL_BRYGADY_
+// 2xxxx_3xxxx.md w katalogu projektu (planprod) — to jest ta sama zasada,
+// co "maszyna ma domyślny priorytet do puli", tylko na warstwie statycznego
+// importu/szablonu, nie samego silnika planującego.
 // ──────────────────────────────────────────────────────────────────────────────
 
 import JSZip from 'jszip';
+
+const MACHINE_CEILING_H      = 24; // maszyna: jeden operator, fizyczny sufit kalendarzowy
+const DEFAULT_MACHINE_CLAIM_H = 16; // fallback gdy brak wcCapacity dla nowego kodu maszyny
+
+function isMachineWc(wc) {
+  return String(wc).startsWith('2');
+}
+
+// Dzieli godziny brygady na jej zasoby: maszyny (2xxxx) dostają swoje skonfigurowane
+// zapotrzebowanie (wcCapacity, capowane na MACHINE_CEILING_H), reszta trafia równo do
+// gniazd (3xxxx). Jeśli suma zapotrzebowań maszyn przekracza realnie zaimportowane
+// godziny (np. dzień świąteczny w loadplannerze), przycina je proporcjonalnie — suma
+// nigdy nie przekracza `godziny`, żadne godziny nie są tworzone ani gubione.
+function splitBrigadeHours(machines, godziny, wcCapacity) {
+  const machineWcs = machines.filter(isMachineWc);
+  const gniazdoWcs  = machines.filter(wc => !isMachineWc(wc));
+  const perWc = {};
+
+  if (!machineWcs.length) {
+    // Brygada czysto-3xxxx — bez zmian, równy podział jak dotąd.
+    const perMachine = godziny / machines.length;
+    machines.forEach(wc => { perWc[wc] = perMachine; });
+    return perWc;
+  }
+
+  const rawClaims  = machineWcs.map(wc => Math.min(wcCapacity?.[wc] ?? DEFAULT_MACHINE_CLAIM_H, MACHINE_CEILING_H));
+  const totalClaim = rawClaims.reduce((s, h) => s + h, 0);
+  const scale      = totalClaim > godziny && totalClaim > 0 ? godziny / totalClaim : 1;
+
+  let usedByMachines = 0;
+  machineWcs.forEach((wc, i) => {
+    const claim = rawClaims[i] * scale;
+    perWc[wc] = claim;
+    usedByMachines += claim;
+  });
+
+  const remainder = Math.max(0, godziny - usedByMachines);
+  if (gniazdoWcs.length) {
+    const perGniazdo = remainder / gniazdoWcs.length;
+    gniazdoWcs.forEach(wc => { perWc[wc] = perGniazdo; });
+  } else {
+    // Same maszyny, brak gniazd 3xxxx do wchłonięcia nadwyżki — degeneruje do
+    // równego podziału całości, żeby nie zgubić godzin ponad sumę sufitów.
+    const perMachine = godziny / machineWcs.length;
+    machineWcs.forEach(wc => { perWc[wc] = perMachine; });
+  }
+
+  return perWc;
+}
 
 function parseXml(text) {
   return new DOMParser().parseFromString(text, 'application/xml');
@@ -105,7 +160,7 @@ export async function parseGrafikGodzinXlsx(arrayBuffer) {
 // replace) z istniejącym wcSchedule. Zwraca { schedule, warnings } — brygada bez
 // żadnej znanej maszyny trafia do warnings zamiast rzucać błąd (np. literówka w
 // nazwie brygady albo import zrobiony przed importem ERP).
-export function mergeGrafikGodzinIntoSchedule(rows, wcToBrygada, wcSchedule) {
+export function mergeGrafikGodzinIntoSchedule(rows, wcToBrygada, wcSchedule, wcCapacity = {}) {
   const machinesByBrigade = {};
   Object.entries(wcToBrygada || {}).forEach(([machineId, brigade]) => {
     if (!machinesByBrigade[brigade]) machinesByBrigade[brigade] = [];
@@ -127,9 +182,9 @@ export function mergeGrafikGodzinIntoSchedule(rows, wcToBrygada, wcSchedule) {
       }
       continue;
     }
-    const perMachine = godziny / machines.length;
-    for (const machineId of machines) {
-      schedule[machineId] = { ...(schedule[machineId] || {}), [data]: perMachine };
+    const perWc = splitBrigadeHours(machines, godziny, wcCapacity);
+    for (const [machineId, h] of Object.entries(perWc)) {
+      schedule[machineId] = { ...(schedule[machineId] || {}), [data]: h };
     }
   }
 
@@ -143,7 +198,7 @@ export function mergeGrafikGodzinIntoSchedule(rows, wcToBrygada, wcSchedule) {
 // bo "Planuj od" może się przesunąć poza pierwotnie zaimportowany zakres w obie
 // strony. Brygada bez znanych maszyn jest po cichu pomijana (już zgłoszona jako
 // warning przez mergeGrafikGodzinIntoSchedule przy tym samym imporcie).
-export function buildWeeklyTemplateFromGrafik(rows, wcToBrygada) {
+export function buildWeeklyTemplateFromGrafik(rows, wcToBrygada, wcCapacity = {}) {
   const machinesByBrigade = {};
   Object.entries(wcToBrygada || {}).forEach(([machineId, brigade]) => {
     if (!machinesByBrigade[brigade]) machinesByBrigade[brigade] = [];
@@ -155,10 +210,10 @@ export function buildWeeklyTemplateFromGrafik(rows, wcToBrygada) {
     const machines = machinesByBrigade[brygada];
     if (!machines || !machines.length) continue;
     const weekday = new Date(data + 'T12:00:00').getDay();
-    const perMachine = godziny / machines.length;
-    for (const machineId of machines) {
+    const perWc = splitBrigadeHours(machines, godziny, wcCapacity);
+    for (const [machineId, h] of Object.entries(perWc)) {
       if (!template[machineId]) template[machineId] = {};
-      template[machineId][weekday] = perMachine;
+      template[machineId][weekday] = h;
     }
   }
   return template;

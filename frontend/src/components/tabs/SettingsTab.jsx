@@ -116,6 +116,11 @@ export function SettingsTab({ config, onConfigChange, wcCapacity = {}, onWcCapac
             <option value="slack">Slack czasowy</option>
           </select>
         </Row>
+        <Row label="Priorytet maszyny w brygadzie mieszanej"
+          desc="Domyślna przewaga maszyny (2xxxx) nad gniazdami (3xxxx) tej samej brygady przy konkurencji o wspólną pulę godzin — przełamywalna pilniejszym (VIP/bliski termin) ZP na gnieździe.">
+          <NumInput value={localConfig.machineBiasH ?? 8}
+            onChange={v => update('machineBiasH', v)} min={0} max={24} unit="h" />
+        </Row>
       </section>
 
       {/* ── OPERACJE RÓWNOLEGŁE ── */}
