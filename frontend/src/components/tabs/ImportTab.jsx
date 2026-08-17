@@ -3,6 +3,7 @@ import { T, s } from '../../constants/theme.js';
 import { DEMO_ZP_STATUS, DEMO_PARALLEL_MACHINES, DEMO_BOM_FORMATKI } from '../../constants/demoData.js';
 import { runNestingConsolidation, buildBomIndex } from '../../utils/nesting.js';
 import { xlsxPivotCacheToZpTsv } from '../../utils/pivotXlsxImport.js';
+import { parseGrafikGodzinXlsx } from '../../utils/grafikGodzinImport.js';
 
 function dlCSV(content, filename) {
   const a = document.createElement('a');
@@ -69,6 +70,10 @@ export function ImportTab({
   const [expandedResult, setExpandedResult] = useState(null); // indeks wiersza z rozwiniętą zawartością arkusza
   const [xlsxError, setXlsxError] = useState(null);
   const [xlsxSourceInfo, setXlsxSourceInfo] = useState(null); // { rowCount } — ostatni import z xlsx
+  const [importError, setImportError] = useState(null);
+  const [wcScheduleLoaded, setWcScheduleLoaded] = useState(false);
+  const [wcScheduleInfo, setWcScheduleInfo] = useState(null); // { count }
+  const [wcScheduleWarnings, setWcScheduleWarnings] = useState([]);
 
   function applyErpTsv(tsvText) {
     const result = onLoad(tsvText, 'erp_zp');
@@ -90,6 +95,25 @@ export function ImportTab({
     // czytamy wtedy cache tabeli przestawnej OBCIĄŻENIE zamiast ręcznie
     // eksportowanego TSV, żeby dane zawsze odzwierciedlały ostatnie
     // "Dane → Odśwież wszystko" w Excelu.
+    if (type === 'wc_schedule') {
+      setImportError(null);
+      const reader = new FileReader();
+      reader.onload = async e => {
+        try {
+          const rows = await parseGrafikGodzinXlsx(e.target.result);
+          const result = onLoad(rows, 'wc_schedule');
+          setWcScheduleLoaded(true);
+          setWcScheduleInfo({ count: result?.count ?? rows.length });
+          setWcScheduleWarnings(result?.warnings || []);
+        } catch (err) {
+          setImportError(err.message);
+        }
+      };
+      reader.onerror = () => setImportError('Nie udało się odczytać pliku.');
+      reader.readAsArrayBuffer(file);
+      return;
+    }
+
     if (type === 'erp_zp' && /\.xlsx$/i.test(file.name)) {
       setXlsxError(null);
       const reader = new FileReader();
@@ -102,33 +126,40 @@ export function ImportTab({
           setXlsxError(err.message);
         }
       };
+      reader.onerror = () => setXlsxError('Nie udało się odczytać pliku.');
       reader.readAsArrayBuffer(file);
       return;
     }
 
+    setImportError(null);
     const reader = new FileReader();
     reader.onload = e => {
-      if (type === 'erp_zp') {
-        applyErpTsv(e.target.result);
-        return;
-      }
-      const result = onLoad(e.target.result, type);
-      if (type === 'zp_status') {
-        setZpLoaded(true);
-        if (result?.rejected?.length) setRejectLog(result.rejected);
-        else setRejectLog([]);
-      }
-      if (type === 'parallel_machines') {
-        setParallelLoaded(true);
-        setParallelCount(result?.count ?? 0);
-      }
-      if (type === 'bom_formatek') {
-        setBomLoaded(true);
-        setBomCount(result?.count ?? 0);
-        setNestingResults(null);
-        if (result?.rejected?.length) setRejectLog(result.rejected);
+      try {
+        if (type === 'erp_zp') {
+          applyErpTsv(e.target.result);
+          return;
+        }
+        const result = onLoad(e.target.result, type);
+        if (type === 'zp_status') {
+          setZpLoaded(true);
+          if (result?.rejected?.length) setRejectLog(result.rejected);
+          else setRejectLog([]);
+        }
+        if (type === 'parallel_machines') {
+          setParallelLoaded(true);
+          setParallelCount(result?.count ?? 0);
+        }
+        if (type === 'bom_formatek') {
+          setBomLoaded(true);
+          setBomCount(result?.count ?? 0);
+          setNestingResults(null);
+          if (result?.rejected?.length) setRejectLog(result.rejected);
+        }
+      } catch (err) {
+        setImportError(err.message);
       }
     };
+    reader.onerror = () => setImportError('Nie udało się odczytać pliku.');
     reader.readAsText(file, 'UTF-8');
   }
 
@@ -187,7 +218,7 @@ export function ImportTab({
       )}
       <input
         id={`file_${type}`} type="file"
-        accept={type === 'erp_zp' ? '.csv,.tsv,.txt,.xlsx' : '.csv,.tsv,.txt'}
+        accept={type === 'erp_zp' ? '.csv,.tsv,.txt,.xlsx' : type === 'wc_schedule' ? '.xlsx' : '.csv,.tsv,.txt'}
         style={{ display: 'none' }}
         onChange={e => { const f = e.target.files[0]; if (f) readFile(f, type); }}
       />
@@ -203,7 +234,7 @@ export function ImportTab({
       {/* ── 1. WGRAJ PLIKI ─────────────────────────────────────────────────── */}
       <section>
         <SectionHeader icon="📥" label="Wgraj pliki" />
-        <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr 1fr', gap: 16 }}>
+        <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr 1fr 1fr', gap: 16 }}>
           <DropBox
             type="erp_zp"
             loaded={erpLoaded || hasErpData}
@@ -267,7 +298,44 @@ export function ImportTab({
               { n: 'grubosc_mm',  req: true },
             ]}
           />
+          <DropBox
+            type="wc_schedule"
+            loaded={wcScheduleLoaded}
+            label="Grafik godzin (loadplanner)"
+            icon="🕒"
+            desc="Dostępne godziny per brygada (WC3) na najbliższy tydzień, wyeksportowane z loadplanner — rozdzielane równo na maszyny brygady. Wgraj PO imporcie ZP z ERP."
+            infoText={wcScheduleInfo ? `${wcScheduleInfo.count} wierszy (brygada × dzień)` : undefined}
+            cols={[
+              { n: 'Brygada',         req: true },
+              { n: 'Data',            req: true },
+              { n: 'GodzinyDostepne', req: true },
+            ]}
+          />
         </div>
+
+        {/* Brygady z grafiku godzin bez znanych maszyn (np. import przed ERP, literówka) */}
+        {wcScheduleWarnings.length > 0 && (
+          <div style={{
+            background: 'rgba(251,191,36,0.08)',
+            border: `1px solid ${T.warn}`,
+            borderRadius: 10, padding: '12px 16px', marginTop: 14,
+            fontSize: 12, color: T.warn,
+          }}>
+            ⚠ {wcScheduleWarnings.join(' ')}
+          </div>
+        )}
+
+        {/* Błąd wczytania/parsowania pliku (CSV/TSV) */}
+        {importError && (
+          <div style={{
+            background: 'rgba(248,113,113,0.07)',
+            border: `1px solid ${T.bn}`,
+            borderRadius: 10, padding: '12px 16px', marginTop: 14,
+            fontSize: 12, color: T.bn,
+          }}>
+            ⚠ Nie udało się wczytać pliku: {importError}
+          </div>
+        )}
 
         {/* Błąd importu z xlsx (cache pivota) */}
         {xlsxError && (

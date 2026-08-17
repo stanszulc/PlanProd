@@ -1,20 +1,71 @@
 import { useState, useMemo } from 'react';
 import { T, s } from '../../constants/theme.js';
-import { computeLoads } from '../../utils/scheduler.js';
+import { computeLoads, getAvail, localDateStr } from '../../utils/scheduler.js';
 import { EmptyState } from '../common/EmptyState.jsx';
 
-export function HeatmapTab({ routing, zp, globalLookups, wcSchedule }) {
-  const dates = useMemo(() => [...new Set(zp.map(z => z.due_date))].sort(), [zp.length]);
+export function HeatmapTab({ routing, zp, globalLookups, wcSchedule, fwdZP = [], planStart, horizonDays = 14 }) {
+  const [groupBy, setGroupBy] = useState('due'); // 'due' (wg terminu) | 'plan' (wg planu)
+
   const allWC = useMemo(() => [...new Set(routing.map(r => r.workcenter))].sort(), [routing.length]);
 
-  const loadsCache = useMemo(() => {
+  // Cały zakres czasu planowania — od "Planuj od" do końca horyzontu (albo do
+  // najpóźniejszego due_date, jeśli wykracza poza horyzont) — bez dziur, nawet
+  // dla dni bez żadnego ZP/operacji.
+  const dates = useMemo(() => {
+    if (!planStart) return [...new Set(zp.map(z => z.due_date))].filter(Boolean).sort();
+
+    const start = new Date(planStart + 'T12:00:00');
+    let end = new Date(planStart + 'T12:00:00');
+    end.setDate(end.getDate() + horizonDays);
+
+    zp.forEach(z => {
+      if (!z.due_date) return;
+      const d = new Date(z.due_date + 'T12:00:00');
+      if (d > end) end = d;
+    });
+
+    const result = [];
+    const cur = new Date(start);
+    while (cur <= end) {
+      result.push(localDateStr(cur));
+      cur.setDate(cur.getDate() + 1);
+    }
+    return result;
+  }, [zp, planStart, horizonDays]);
+
+  // wg terminu (istniejące zachowanie): obciążenie z ZP pogrupowanych po due_date.
+  const loadsByDueDate = useMemo(() => {
     const c = {};
     dates.forEach(d => {
       const zpForDate = zp.filter(z => z.due_date === d);
-      c[d] = computeLoads(globalLookups.routingByProduct, zpForDate, wcSchedule, d);
+      c[d] = zpForDate.length ? computeLoads(globalLookups.routingByProduct, zpForDate, wcSchedule, d) : {};
     });
     return c;
-  }, [zp.length, dates.join(','), JSON.stringify(wcSchedule)]);
+  }, [zp, dates, globalLookups, wcSchedule]);
+
+  // wg planu (nowe): obciążenie z faktycznie zaplanowanych segmentów (fwdZP) —
+  // pokazuje kiedy praca REALNIE ma się wykonać, nie kiedy ZP jest wymagane.
+  const plannedLoadByWc = useMemo(() => {
+    const m = {};
+    fwdZP.forEach(op => {
+      (op.segments || []).forEach(seg => {
+        if (!seg.segStart) return;
+        const d = localDateStr(seg.segStart);
+        if (!m[op.workcenter]) m[op.workcenter] = {};
+        m[op.workcenter][d] = (m[op.workcenter][d] || 0) + (seg.durH || 0);
+      });
+    });
+    return m;
+  }, [fwdZP]);
+
+  function utilFor(wc, d) {
+    if (groupBy === 'plan') {
+      const load = plannedLoadByWc[wc]?.[d] || 0;
+      const cap  = getAvail(wc, d + 'T12:00:00', wcSchedule);
+      return cap > 0 ? load / cap : (load > 0 ? 999 : 0);
+    }
+    return loadsByDueDate[d]?.[wc]?.util || 0;
+  }
 
   if (!dates.length) return <EmptyState icon="🌡️" title="Brak danych" sub="Wgraj pliki CSV" />;
 
@@ -29,7 +80,17 @@ export function HeatmapTab({ routing, zp, globalLookups, wcSchedule }) {
 
   return (
     <div style={s.card}>
-      <div style={s.cardTitle}>Obłożenie gniazd w czasie (Gniazdo × Termin)</div>
+      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 14 }}>
+        <div style={s.cardTitle}>Obłożenie gniazd w czasie (Gniazdo × {groupBy === 'plan' ? 'Data planowana' : 'Termin'})</div>
+        <div style={{ display: 'flex', gap: 6 }}>
+          <button type="button" style={{ ...s.btn(groupBy === 'due'), fontSize: 12 }} onClick={() => setGroupBy('due')}>
+            wg terminu
+          </button>
+          <button type="button" style={{ ...s.btn(groupBy === 'plan'), fontSize: 12 }} onClick={() => setGroupBy('plan')}>
+            wg planu
+          </button>
+        </div>
+      </div>
       <div style={{ overflowX: 'auto' }}>
         <table style={{ borderCollapse: 'collapse', fontSize: 12 }}>
           <thead>
@@ -48,7 +109,7 @@ export function HeatmapTab({ routing, zp, globalLookups, wcSchedule }) {
                 <td style={{ padding: '6px 16px 6px 0', fontWeight: 700,
                   color: T.text, fontSize: 13 }}>{w}</td>
                 {dates.map(d => {
-                  const u = loadsCache[d]?.[w]?.util || 0;
+                  const u = utilFor(w, d);
                   const hs = hmStyle(u);
                   return (
                     <td key={d} style={{ padding: 4 }}>

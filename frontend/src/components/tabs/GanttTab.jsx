@@ -9,7 +9,7 @@ export function GanttTab({ routing, zp, globalLookups, wcSchedule, subZP, fwdZP,
 
   const wcNameMap = useMemo(() => { const m = {}; routing.forEach(r => { if (!m[r.workcenter]) m[r.workcenter] = r.operation; }); return m; }, [routing]);
   const allWCFull = useMemo(() => { const wcSeq = {}; routing.forEach(r => { const seq = parseInt(r.sequence)||999; if (wcSeq[r.workcenter]===undefined||seq<wcSeq[r.workcenter]) wcSeq[r.workcenter]=seq; }); return [...new Set(routing.map(r=>r.workcenter))].sort((a,b)=>(wcSeq[a]||999)-(wcSeq[b]||999)); }, [routing]);
-  const wcToWc2GM = useMemo(() => { const m = {}; routing.forEach(r => { if (r.workcenter && r.wc_group) m[r.workcenter] = r.wc_group; }); return m; }, [routing]);
+  const wcToBrygadaGM = useMemo(() => { const m = {}; routing.forEach(r => { if (r.workcenter && r.wc_group) m[r.workcenter] = r.wc_group; }); return m; }, [routing]);
   const dates  = useMemo(() => [...new Set(zp.map(z => z.due_date))].sort(), [zp]);
   const [filterZS,   setFilterZS]  = useState('');
   const [filterProd, setFilterProd] = useState('');
@@ -87,7 +87,7 @@ export function GanttTab({ routing, zp, globalLookups, wcSchedule, subZP, fwdZP,
       ? (() => {
           const targetWcSet = heatmapFilter.wc
             ? new Set([heatmapFilter.wc])
-            : new Set(Object.entries(wcToWc2GM).filter(([, v]) => v === heatmapFilter.wc2).map(([k]) => k));
+            : new Set(Object.entries(wcToBrygadaGM).filter(([, v]) => v === heatmapFilter.wc2).map(([k]) => k));
           const zpIds = new Set(
             base.filter(op => {
               if (!targetWcSet.has(op.workcenter)) return false;
@@ -122,7 +122,7 @@ export function GanttTab({ routing, zp, globalLookups, wcSchedule, subZP, fwdZP,
       : wcBase;
     if (!filterZS.trim() && !filterProd.trim()) return dateBase;
     return dateBase.filter(s => filteredZpIds.has(s.parent_zp || s.zp_id));
-  }, [fwdZP, subZP, filteredZpIds, filterZS, filterProd, selectedZp, selectedWC, selectedDate, heatmapFilter, wcToWc2GM]);
+  }, [fwdZP, subZP, filteredZpIds, filterZS, filterProd, selectedZp, selectedWC, selectedDate, heatmapFilter, wcToBrygadaGM]);
 
   const allWC = useMemo(() => {
     // Jeśli jakikolwiek filtr jest aktywny → pokaż tylko WC które mają bary w displayZP

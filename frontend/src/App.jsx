@@ -4,7 +4,7 @@ import { DEMO_ERP_ZP, DEMO_ZP_STATUS } from './constants/demoData.js';
 import {
   parseZPFromERP, erpZpToSchedulerInput, parseParallelMachines, parseBomFormatek,
   tocBuffer, computeLoads, dlCSV,
-  calcHybridZpStatus,
+  calcHybridZpStatus, buildWcSchedule,
 } from './utils/scheduler.js';
 import {
   enrichWithStandards, calcWaitTimes, calcCapacityLoss,
@@ -28,57 +28,10 @@ import { ScheduleDebugTab }  from './components/tabs/ScheduleDebugTab.jsx';
 import { HeatmapPlanTab }   from './components/tabs/HeatmapPlanTab.jsx';
 import { SettingsTab }      from './components/tabs/SettingsTab.jsx';
 import { FlowMatrixTab }    from './components/tabs/FlowMatrixTab.jsx';
+import { mergeGrafikGodzinIntoSchedule, buildWeeklyTemplateFromGrafik } from './utils/grafikGodzinImport.js';
 import './App.css';
 import { WC_DAILY_CAPACITY } from './constants/demoData.js';
 import { initBrigadeSchedule } from './components/tabs/SettingsTab.jsx';
-
-// ─── buildWcSchedule ──────────────────────────────────────────────────────────
-function buildWcSchedule(wcList, planStartStr, zpList, horizonDays = 14, prev = {}, wcCapacity = {}) {
-  const planStart = new Date(planStartStr + 'T00:00:00');
-
-  const horizonEnd = new Date(planStart);
-  horizonEnd.setDate(horizonEnd.getDate() + horizonDays);
-
-  let maxDue = new Date(horizonEnd);
-  if (zpList && zpList.length) {
-    zpList.forEach(z => {
-      if (z.due_date) {
-        const d = new Date(z.due_date + 'T00:00:00');
-        if (d > maxDue) maxDue = d;
-      }
-    });
-  }
-
-  const endDate = new Date(maxDue);
-  endDate.setDate(endDate.getDate() + 30);
-
-  const next = {};
-  for (const wc of wcList) {
-    const capH   = wcCapacity[wc] ?? WC_DAILY_CAPACITY[wc] ?? 16;
-    const obj    = {};
-    const prevSc = prev[wc];
-
-    const cur = new Date(planStart);
-    while (cur <= endDate) {
-      const dateStr = `${cur.getFullYear()}-${String(cur.getMonth()+1).padStart(2,'0')}-${String(cur.getDate()).padStart(2,'0')}`;
-      const jsDay   = cur.getDay();
-      const isWe    = jsDay === 0 || jsDay === 6;
-
-      if (prevSc && typeof prevSc === 'object' && !Array.isArray(prevSc) && prevSc[dateStr] !== undefined) {
-        obj[dateStr] = prevSc[dateStr];
-      } else if (Array.isArray(prevSc)) {
-        const idx = jsDay === 0 ? 6 : jsDay - 1;
-        obj[dateStr] = prevSc[idx] ?? 0;
-      } else {
-        obj[dateStr] = isWe ? 0 : capH;
-      }
-
-      cur.setDate(cur.getDate() + 1);
-    }
-    next[wc] = obj;
-  }
-  return next;
-}
 
 const MENU = [
   { id: 'dashboard', label: '🏠 Dashboard' },
@@ -189,9 +142,20 @@ export default function App() {
   const workerSeqRef = useRef(0);
   const [routing, setRouting]       = useState([]);
   const [zp, setZP]                 = useState([]);
-  const [wcSchedule, setWcSchedule] = useState({});
+  // Rzadkie, TRWAŁE dane wejściowe per-data (ręczne edycje w Heatmapie + literalne
+  // daty z importu grafiku godzin) — jedyne źródło prawdy zapisywane do stanu.
+  // wcSchedule (pełny, gęsty grafik do wyświetlenia/planowania) jest z niego
+  // wyliczane na bieżąco (useMemo niżej), nigdy nie zapisywane wprost — inaczej
+  // domyślne wartości "upieczone" przy jednym przeliczeniu blokowałyby na zawsze
+  // późniejsze zastosowanie szablonu do tych samych dat.
+  const [wcExplicit, setWcExplicit] = useState({});
   const [wcScheduleVersion, setWcScheduleVersion] = useState(0);
-  const [wcToWc2, setWcToWc2]       = useState({});
+  // Powtarzalny wzorzec dzień-tygodnia z ostatniego importu grafiku godzin
+  // (loadplanner) — { machine_id: { 0..6: h } }, patrz buildWeeklyTemplateFromGrafik.
+  // Trwały fallback w buildWcSchedule: pozwala jednemu importowi 7 dni pokryć
+  // cały horyzont planowania, nie tylko te 7 dat.
+  const [wcTemplate, setWcTemplate] = useState({});
+  const [wcToBrygada, setWcToBrygada] = useState({});
   const [wcCapacity, setWcCapacity] = useState(WC_DAILY_CAPACITY);
   const [subZP, setSubZP]           = useState([]);
   const [fwdZP, setFwdZP]           = useState([]);
@@ -231,23 +195,33 @@ export default function App() {
 
   const allDueDates = useMemo(() => [...new Set(zp.map(z => z.due_date))].sort(), [zp]);
 
-  function updateSchedule(s) {
-    setWcSchedule(s);
+  // wcSchedule — grafik pełny (gęsty) do wyświetlenia/planowania, wyliczony na
+  // bieżąco z wcExplicit (rzadkie, trwałe dane) + wcTemplate (fallback wg dnia
+  // tygodnia) + wcCapacity (płaski fallback). Nic tu nie jest zapisywane wprost.
+  const wcSchedule = useMemo(() => {
+    if (!routing.length) return {};
+    const wcs = [...new Set([
+      ...routing.map(r => r.workcenter),
+      ...Object.keys(wcToBrygada)
+    ])].sort();
+    return buildWcSchedule(wcs, planStart, zp, scheduleConfig.horizonDays, wcExplicit, wcCapacity, wcTemplate);
+  }, [routing, wcToBrygada, planStart, zp, scheduleConfig.horizonDays, wcExplicit, wcCapacity, wcTemplate]);
+
+  // Przyjmuje PATCH ({ machine_id: { data: h } } — tylko zmienione wpisy, patrz
+  // HeatmapPlanTab adjustBrigade/applyCapH/adjustMachine) i scala go do wcExplicit,
+  // NIE zastępuje całego grafiku — inaczej wszystkie wyliczone wcześniej wartości
+  // domyślne stałyby się "trwałe" i szablon nigdy by ich nie nadpisał.
+  function updateSchedule(patch) {
+    setWcExplicit(prev => {
+      const next = { ...prev };
+      for (const [wc, dayPatch] of Object.entries(patch)) {
+        next[wc] = { ...(next[wc] || {}), ...dayPatch };
+      }
+      return next;
+    });
     setWcScheduleVersion(v => v + 1);
     setGanttDirty(true);
   }
-
-  useEffect(() => {
-    if (routing.length > 0) {
-      const wcs = [...new Set([
-        ...routing.map(r => r.workcenter),
-        ...Object.keys(wcToWc2)
-      ])].sort();
-      setWcSchedule(prev => buildWcSchedule(wcs, planStart, zp, scheduleConfig.horizonDays, prev, wcCapacity));
-      setWcScheduleVersion(v => v + 1);
-      setGanttDirty(true);
-    }
-  }, [routing.length, planStart, zp.length, Object.keys(wcToWc2).length]);
 
   // Zmiana listy maszyn równoległych / trybu grafu / planStart / horyzontu po imporcie
   // -> przelicz routing i przefiltruj ZP względem AKTUALNEGO planStart, nie względem
@@ -345,7 +319,7 @@ export default function App() {
         setGanttDirty(false);
         setIsScheduling(false);
         workerRef.current = null;
-        window.__FLOWOPS_DEBUG__ = { zp, routing: rl, wcSchedule: wcs, planStart, scheduleConfig, wcToWc2 };
+        window.__FLOWOPS_DEBUG__ = { zp, routing: rl, wcSchedule: wcs, planStart, scheduleConfig, wcToBrygada };
       } else if (type === 'ERROR') {
         console.error('Worker error:', payload.message);
         setIsScheduling(false);
@@ -361,7 +335,7 @@ export default function App() {
 
     worker.postMessage({
       type: 'SCHEDULE',
-      payload: { zpList: zp, routingByProduct: rl, wcSchedule: wcs, planStart, config: scheduleConfig, wcToWc2 }
+      payload: { zpList: zp, routingByProduct: rl, wcSchedule: wcs, planStart, config: scheduleConfig, wcToBrygada }
     });
   }
 
@@ -402,7 +376,7 @@ export default function App() {
     };
     worker.postMessage({
       type: 'OPTIMIZE_INSERT',
-      payload: { wcSchedule, planStart, fwdZP, zpStatus, wcToWc2, config: scheduleConfig },
+      payload: { wcSchedule, planStart, fwdZP, zpStatus, wcToBrygada, config: scheduleConfig },
     });
   }
 
@@ -423,7 +397,7 @@ export default function App() {
     const allLoads = {};
     dates.forEach(d => {
       const zpForDate = zp.filter(z => z.due_date === d);
-      const loads     = computeLoads(globalLookups.routingByProduct, zpForDate);
+      const loads     = computeLoads(globalLookups.routingByProduct, zpForDate, wcSchedule, d);
       Object.entries(loads).forEach(([wc, v]) => {
         if (!allLoads[wc]) allLoads[wc] = [];
         allLoads[wc].push(v.util * 100);
@@ -433,7 +407,7 @@ export default function App() {
       map[wc] = arr.reduce((s, v) => s + v, 0) / arr.length;
     });
     return map;
-  }, [zp, routing, globalLookups]);
+  }, [zp, routing, globalLookups, wcSchedule]);
 
   useEffect(() => {
     if (zpStatusData.length) {
@@ -446,18 +420,18 @@ export default function App() {
 
   const handleLoad = useCallback((text, type) => {
     if (type === 'demo') {
-      const parsed      = parseZPFromERP(DEMO_ERP_ZP);
-      const newWcToWc2  = parsed.wcToWc2 || {};
+      const parsed         = parseZPFromERP(DEMO_ERP_ZP);
+      const newWcToBrygada = parsed.wcToBrygada || {};
       const { zpList, routingByProduct } = erpZpToSchedulerInput(parsed, { parallelMachines, mode: scheduleConfig.schedulingGraphMode });
       const routingFlat = _erpRoutingToFlat(routingByProduct);
       const ps          = '2026-06-22';
-      const wcs         = [...new Set(routingFlat.map(r => r.workcenter))].sort();
-      const newSched    = buildWcSchedule(wcs, ps, zpList, scheduleConfig.horizonDays, {}, wcCapacity);
       setErpZp(parsed);
       setRouting(routingFlat);
       setZP(zpList);
-      setWcToWc2(prev => ({ ...prev, ...newWcToWc2 }));
-      setWcSchedule(newSched);
+      setWcToBrygada(prev => ({ ...prev, ...newWcToBrygada }));
+      // Demo = czysty start — bez ręcznych edycji/szablonu z poprzednich danych.
+      setWcExplicit({});
+      setWcTemplate({});
       setWcScheduleVersion(v => v + 1);
       setGanttDirty(true);
       setPlanStart(ps);
@@ -465,8 +439,8 @@ export default function App() {
       return;
     }
     if (type === 'erp_zp') {
-      const parsed      = parseZPFromERP(text);
-      const newWcToWc2  = parsed.wcToWc2 || {};
+      const parsed         = parseZPFromERP(text);
+      const newWcToBrygada = parsed.wcToBrygada || {};
       const { zpList, routingByProduct } = erpZpToSchedulerInput(parsed, { parallelMachines, mode: scheduleConfig.schedulingGraphMode });
       const routingFlat = _erpRoutingToFlat(routingByProduct);
       // Domyślnie "dziś" przy każdym świeżym imporcie — użytkownik może to potem
@@ -482,13 +456,14 @@ export default function App() {
       cutoffDate.setDate(cutoffDate.getDate() - 30);
       const cutoffStr   = cutoffDate.toISOString().slice(0, 10);
       const zpFiltered  = zpList.filter(z => z.due_date >= cutoffStr && z.due_date <= horizonStr);
-      const wcs         = [...new Set(routingFlat.map(r => r.workcenter))].sort();
-      const newSched    = buildWcSchedule(wcs, ps, zpFiltered, scheduleConfig.horizonDays, {}, wcCapacity);
+      // wcExplicit/wcTemplate NIE są tu resetowane — inaczej ponowny import ERP
+      // kasowałby ręczne edycje w Heatmapie i zaimportowany grafik godzin (z
+      // loadplanner). wcSchedule (gęsty grafik) i tak przeliczy się sam z tych
+      // trwałych danych + nowego routing/zp (patrz useMemo wcSchedule wyżej).
       setErpZp(parsed);
       setRouting(routingFlat);
       setZP(zpFiltered);
-      setWcToWc2(prev => ({ ...prev, ...newWcToWc2 }));
-      setWcSchedule(newSched);
+      setWcToBrygada(prev => ({ ...prev, ...newWcToBrygada }));
       setWcScheduleVersion(v => v + 1);
       setGanttDirty(true);
       setPlanStart(ps);
@@ -511,7 +486,21 @@ export default function App() {
       setBomFormatki(records);
       return { count: records.length, rejected };
     }
-  }, [wcLoadMap, scheduleConfig, wcCapacity, parallelMachines]);
+    if (type === 'wc_schedule') {
+      // Literalne daty z pliku scalają się do wcExplicit (rzadkie, trwałe) —
+      // reszta dni w horyzoncie planowania dostanie te same godziny automatycznie
+      // przez szablon (wcSchedule useMemo wyżej), bez potrzeby "dopełniania" tu.
+      const { schedule: mergedExplicit, warnings } = mergeGrafikGodzinIntoSchedule(text, wcToBrygada, wcExplicit);
+      // Nowy import nadpisuje szablon tylko dla maszyn, których dotyczy — reszta
+      // (z wcześniejszego importu, inna brygada) zostaje bez zmian.
+      const newTemplate = { ...wcTemplate, ...buildWeeklyTemplateFromGrafik(text, wcToBrygada) };
+      setWcTemplate(newTemplate);
+      setWcExplicit(mergedExplicit);
+      setWcScheduleVersion(v => v + 1);
+      setGanttDirty(true);
+      return { count: text.length, warnings };
+    }
+  }, [wcLoadMap, scheduleConfig, wcCapacity, parallelMachines, wcToBrygada, wcExplicit, wcTemplate]);
 
   function _erpRoutingToFlat(routingByProduct) {
     const flat = [];
@@ -544,7 +533,7 @@ export default function App() {
     const rows  = [['gniazdo', 'due_date', 'load_h', 'cap_h', 'utilization_pct']];
     dates.forEach(d => {
       const zpForDate = zp.filter(z => z.due_date === d);
-      const loads     = computeLoads(globalLookups.routingByProduct, zpForDate);
+      const loads     = computeLoads(globalLookups.routingByProduct, zpForDate, wcSchedule, d);
       Object.entries(loads).forEach(([wc, v]) => {
         rows.push([wc, d, v.load.toFixed(2), v.cap.toFixed(1), Math.round(v.util * 100)]);
       });
@@ -617,13 +606,13 @@ export default function App() {
           <PlanTab routing={routing} zp={zp} globalLookups={globalLookups} wcSchedule={wcSchedule} subZP={subZP} fwdZP={fwdZP} zpStatus={activeZpStatus} ganttDirty={ganttDirty} onRecalc={() => recalcGantt(wcSchedule)} onScheduleChange={updateSchedule} planStart={planStart} onPlanStartChange={setPlanStart} selectedWC={selectedWC} onWCSelect={setSelectedWC} selectedDate={selectedDate} onDateSelect={setSelectedDate} heatmapFilter={heatmapFilter} onHeatmapFilterChange={setHeatmapFilter} />
         </div>
         {tab === 'bottleneck'   && <BottleneckTab routing={routing} zp={filteredZP} globalLookups={globalLookups} wcSchedule={wcSchedule} subZP={subZP} />}
-        {tab === 'routing'      && <RoutingTab routing={routing} zp={zp} globalLookups={globalLookups} />}
-        {tab === 'heatmap'      && <HeatmapTab routing={routing} zp={filteredZP} globalLookups={globalLookups} wcSchedule={wcSchedule} />}
-        {tab === 'heatmap_plan' && <HeatmapPlanTab fwdZP={fwdZP} routing={routing} wcSchedule={wcSchedule} wcToWc2={wcToWc2} wcCapacity={wcCapacity} onScheduleChange={updateSchedule} onRecalc={() => recalcGantt(wcSchedule)} onOptimize={handleOptimize} isOptimizing={isOptimizing} ganttDirty={ganttDirty} isScheduling={isScheduling} planStart={planStart} onPlanStartChange={setPlanStart} schedulingMode={scheduleConfig.schedulingMode} onSchedulingModeChange={mode => { setScheduleConfig(c => ({ ...c, schedulingMode: mode })); setGanttDirty(true); }} heatmapFilter={heatmapFilter} onHeatmapFilterChange={setHeatmapFilter} />}
-        {tab === 'flow_matrix'  && <FlowMatrixTab fwdZP={fwdZP} routing={routing} wcToWc2={wcToWc2} wcSchedule={wcSchedule} />}
+        {tab === 'routing'      && <RoutingTab routing={routing} zp={zp} globalLookups={globalLookups} wcSchedule={wcSchedule} />}
+        {tab === 'heatmap'      && <HeatmapTab routing={routing} zp={filteredZP} globalLookups={globalLookups} wcSchedule={wcSchedule} fwdZP={fwdZP} planStart={planStart} horizonDays={scheduleConfig.horizonDays} />}
+        {tab === 'heatmap_plan' && <HeatmapPlanTab fwdZP={fwdZP} routing={routing} wcSchedule={wcSchedule} wcToBrygada={wcToBrygada} wcCapacity={wcCapacity} onScheduleChange={updateSchedule} onRecalc={() => recalcGantt(wcSchedule)} onOptimize={handleOptimize} isOptimizing={isOptimizing} ganttDirty={ganttDirty} isScheduling={isScheduling} planStart={planStart} onPlanStartChange={setPlanStart} schedulingMode={scheduleConfig.schedulingMode} onSchedulingModeChange={mode => { setScheduleConfig(c => ({ ...c, schedulingMode: mode })); setGanttDirty(true); }} heatmapFilter={heatmapFilter} onHeatmapFilterChange={setHeatmapFilter} />}
+        {tab === 'flow_matrix'  && <FlowMatrixTab fwdZP={fwdZP} routing={routing} wcToBrygada={wcToBrygada} wcSchedule={wcSchedule} />}
         {tab === 'swimlane'     && <SwimlaneTab routing={routing} zp={filteredZP} globalLookups={globalLookups} wcSchedule={wcSchedule} />}
         {tab === 'sankey'       && <SankeyTab routing={routing} zp={filteredZP} globalLookups={globalLookups} wcSchedule={wcSchedule}
-            fwdZP={fwdZP} wcToWc2={wcToWc2}
+            fwdZP={fwdZP} wcToBrygada={wcToBrygada}
             heatmapFilter={heatmapFilter} onHeatmapFilterChange={setHeatmapFilter}
             selectedWC={selectedWC} onWCSelect={setSelectedWC}
             selectedDate={selectedDate} onDateSelect={setSelectedDate} />}
@@ -632,7 +621,7 @@ export default function App() {
         {tab === 'buffer_zs'    && <BufferZSTab zpStatusData={zpStatusData} />}
         {tab === 'late_zs'      && <LateZSTab zpStatus={activeZpStatus} />}
         {tab === 'schedule_debug' && <ScheduleDebugTab fwdZP={fwdZP} zpStatus={zpStatus} planStart={planStart} scheduleConfig={scheduleConfig} zpList={zp} routingByProduct={globalLookups.routingByProduct} wcSchedule={wcSchedule} />}
-        {tab === 'settings'       && <SettingsTab config={scheduleConfig} onConfigChange={cfg => { setScheduleConfig(cfg); setGanttDirty(true); }} wcCapacity={wcCapacity} onWcCapacityChange={setWcCapacity} wcToWc2={wcToWc2} />}
+        {tab === 'settings'       && <SettingsTab config={scheduleConfig} onConfigChange={cfg => { setScheduleConfig(cfg); setGanttDirty(true); }} wcCapacity={wcCapacity} onWcCapacityChange={setWcCapacity} wcToBrygada={wcToBrygada} />}
         {tab === 'analysis'     && <AnalysisTab historyData={historyData} routing={routing} wcSchedule={wcSchedule} zpStatusData={zpStatusData} zpStatusHeaders={zpStatusHeaders} />}
       </main>
     </div>

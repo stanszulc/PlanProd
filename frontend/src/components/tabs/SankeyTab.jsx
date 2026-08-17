@@ -23,7 +23,7 @@ function segWeek(seg) {
 }
 
 export function SankeyTab({ routing, zp, globalLookups, wcSchedule,
-  fwdZP = [], wcToWc2 = {},
+  fwdZP = [], wcToBrygada = {},
   heatmapFilter = null, onHeatmapFilterChange,
   selectedWC = null, onWCSelect,
   selectedDate = null, onDateSelect }) {
@@ -44,7 +44,7 @@ export function SankeyTab({ routing, zp, globalLookups, wcSchedule,
       ? fwdZP.filter(s2 => {
           const targetWcSet = heatmapFilter.wc
             ? new Set([String(heatmapFilter.wc)])
-            : new Set(Object.entries(wcToWc2).filter(([, v]) => v === heatmapFilter.wc2).map(([k]) => k));
+            : new Set(Object.entries(wcToBrygada).filter(([, v]) => v === heatmapFilter.wc2).map(([k]) => k));
           if (!targetWcSet.has(String(s2.workcenter))) return false;
           if (!heatmapFilter.date) return true;
           return (s2.segments || []).some(seg => seg.segStart && new Date(seg.segStart).toISOString().slice(0, 10) === heatmapFilter.date);
@@ -58,7 +58,7 @@ export function SankeyTab({ routing, zp, globalLookups, wcSchedule,
       : wcBase;
     const ids = new Set(dateBase.map(s2 => s2.parent_zp || s2.zp_id.split('/')[0]));
     return ids.size > 0 ? ids : null;
-  }, [fwdZP, heatmapFilter, selectedWC, selectedDate, wcToWc2]);
+  }, [fwdZP, heatmapFilter, selectedWC, selectedDate, wcToBrygada]);
 
   // ── Przefiltrowany fwdZP wg filtra zewnętrznego ──────────────────────────────
   const activeFwdZP = useMemo(() =>

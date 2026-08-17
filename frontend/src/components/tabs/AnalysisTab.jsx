@@ -437,7 +437,7 @@ function HistorySankeySection({ historyData, routing }) {
             {flowData.connections.map(conn => {
               const fp = allPositions[conn.from], tp = allPositions[conn.to];
               if (!fp || !tp) return null;
-              if (!flowData.nodeVolumes[conn.from] || !flowData.nodeVolumes[conn.to]) return null;
+              if (!flowData.nodeOps[conn.from] || !flowData.nodeOps[conn.to]) return null;
               const prodIdx     = products.indexOf(conn.product);
               const col         = PALETTE[prodIdx % PALETTE.length];
               const edgeKey     = `${conn.from}->${conn.to}`;
@@ -461,7 +461,7 @@ function HistorySankeySection({ historyData, routing }) {
               const [from, to] = key.split('->');
               const fp = allPositions[from], tp = allPositions[to];
               if (!fp || !tp) return null;
-              if (!flowData.nodeVolumes[from] || !flowData.nodeVolumes[to]) return null;
+              if (!flowData.nodeOps[from] || !flowData.nodeOps[to]) return null;
               const isHov = hoveredWC === from || hoveredWC === to;
               if (hoveredWC && !isHov) return null;
               const arcLift = Math.abs(tp.x - fp.x) > 250 ? -Math.abs(tp.x - fp.x)*0.22 : 0;

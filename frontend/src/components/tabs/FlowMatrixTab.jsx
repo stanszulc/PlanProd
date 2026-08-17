@@ -52,7 +52,7 @@ function heatText(v, max) {
   return t > 0.3 ? '#fff' : '#1e3a8a';
 }
 
-export function FlowMatrixTab({ fwdZP = [], routing = [], wcToWc2 = {}, wcSchedule = {} }) {
+export function FlowMatrixTab({ fwdZP = [], routing = [], wcToBrygada = {}, wcSchedule = {} }) {
   const [view,      setView]      = useState('machine');
   const [metric,    setMetric]    = useState('count');
   const [threshold, setThreshold] = useState(15);
@@ -67,13 +67,13 @@ export function FlowMatrixTab({ fwdZP = [], routing = [], wcToWc2 = {}, wcSchedu
     return m;
   }, [routing]);
 
-  const wc2Names = useMemo(() => {
+  const brygadaNames = useMemo(() => {
     const m = {};
-    routing.forEach(r => { const wc2 = wcToWc2[String(r.workcenter)]; if (wc2 && !m[wc2]) m[wc2] = r.wc_group || wc2; });
+    routing.forEach(r => { const brygada = wcToBrygada[String(r.workcenter)]; if (brygada && !m[brygada]) m[brygada] = r.wc_group || brygada; });
     return m;
-  }, [routing, wcToWc2]);
+  }, [routing, wcToBrygada]);
 
-  function label(id) { return wcNames[id] || wc2Names[id] || id; }
+  function label(id) { return wcNames[id] || brygadaNames[id] || id; }
 
   // Buduj macierze przepływów
   const { machineFlow, brigadeFlow, machines, brigades } = useMemo(() => {
@@ -103,7 +103,7 @@ export function FlowMatrixTab({ fwdZP = [], routing = [], wcToWc2 = {}, wcSchedu
           if (!mFlow[from]) mFlow[from] = {};
           if (!mFlow[from][to]) mFlow[from][to] = { count: 0, hours: 0 };
           mFlow[from][to].count++; mFlow[from][to].hours += durH;
-          const bFrom = wcToWc2[from] || from, bTo = wcToWc2[to] || to;
+          const bFrom = wcToBrygada[from] || from, bTo = wcToBrygada[to] || to;
           if (bFrom === bTo) return;
           if (!bFlow[bFrom]) bFlow[bFrom] = {};
           if (!bFlow[bFrom][bTo]) bFlow[bFrom][bTo] = { count: 0, hours: 0 };
@@ -111,10 +111,10 @@ export function FlowMatrixTab({ fwdZP = [], routing = [], wcToWc2 = {}, wcSchedu
         });
       });
     });
-    const wcSet  = new Set([...Object.keys(mFlow), ...Object.values(mFlow).flatMap(r => Object.keys(r))]);
-    const wc2Set = new Set([...Object.keys(bFlow), ...Object.values(bFlow).flatMap(r => Object.keys(r))]);
-    return { machineFlow: mFlow, brigadeFlow: bFlow, machines: [...wcSet].sort(), brigades: [...wc2Set].sort() };
-  }, [fwdZP, wcToWc2]);
+    const wcSet      = new Set([...Object.keys(mFlow), ...Object.values(mFlow).flatMap(r => Object.keys(r))]);
+    const brygadaSet = new Set([...Object.keys(bFlow), ...Object.values(bFlow).flatMap(r => Object.keys(r))]);
+    return { machineFlow: mFlow, brigadeFlow: bFlow, machines: [...wcSet].sort(), brigades: [...brygadaSet].sort() };
+  }, [fwdZP, wcToBrygada]);
 
   // Klastrowanie
   const { mCluster, bCluster } = useMemo(() => {

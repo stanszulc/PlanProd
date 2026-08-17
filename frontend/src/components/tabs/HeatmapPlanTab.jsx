@@ -61,17 +61,36 @@ export function HeatmapPlanTab({ fwdZP = [], routing = [], wcSchedule = {}, onSc
     el.querySelector('[data-tt="title"]').textContent =
       titleText + (zps.length > 0 ? ` — ${total.toFixed(1)}h łącznie` : '');
     const listEl = el.querySelector('[data-tt="list"]');
+    listEl.replaceChildren();
     if (!zps.length) {
-      listEl.innerHTML = '<div style="color:#94a3b8">Brak operacji</div>';
+      const empty = document.createElement('div');
+      empty.style.color = '#94a3b8';
+      empty.textContent = 'Brak operacji';
+      listEl.appendChild(empty);
     } else {
-      listEl.innerHTML = zps.map(z =>
-        `<div style="display:flex;justify-content:space-between;gap:12px;padding:2px 0;border-bottom:1px solid rgba(148,163,184,0.15)">
-          <span style="color:#cbd5e1;font-family:monospace;font-size:10px">${z.id}</span>
-          <span style="color:#94a3b8;white-space:nowrap">${z.klient||''}</span>
-          <span style="color:#f87171;font-family:monospace;font-size:10px">${(z.due_date||'').slice(5)}</span>
-          <span style="color:#60a5fa;font-weight:600;white-space:nowrap">${z.durH?.toFixed(1)||''}h</span>
-        </div>`
-      ).join('');
+      zps.forEach(z => {
+        const row = document.createElement('div');
+        row.style.cssText = 'display:flex;justify-content:space-between;gap:12px;padding:2px 0;border-bottom:1px solid rgba(148,163,184,0.15)';
+
+        const idEl = document.createElement('span');
+        idEl.style.cssText = 'color:#cbd5e1;font-family:monospace;font-size:10px';
+        idEl.textContent = z.id;
+
+        const klientEl = document.createElement('span');
+        klientEl.style.cssText = 'color:#94a3b8;white-space:nowrap';
+        klientEl.textContent = z.klient || '';
+
+        const dueEl = document.createElement('span');
+        dueEl.style.cssText = 'color:#f87171;font-family:monospace;font-size:10px';
+        dueEl.textContent = (z.due_date || '').slice(5);
+
+        const durEl = document.createElement('span');
+        durEl.style.cssText = 'color:#60a5fa;font-weight:600;white-space:nowrap';
+        durEl.textContent = (z.durH != null ? z.durH.toFixed(1) : '') + 'h';
+
+        row.append(idEl, klientEl, dueEl, durEl);
+        listEl.appendChild(row);
+      });
     }
   }
   function hideTooltipHM() { if (tooltipRef.current) tooltipRef.current.style.display = 'none'; }
@@ -346,46 +365,44 @@ export function HeatmapPlanTab({ fwdZP = [], routing = [], wcSchedule = {}, onSc
     return Math.round(sum * 10) / 10;
   }
 
-  // +8h/-8h → zapisuje per-date do wcSchedule (już jest per-date po refaktorze App.jsx)
+  // +8h/-8h → zgłasza PATCH (tylko zmienione maszyny/daty), nie cały wcSchedule —
+  // App.jsx scala patch do trwałego, rzadkiego wcExplicit; resztę dni (poza tym
+  // patchem) dalej wypełnia szablon/domyślne capacity, przeliczane na bieżąco.
   function adjustBrigade(wc2, dateStr, delta) {
     if (!onScheduleChange) return;
     const grp = groups.find(g => g.wc2 === wc2);
     if (!grp) return;
     const nMachines = grp.machines.length || 1;
-    const next = { ...wcSchedule };
+    const patch = {};
     grp.machines.forEach(m => {
-      const sc  = next[m.wc] || {};
-      const cur = typeof sc === 'object' && !Array.isArray(sc) ? (sc[dateStr] ?? getWcH(m.wc, dateStr)) : getWcH(m.wc, dateStr);
-      next[m.wc] = { ...sc, [dateStr]: Math.max(0, cur + delta / nMachines) };
+      const cur = getWcH(m.wc, dateStr);
+      patch[m.wc] = { [dateStr]: Math.max(0, cur + delta / nMachines) };
     });
-    onScheduleChange(next);
+    onScheduleChange(patch);
   }
 
-  // +8h/-8h → zapisuje per-date do wcSchedule
+  // Ustawia wprost (nie deltę) wszystkie dni robocze w widocznym zakresie —
+  // patch obejmuje tylko dni robocze, weekendy zostają jak były (szablon/default).
   function applyCapH(br, newH) {
     if (!onScheduleChange) return;
     const grp = groups.find(g => g.wc2 === br);
     if (!grp || !grp.machines.length) return;
     const nMachines = grp.machines.length;
     const hPerMachine = newH / nMachines;
-    const next = { ...wcSchedule };
+    const patch = {};
     grp.machines.forEach(m => {
-      const sc = typeof next[m.wc] === 'object' && !Array.isArray(next[m.wc]) ? { ...next[m.wc] } : {};
-      // Zaktualizuj wszystkie dni robocze w zakresie dat
-      dates.forEach(d => {
-        if (!weekendSet.has(d)) sc[d] = hPerMachine;
-      });
-      next[m.wc] = sc;
+      const dayPatch = {};
+      dates.forEach(d => { if (!weekendSet.has(d)) dayPatch[d] = hPerMachine; });
+      patch[m.wc] = dayPatch;
     });
-    onScheduleChange(next);
+    onScheduleChange(patch);
     setEditingCapBr(null);
   }
 
   function adjustMachine(wc, dateStr, delta) {
     if (!onScheduleChange) return;
-    const sc  = wcSchedule[wc] || {};
-    const cur = typeof sc === 'object' && !Array.isArray(sc) ? (sc[dateStr] ?? getWcH(wc, dateStr)) : getWcH(wc, dateStr);
-    onScheduleChange({ ...wcSchedule, [wc]: { ...sc, [dateStr]: Math.max(0, cur + delta) } });
+    const cur = getWcH(wc, dateStr);
+    onScheduleChange({ [wc]: { [dateStr]: Math.max(0, cur + delta) } });
   }
 
   function hmStyle(avail, load) {

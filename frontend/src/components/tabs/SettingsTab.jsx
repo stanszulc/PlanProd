@@ -7,7 +7,7 @@ export function initBrigadeSchedule() {
   return {};
 }
 
-export function SettingsTab({ config, onConfigChange, wcCapacity = {}, onWcCapacityChange, wcToWc2 = {} }) {
+export function SettingsTab({ config, onConfigChange, wcCapacity = {}, onWcCapacityChange, wcToBrygada = {} }) {
   const [localConfig, setLocalConfig] = useState(() => ({ ...config }));
   const [expandedBrigade, setExpandedBrigade] = useState(null);
 
@@ -19,15 +19,15 @@ export function SettingsTab({ config, onConfigChange, wcCapacity = {}, onWcCapac
 
   const brigadeToWc = useMemo(() => {
     const map = {};
-    Object.entries(wcToWc2).forEach(([wc, wc2]) => {
-      if (!map[wc2]) map[wc2] = [];
-      if (!map[wc2].includes(wc)) map[wc2].push(wc);
+    Object.entries(wcToBrygada).forEach(([wc, brygada]) => {
+      if (!map[brygada]) map[brygada] = [];
+      if (!map[brygada].includes(wc)) map[brygada].push(wc);
     });
     return map;
-  }, [wcToWc2]);
+  }, [wcToBrygada]);
 
-  function getBrigadeCapH(wc2) {
-    const wcs = brigadeToWc[wc2] || [];
+  function getBrigadeCapH(brygada) {
+    const wcs = brigadeToWc[brygada] || [];
     if (!wcs.length) return 0;
     return wcs.reduce((s, wc) => s + (wcCapacity[wc] ?? 8), 0);
   }
@@ -146,20 +146,20 @@ export function SettingsTab({ config, onConfigChange, wcCapacity = {}, onWcCapac
             Brak danych — załaduj plik ERP aby zobaczyć maszyny.
           </div>
         )}
-        {brigades.map(wc2 => {
-          const wcs      = brigadeToWc[wc2] || [];
-          const capTotal = getBrigadeCapH(wc2);
-          const isOpen   = expandedBrigade === wc2;
+        {brigades.map(brygada => {
+          const wcs      = brigadeToWc[brygada] || [];
+          const capTotal = getBrigadeCapH(brygada);
+          const isOpen   = expandedBrigade === brygada;
           return (
-            <div key={wc2} style={{ border: `1px solid ${T.border}`, borderRadius: 6,
+            <div key={brygada} style={{ border: `1px solid ${T.border}`, borderRadius: 6,
               overflow: 'hidden', marginBottom: 4 }}>
               <div style={{ display: 'flex', alignItems: 'center', gap: 10,
                 padding: '8px 12px', background: isOpen ? T.surface2 : T.surface,
                 cursor: 'pointer' }}
-                onClick={() => setExpandedBrigade(isOpen ? null : wc2)}>
+                onClick={() => setExpandedBrigade(isOpen ? null : brygada)}>
                 <span style={{ fontSize: 9, color: T.text3, display: 'inline-block',
                   transform: isOpen ? 'rotate(90deg)' : 'none', transition: 'transform .15s' }}>▶</span>
-                <span style={{ fontSize: 13, fontWeight: 600, color: T.text, flex: 1 }}>{wc2}</span>
+                <span style={{ fontSize: 13, fontWeight: 600, color: T.text, flex: 1 }}>{brygada}</span>
                 <span style={{ fontSize: 11, color: T.text3 }}>{wcs.length} maszyn/stanowisk</span>
                 <span style={{ fontSize: 12, fontWeight: 700, color: T.accent,
                   fontFamily: 'monospace', minWidth: 60, textAlign: 'right' }}>

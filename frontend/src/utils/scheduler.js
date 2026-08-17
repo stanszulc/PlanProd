@@ -3,6 +3,8 @@
 // Zmiany opisane przy każdej sekcji komentarzem [ZMIANA: ...]
 // ──────────────────────────────────────────────────────────────────────────────
 
+import { WC_DAILY_CAPACITY } from '../constants/demoData.js';
+
 
 // ─── STAŁE ────────────────────────────────────────────────────────────────────
 // [ZMIANA] Magic numbers wyciągnięte do named constants — czytelność + łatwa zmiana
@@ -44,10 +46,16 @@ function nextDayStart(dt) {
   return d;
 }
 
-function prevDayEnd(dt, avail) {
+export function prevDayEnd(dt, avail) {
   const d = new Date(dt);
   d.setDate(d.getDate() - 1);
-  d.setHours(avail > 0 ? avail : 23, avail > 0 ? 0 : 59, 0, 0);
+  if (avail > 0) {
+    const h = Math.floor(avail);
+    const m = Math.round((avail - h) * 60);
+    d.setHours(h, m, 0, 0);
+  } else {
+    d.setHours(23, 59, 0, 0);
+  }
   return d;
 }
 
@@ -200,15 +208,15 @@ export function zsToZP(zsList) {
 //    teraz używa getAvail przez alias getCapH (patrz computeLoads niżej)
 export function getAvail(wc, dt, wcSchedule) {
   const sched = wcSchedule?.[wc];
-  if (!sched) return DEFAULT_AVAIL;
-
   const d      = new Date(dt);
   const jsDay  = d.getDay();
+  const isWeekend = jsDay === 0 || jsDay === 6;
+  if (!sched) return isWeekend ? 0 : DEFAULT_AVAIL;
 
   if (!Array.isArray(sched) && typeof sched === 'object') {
     const dateKey = localDateStr(d);
     if (sched[dateKey] !== undefined) return sched[dateKey];
-    return (jsDay === 0 || jsDay === 6) ? 0 : DEFAULT_AVAIL;
+    return isWeekend ? 0 : DEFAULT_AVAIL;
   }
 
   // Stary format: tablica [pon..nd]
@@ -738,21 +746,21 @@ export function parseZPFromERP(text) {
     });
   }
 
-  const result    = [];
-  const wcToWc2   = {};  // { machine_id → wc2_name } — budowane z TSV, nie z demoData
+  const result       = [];
+  const wcToBrygada  = {};  // { machine_id → nazwa brygady (WC3) } — budowane z TSV, nie z demoData
 
   for (const zp of zpGroups.values()) {
     if (!zp.product || !zp.due_date || zp.ops.length === 0) continue;
     zp.ops.sort((a, b) => a.sequence - b.sequence);
     zp.ops.forEach((op, i) => {
       op.predecessors = i > 0 ? [zp.ops[i - 1].sequence] : [];
-      // Zbierz mapę machine_id → wc2 z każdej operacji
-      if (op.machine_id && op.workcenter) wcToWc2[op.machine_id] = op.workcenter;
+      // Zbierz mapę machine_id → brygada z każdej operacji
+      if (op.machine_id && op.workcenter) wcToBrygada[op.machine_id] = op.workcenter;
     });
     result.push(zp);
   }
-  // Zwróć wynik + mapę wc2 — App.jsx zapisze ją do state zamiast importować z demoData
-  result.wcToWc2 = wcToWc2;
+  // Zwróć wynik + mapę brygad — App.jsx zapisze ją do state zamiast importować z demoData
+  result.wcToBrygada = wcToBrygada;
   return result;
 }
 
@@ -935,4 +943,70 @@ export function parseBomFormatek(text) {
   });
 
   return { records, rejected };
+}
+
+// ─── buildWcSchedule ──────────────────────────────────────────────────────────
+// Buduje wcSchedule (per-data dict per gniazdo) na oknie planStart..(max due_date
+// ZP + 30 dni). Dostępne godziny są danymi WEJŚCIOWYMI (ręczne edycje w Heatmapie,
+// zaimportowany grafik godzin z loadplanner) — trwałymi niezależnie od okna
+// planowania. `prev` pozwala je zachować: daty w oknie, których jeszcze nie ma,
+// dostają wartość domyślną; daty JUŻ ustawione (w oknie i poza nim — np. gdy
+// "Planuj od" przesunięto na datę PO nich) nie są nigdy usuwane, tylko ewentualnie
+// nadpisywane kolejnym importem/edycją tej samej daty. Wołający MUSI przekazać
+// aktualny wcSchedule jako `prev` przy każdym przebudowaniu (np. re-import ERP,
+// zmiana planStart), inaczej te wpisy cicho przepadają.
+//
+// `template` ({ machine_id: { 0..6: h } }, patrz grafikGodzinImport.buildWeeklyTemplateFromGrafik)
+// to powtarzalny wzorzec dzień-tygodnia z ostatniego importu grafiku godzin —
+// używany jako fallback DRUGI w kolejności (po `prev`, przed płaskim `capH`), żeby
+// jeden import 7 dni pokrywał cały horyzont planowania, nie tylko te 7 dat.
+export function buildWcSchedule(wcList, planStartStr, zpList, horizonDays = 14, prev = {}, wcCapacity = {}, template = {}) {
+  const planStart = new Date(planStartStr + 'T00:00:00');
+
+  const horizonEnd = new Date(planStart);
+  horizonEnd.setDate(horizonEnd.getDate() + horizonDays);
+
+  let maxDue = new Date(horizonEnd);
+  if (zpList && zpList.length) {
+    zpList.forEach(z => {
+      if (z.due_date) {
+        const d = new Date(z.due_date + 'T00:00:00');
+        if (d > maxDue) maxDue = d;
+      }
+    });
+  }
+
+  const endDate = new Date(maxDue);
+  endDate.setDate(endDate.getDate() + 30);
+
+  const next = {};
+  for (const wc of wcList) {
+    const capH   = wcCapacity[wc] ?? WC_DAILY_CAPACITY[wc] ?? 16;
+    const prevSc = prev[wc];
+    // Start od kopii WSZYSTKICH już ustawionych dat (nie tylko tych w aktualnym
+    // oknie) — okno tylko dokłada brakujące dni, nigdy nie usuwa istniejących.
+    const obj    = (prevSc && typeof prevSc === 'object' && !Array.isArray(prevSc)) ? { ...prevSc } : {};
+
+    const cur = new Date(planStart);
+    while (cur <= endDate) {
+      const dateStr = `${cur.getFullYear()}-${String(cur.getMonth()+1).padStart(2,'0')}-${String(cur.getDate()).padStart(2,'0')}`;
+      const jsDay   = cur.getDay();
+      const isWe    = jsDay === 0 || jsDay === 6;
+
+      if (prevSc && typeof prevSc === 'object' && !Array.isArray(prevSc) && prevSc[dateStr] !== undefined) {
+        obj[dateStr] = prevSc[dateStr];
+      } else if (Array.isArray(prevSc)) {
+        const idx = jsDay === 0 ? 6 : jsDay - 1;
+        obj[dateStr] = prevSc[idx] ?? 0;
+      } else if (template[wc] && template[wc][jsDay] !== undefined) {
+        obj[dateStr] = template[wc][jsDay];
+      } else {
+        obj[dateStr] = isWe ? 0 : capH;
+      }
+
+      cur.setDate(cur.getDate() + 1);
+    }
+    next[wc] = obj;
+  }
+  return next;
 }

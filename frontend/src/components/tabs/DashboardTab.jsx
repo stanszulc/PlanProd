@@ -3,7 +3,7 @@ import { T, s, tocColor, uStatus } from '../../constants/theme.js';
 import { computeLoads } from '../../utils/scheduler.js';
 
 // Wersja aplikacji — ręcznie podbijana (V1.1 -> V1.2 -> ...), bez powiązania z commitami.
-const APP_VERSION = 'V1.1';
+const APP_VERSION = 'V1.2';
 
 function tocZone(toc) {
   if (!toc) return 'green';
@@ -38,7 +38,7 @@ export function DashboardTab({ routing, zp, zpStatus, wcSchedule, historyData, g
     const allLoads = {};
     dates.forEach(d => {
       const zpForDate = zp.filter(z => z.due_date === d);
-      const loads     = computeLoads(globalLookups.routingByProduct, zpForDate);
+      const loads     = computeLoads(globalLookups.routingByProduct, zpForDate, wcSchedule, d);
       Object.entries(loads).forEach(([wc, v]) => {
         if (!allLoads[wc]) allLoads[wc] = [];
         allLoads[wc].push(v.util * 100);
@@ -47,7 +47,7 @@ export function DashboardTab({ routing, zp, zpStatus, wcSchedule, historyData, g
     return Object.entries(allLoads)
       .map(([wc, arr]) => ({ wc, util: Math.round(arr.reduce((s, v) => s + v, 0) / arr.length) }))
       .sort((a, b) => b.util - a.util);
-  }, [zp, routing, globalLookups]);
+  }, [zp, routing, globalLookups, wcSchedule]);
 
   const avgUtil = wcLoads.length
     ? Math.round(wcLoads.reduce((s, w) => s + w.util, 0) / wcLoads.length)
@@ -179,7 +179,7 @@ export function DashboardTab({ routing, zp, zpStatus, wcSchedule, historyData, g
             </div>
             {alerts.map(z => {
               const tc       = tocColor(tocZone(z.toc));
-              const delayTxt = z.delayDays > 0 ? `+${z.delayDays}d` : z.toc === 'black' ? 'po term.' : '—';
+              const delayTxt = z.delayDays > 0 ? `+${z.delayDays}d` : tocZone(z.toc) === 'black' ? 'po term.' : '—';
               return (
                 <div key={z.zp_id}
                   style={{ display: 'grid', gridTemplateColumns: '90px 1fr 1fr 100px 90px 80px', gap: 8, padding: '8px', borderRadius: 8, background: tc.bg, border: `1px solid ${tc.border}`, alignItems: 'center', cursor: 'pointer' }}

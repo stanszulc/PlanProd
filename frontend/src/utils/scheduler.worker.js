@@ -3,7 +3,7 @@
 //   - findSlotForward: nowy parametr poolUsed, logika pool vs maszyna rozdzielona
 //   - makePoolUsed / addPoolUsed / getPoolUsedToday — osobny licznik dla 3xxxx
 //   - scheduleAll: przekazuje poolUsed
-//   - OPTIMIZE_INSERT: buildOcc ujednolicony, wcToWc2 przekazywane z App.jsx
+//   - OPTIMIZE_INSERT: buildOcc ujednolicony, wcToBrygada przekazywane z App.jsx
 // ─────────────────────────────────────────────────────────────────────────────
 
 const MS            = 3_600_000;
@@ -111,7 +111,7 @@ function getPoolUsedToday(poolUsed, occKey, dateStr) {
 // Pool   3xxxx: nowa logika capacity-based (poolUsed {dateStr→usedH})
 function findSlotForward(fromDt, needH, wc, wcSchedule, occ, getOccKey, getPoolAvail, poolUsed, shiftStart = 0) {
   const occKey  = getOccKey    ? getOccKey(wc)         : wc;
-  const isPool  = occKey !== wc;                        // 3xxxx: POOL_<wc2> ≠ wc
+  const isPool  = occKey !== wc;                        // 3xxxx: POOL_<brygada> ≠ wc
   const availFn = getPoolAvail ? (dt) => getPoolAvail(wc, dt) : (dt) => getAvail(wc, dt, wcSchedule);
 
   let cursor    = new Date(fromDt);
@@ -243,7 +243,7 @@ function calcAlapStart(zp, ops, wcSchedule, planStartDt, safetyBufferDays = 1) {
 }
 
 // ─── scheduleAll ──────────────────────────────────────────────────────────────
-function scheduleAll(zpList, routingByProduct, wcSchedule, planStartDt, onProgress, config, wcToWc2 = {}) {
+function scheduleAll(zpList, routingByProduct, wcSchedule, planStartDt, onProgress, config, wcToBrygada = {}) {
   const VIP_BUFFER_DAYS    = config?.vipBufferDays ?? 2;
   const SAFETY_BUFFER_DAYS = config?.safetyBufferDays ?? 1;
   const MODE               = config?.schedulingMode ?? 'asap';
@@ -261,25 +261,25 @@ function scheduleAll(zpList, routingByProduct, wcSchedule, planStartDt, onProgre
   const result   = [];
   const zpStatus = [];
 
-  // Mapa brygad: wc2 → [wc, ...] (tylko 3xxxx)
-  const wc2ToWcs = {};
-  Object.entries(wcToWc2).forEach(([wc, wc2]) => {
+  // Mapa brygad: brygada (WC3) → [wc, ...] (tylko 3xxxx)
+  const brygadaToWcs = {};
+  Object.entries(wcToBrygada).forEach(([wc, brygada]) => {
     if (!String(wc).startsWith('3')) return;
-    if (!wc2ToWcs[wc2]) wc2ToWcs[wc2] = [];
-    wc2ToWcs[wc2].push(wc);
+    if (!brygadaToWcs[brygada]) brygadaToWcs[brygada] = [];
+    brygadaToWcs[brygada].push(wc);
   });
 
   function getOccKey(wc) {
     if (!String(wc).startsWith('3')) return wc;
-    const wc2 = wcToWc2[wc];
-    return wc2 ? `POOL_${wc2}` : wc;
+    const brygada = wcToBrygada[wc];
+    return brygada ? `POOL_${brygada}` : wc;
   }
 
   function getPoolAvail(wc, dt) {
     if (!String(wc).startsWith('3')) return getAvail(wc, dt, wcSchedule);
-    const wc2 = wcToWc2[wc];
-    if (!wc2 || !wc2ToWcs[wc2]) return getAvail(wc, dt, wcSchedule);
-    return wc2ToWcs[wc2].reduce((s, w) => s + getAvail(w, dt, wcSchedule), 0);
+    const brygada = wcToBrygada[wc];
+    if (!brygada || !brygadaToWcs[brygada]) return getAvail(wc, dt, wcSchedule);
+    return brygadaToWcs[brygada].reduce((s, w) => s + getAvail(w, dt, wcSchedule), 0);
   }
 
   function totalH(zp) {
@@ -566,13 +566,13 @@ self.onmessage = function(e) {
   // ── SCHEDULE ───────────────────────────────────────────────────────────────
   if (type === 'SCHEDULE') {
     try {
-      const { zpList, routingByProduct, wcSchedule, planStart, config, wcToWc2 } = payload;
+      const { zpList, routingByProduct, wcSchedule, planStart, config, wcToBrygada } = payload;
       const planStartDt = new Date(planStart + 'T00:00:00');
       const t0 = Date.now();
       const { fwdZP, zpStatus } = scheduleAll(
         zpList, routingByProduct, wcSchedule, planStartDt,
         (pct, label) => self.postMessage({ type: 'PROGRESS', payload: { pct, label } }),
-        config, wcToWc2 || {}
+        config, wcToBrygada || {}
       );
       self.postMessage({ type: 'DONE', payload: { fwdZP, zpStatus, elapsed: Date.now() - t0 } });
     } catch (err) {
@@ -583,29 +583,29 @@ self.onmessage = function(e) {
   // ── OPTIMIZE_INSERT ────────────────────────────────────────────────────────
   if (type === 'OPTIMIZE_INSERT') {
     try {
-      const { wcSchedule, planStart, fwdZP, zpStatus, wcToWc2: wcToWc2Payload, config } = payload;
+      const { wcSchedule, planStart, fwdZP, zpStatus, wcToBrygada: wcToBrygadaPayload, config } = payload;
       const t0 = Date.now();
 
       // Lokalne mapy brygad dla OPTIMIZE_INSERT
-      const wcToWc2Local = wcToWc2Payload || {};
-      const wc2ToWcsLocal = {};
-      Object.entries(wcToWc2Local).forEach(([wc, wc2]) => {
+      const wcToBrygadaLocal = wcToBrygadaPayload || {};
+      const brygadaToWcsLocal = {};
+      Object.entries(wcToBrygadaLocal).forEach(([wc, brygada]) => {
         if (!String(wc).startsWith('3')) return;
-        if (!wc2ToWcsLocal[wc2]) wc2ToWcsLocal[wc2] = [];
-        wc2ToWcsLocal[wc2].push(wc);
+        if (!brygadaToWcsLocal[brygada]) brygadaToWcsLocal[brygada] = [];
+        brygadaToWcsLocal[brygada].push(wc);
       });
 
       // getOccKey / getPoolAvail lokalne (mirror scheduleAll)
       function localGetOccKey(wc) {
         if (!String(wc).startsWith('3')) return String(wc);
-        const wc2 = wcToWc2Local[wc];
-        return wc2 ? `POOL_${wc2}` : String(wc);
+        const brygada = wcToBrygadaLocal[wc];
+        return brygada ? `POOL_${brygada}` : String(wc);
       }
       function localGetPoolAvail(wc, dt) {
         if (!String(wc).startsWith('3')) return getAvail(wc, dt, wcSchedule);
-        const wc2 = wcToWc2Local[wc];
-        if (!wc2 || !wc2ToWcsLocal[wc2]) return getAvail(wc, dt, wcSchedule);
-        return wc2ToWcsLocal[wc2].reduce((s, m) => s + getAvail(m, dt, wcSchedule), 0);
+        const brygada = wcToBrygadaLocal[wc];
+        if (!brygada || !brygadaToWcsLocal[brygada]) return getAvail(wc, dt, wcSchedule);
+        return brygadaToWcsLocal[brygada].reduce((s, m) => s + getAvail(m, dt, wcSchedule), 0);
       }
 
       const lateList = zpStatus
@@ -788,16 +788,22 @@ self.onmessage = function(e) {
 
         // Zaktualizuj zpStatus
         if (oldStatus) {
-          const dueMs     = new Date(oldStatus.due_date + 'T23:59:59').getTime();
-          const delayH    = Math.max(0, newRealEnd.getTime() - dueMs) / MS;
+          const dueDate    = new Date(oldStatus.due_date + 'T23:59:59');
+          const delayH     = Math.max(0, newRealEnd.getTime() - dueDate.getTime()) / MS;
+          const newBackStart = newSlots.reduce(
+            (min, ns) => (ns.slot.start < min ? ns.slot.start : min),
+            newSlots[0].slot.start
+          );
           const statusIdx = workStatus.findIndex(z => z.zp_id === zpId);
           if (statusIdx >= 0) {
             workStatus[statusIdx] = {
               ...workStatus[statusIdx],
+              backStart: newBackStart,
               realEnd:   newRealEnd,
               delayH,
               delayDays: +(delayH / DEFAULT_CAP).toFixed(1),
               late:      delayH > 0,
+              toc:       tocBuffer(newBackStart, planStartDt, dueDate, newRealEnd),
             };
           }
         }

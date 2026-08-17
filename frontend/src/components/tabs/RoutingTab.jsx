@@ -1,10 +1,39 @@
-import { useState, useMemo, useEffect, useRef, useCallback } from 'react';
+import { useState, useMemo, useRef, useCallback } from 'react';
 import { T, PALETTE, s, tocColor, uStatus } from '../../constants/theme.js';
 import { localDateStr, fmtDt, computeLoads, getAvail } from '../../utils/scheduler.js';
 import { Dot } from '../common/Dot.jsx';
 import { EmptyState } from '../common/EmptyState.jsx';
 
-export function RoutingTab({ routing, zp, globalLookups }) {
+// Łamie nazwę maszyny na maks. 2 linijki (SVG <text> nie zawija tekstu samo) —
+// dzieli przy spacji najbliższej połowie długości, albo twardo jeśli brak spacji.
+function wrapTwoLines(text, maxCharsPerLine = 13) {
+  if (!text) return ['', ''];
+  if (text.length <= maxCharsPerLine) return [text, ''];
+
+  // Kandydaci na miejsce złamania: spacja (łam przed nią) albo myślnik (łam po nim).
+  const candidates = [];
+  for (let i = 0; i < text.length; i++) {
+    if (text[i] === ' ') candidates.push(i);
+    if (text[i] === '-') candidates.push(i + 1);
+  }
+
+  let idx = [...candidates].reverse().find(c => c <= maxCharsPerLine);
+  if (idx === undefined) idx = candidates.find(c => c > maxCharsPerLine);
+  if (idx === undefined) idx = maxCharsPerLine;
+
+  return [text.slice(0, idx).trim(), text.slice(idx).trim()];
+}
+
+export function RoutingTab({ routing, zp, globalLookups, wcSchedule }) {
+  // Kolor per brygada (WC3) — stabilny w całym zbiorze danych (nie tylko widocznych
+  // po filtrze), żeby ten sam kolor zawsze znaczył tę samą brygadę.
+  const brigadeColorMap = useMemo(() => {
+    const map = {};
+    const order = [...new Set((routing || []).map(r => r.wc_group).filter(Boolean))].sort();
+    order.forEach((g, i) => { map[g] = PALETTE[i % PALETTE.length]; });
+    return map;
+  }, [routing]);
+
   const productNames = useMemo(() => {
     const m = {};
     (zp || []).forEach(z => { if (z.product && z.product_name) m[z.product] = z.product_name; });
@@ -14,20 +43,6 @@ export function RoutingTab({ routing, zp, globalLookups }) {
   const [inputVal, setInputVal] = useState('');
   const [rowTooltip, setRowTooltip] = useState(null); // {x, y, products, name}
   const svgWrapRef = useRef(null);
-
-  // Poziomy scroll kółkiem myszy
-  useEffect(() => {
-    const el = svgWrapRef.current;
-    if (!el) return;
-    const onWheel = (e) => {
-      if (Math.abs(e.deltaX) > Math.abs(e.deltaY)) return; // trackpad poziomy — bez zmian
-      if (e.shiftKey) return; // Shift+scroll — normalne pionowe przewijanie strony
-      e.preventDefault();
-      el.scrollLeft += e.deltaY * 2;
-    };
-    el.addEventListener('wheel', onWheel, { passive: false });
-    return () => el.removeEventListener('wheel', onWheel);
-  }, []);
 
   const dates = useMemo(() => [...new Set(zp.map(z => z.due_date))].sort(), [zp]);
 
@@ -110,12 +125,12 @@ export function RoutingTab({ routing, zp, globalLookups }) {
   }, [filteredRoutings]);
 
   const firstDateZP = useMemo(() => dates.length ? zp.filter(z => z.due_date === dates[0]) : [], [zp, dates]);
-  const wcLoads = useMemo(() => dates.length ? computeLoads(globalLookups.routingByProduct, firstDateZP) : {}, [dates.join(','), firstDateZP.length]);
+  const wcLoads = useMemo(() => dates.length ? computeLoads(globalLookups.routingByProduct, firstDateZP, wcSchedule, dates[0]) : {}, [dates.join(','), firstDateZP.length, globalLookups, wcSchedule]);
   const maxUtil = Object.values(wcLoads).length ? Math.max(...Object.values(wcLoads).map(v => v.util)) : 0;
 
   if (!routing.length) return <EmptyState icon="🔀" title="Brak danych" sub="Wgraj routing.csv" />;
 
-  const BW = 120, BH = 72, GAP = 36, ROW_H = 140, LEFT = 180;
+  const BW = 120, BH = 82, GAP = 36, ROW_H = 150, LEFT = 180;
   const maxDepthAll = layoutedRoutings.length ? Math.max(...layoutedRoutings.map(r => r.maxDepth)) : 0;
   const groupHeights = layoutedRoutings.map(r => Math.max(ROW_H, r.maxColSize * (BH + ROWGAP) + 60));
   const groupTops = [];
@@ -253,6 +268,8 @@ export function RoutingTab({ routing, zp, globalLookups }) {
                       const u = wcData.util;
                       const isBn = Math.abs(u - maxUtil) < 0.001 && u > 0.85;
                       const isHighlighted = filterWC && String(op.workcenter) === filterWC;
+                      const brigadeColor = brigadeColorMap[op.wc_group] || T.border2;
+                      const [nameLine1, nameLine2] = wrapTwoLines(op.machine_name || op.operation || '');
                       return (
                         <g key={opKey(op)}>
                           <rect x={boxX} y={boxY} width={BW} height={BH} rx="8"
@@ -260,10 +277,17 @@ export function RoutingTab({ routing, zp, globalLookups }) {
                             stroke={isHighlighted ? T.accent : isBn ? T.bn : T.border2}
                             strokeWidth={isHighlighted ? 2 : isBn ? 2 : 1}
                           />
-                          <rect x={boxX} y={boxY} width={BW} height={4} fill={isHighlighted ? T.accent : col} rx="2" />
-                          <text x={boxX + BW / 2} y={boxY + 22} textAnchor="middle" fontSize="13" fontWeight="700" fill={isHighlighted ? T.accent : T.text}>{op.workcenter}</text>
-                          <text x={boxX + BW / 2} y={boxY + 40} textAnchor="middle" fontSize="10" fill={T.text2}>{op.operation}</text>
-                          <text x={boxX + BW / 2} y={boxY + 58} textAnchor="middle" fontSize="10" fill={T.text3}>{op.ct_min} min</text>
+                          {op.wc_group && (
+                            <rect x={boxX} y={boxY} width={4} height={BH} fill={brigadeColor} rx="2" />
+                          )}
+                          {op.wc_group && (
+                            <text x={boxX + BW / 2} y={boxY + 13} textAnchor="middle" fontSize="9" fill={T.text3}>{op.wc_group}</text>
+                          )}
+                          <text x={boxX + BW / 2} y={boxY + 29} textAnchor="middle" fontSize="13" fontWeight="700" fill={isHighlighted ? T.accent : T.text}>{op.workcenter}</text>
+                          <text x={boxX + BW / 2} y={boxY + 44} textAnchor="middle" fontSize="9" fill={T.text2}>{nameLine1}</text>
+                          {nameLine2 && (
+                            <text x={boxX + BW / 2} y={boxY + 55} textAnchor="middle" fontSize="9" fill={T.text2}>{nameLine2}</text>
+                          )}
                         </g>
                       );
                     })}

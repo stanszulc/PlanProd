@@ -46,8 +46,13 @@
 }
 
 .flowops-main {
-  max-width: 1160px;
-  margin: 0 auto;
+  /* Limit szerokości zdjęty na życzenie — zakładki (Heatmapy, Gantt, tabele)
+     mają wykorzystywać całą szerokość ekranu. Żeby wrócić do wyśrodkowanego,
+     węższego layoutu: odkomentuj `max-width`/`margin` i usuń `width`. */
+  /* max-width: 1160px; */
+  /* margin: 0 auto; */
+  width: 100%;
+  box-sizing: border-box;
   padding: 28px 24px;
 }
 
