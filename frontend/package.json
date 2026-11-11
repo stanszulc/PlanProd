@@ -10,7 +10,7 @@
     "preview": "vite preview",
     "test": "vitest run",
     "test:watch": "vitest",
-    "deploy": "npm run build && gh-pages -d dist"
+    "deploy": "npm run lint && npm test && npm run build && gh-pages -d dist"
   },
   "dependencies": {
     "jszip": "^3.10.1",

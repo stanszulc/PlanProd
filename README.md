@@ -27,9 +27,9 @@ PlanProd/
 │       ├── App.jsx                    # Główny router + kontener stanu
 │       ├── components/
 │       │   ├── common/                # Atomy UI (Bar, KpiCard, Dot...)
-│       │   └── tabs/                  # 17 zakładek funkcjonalnych
+│       │   └── tabs/                  # zakładki funkcjonalne
 │       ├── utils/
-│       │   ├── scheduler.js           # Parsery ERP/routingu + adaptery wejścia dla workera
+│       │   ├── scheduler.js           # Parsery ERP + adaptery wejścia dla workera, getAvail, computeLoads
 │       │   ├── scheduler.worker.js    # Żywy silnik harmonogramowania (patrz niżej)
 │       │   └── analysisUtils.js       # KPI, OTIF, analiza strat zdolności
 │       └── constants/
@@ -37,11 +37,9 @@ PlanProd/
 │           └── demoData.js            # Przykładowe dane ERP + lista maszyn równoległych
 │
 └── backend/
-    ├── main.py                        # FastAPI — endpoint /api/optimize to nieużywany stub
-    ├── server.py                      # Żywy serwer eksperymentalny (greedy/SA/CP-SAT)
-    ├── cpsat_tardiness.py             # Solver CP-SAT minimalizujący opóźnienia
-    └── core/
-        └── optimizer.py               # Martwy kod — samodzielny skrypt demo, niepodłączony do niczego
+    ├── server.py                      # Serwer FastAPI (greedy / SA / CP-SAT), używany z zakładki Diagnostyka
+    ├── cpsat_tardiness.py             # Solver CP-SAT minimalizujący opóźnienia (okna dostępności, predecessors)
+    └── tests/                         # Testy pytest (API i solver)
 ```
 
 ---
@@ -82,15 +80,15 @@ Domyślnie operacje jednego ZP idą ściśle jedna-po-drugiej. Jeśli skonfiguru
 
 ### 3. Backend CP-SAT (eksperymentalny, niepodłączony do głównego flow)
 
-`backend/server.py` + `backend/cpsat_tardiness.py` implementują dodatkowe solvery (greedy, symulowane wyżarzanie, CP-SAT minimalizujący sumę opóźnień) — wywoływane wyłącznie z zakładki **Diagnostyka harmonogramu**, jako alternatywa do porównania z wynikiem silnika frontendowego. Wymaga ręcznego uruchomienia (`python server.py`) i działania pod `localhost:8765`. `backend/core/optimizer.py` to starszy, samodzielny skrypt demonstracyjny — nie jest importowany przez żaden inny plik w repo.
+`backend/server.py` + `backend/cpsat_tardiness.py` implementują dodatkowe solvery (greedy, symulowane wyżarzanie, CP-SAT minimalizujący sumę opóźnień) — wywoływane wyłącznie z zakładki **Diagnostyka harmonogramu**, jako alternatywa do porównania z wynikiem silnika frontendowego. Wymaga ręcznego uruchomienia (`python server.py`) i działania pod `localhost:8765`. Solver CP-SAT uwzględnia okna dostępności maszyn, `predecessors` z transferem między gniazdami i przybliżony model puli gniazd 3xxxx; greedy i SA to uproszczenia i oznaczają to w polu `warnings`.
 
-### 4. Wizualizacja — 17 zakładek
+### 4. Wizualizacja — zakładki
 
 | Zakładka | Funkcja |
 |----------|---------|
 | Dashboard | KPI, alerty, przegląd zdolności produkcyjnych |
 | Harmonogram | Gantt + Grafik brygad + status ZP w jednym widoku |
-| Wąskie gardła | Identyfikacja bottlenecków |
+| Wąskie gardła | Ranking brygad wg planu: wąskie gardło = brygada z największą nadwyżką godzin ponad dostępność (tryb „wg terminów" pokazuje prognozę popytu) |
 | Heatmapa obciążeń | Obciążenie stanowisk wg terminów ZP |
 | Heatmapa planu | Obciążenie stanowisk × dni wg rzeczywistego harmonogramu + grafik pracy brygad |
 | Przepływy (macierz) | Macierz przepływów między gniazdami/brygadami, z klastrowaniem |
@@ -120,6 +118,8 @@ npm run dev
 
 Aplikacja dostępna pod `http://localhost:5173`.
 
+Testy i lint frontendu: `npm test` oraz `npm run lint`. `npm run deploy` uruchamia lint, testy i build przed publikacją na GitHub Pages.
+
 ### Backend (opcjonalnie, tylko do zakładki Diagnostyka harmonogramu)
 
 ```bash
@@ -144,7 +144,8 @@ python -m pytest tests -q
 
 - Frontend wdrożony na GitHub Pages, cała symulacja harmonogramu liczy się lokalnie w przeglądarce (`scheduler.worker.js`).
 - Backend (`server.py` + `cpsat_tardiness.py`) działa i jest wywoływany z zakładki Diagnostyka — ale wyłącznie do porównawczego podglądu, nie zasila głównego flow planowania.
-- `backend/core/optimizer.py` i `backend/main.py` to martwy kod z perspektywy działającej aplikacji.
+- Martwy kod z poprzednich wersji (`backSchedule`/`forwardSchedule`, `GrafikTab`, `backend/main.py`, `core/optimizer.py`, stary prototyp `FF05.html`) został usunięty — pozostaje w historii gita.
+- Dni opóźnienia liczone są przy założeniu dnia roboczego 16 h (`constants/schedule.js`, w backendzie `DEFAULT_H`).
 
 ---
 

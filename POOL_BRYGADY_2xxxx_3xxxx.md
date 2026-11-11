@@ -1,6 +1,24 @@
 # Pool godzin w brygadzie — maszyna (2xxxx) + gniazda (3xxxx)
 
-Data: 2026-08-17. Status: **model ustalony, niezaimplementowany**.
+Data: 2026-08-17. Aktualizacja: 2026-11-11. Status: **zaimplementowany w silniku JS** (patrz „Stan wdrożenia"); backend CP-SAT modeluje pulę tylko przybliżeniem.
+
+---
+
+## Stan wdrożenia (2026-11-11)
+
+- **Silnik JS (`scheduler.worker.js`) — zrobione:** wspólna pula brygady (`buildBrygadaPool`:
+  `getOccKey`, `getPoolAvail`, `getSharedPoolKey`), sufit 24 h/dobę per maszyna w ramach puli,
+  domyślny priorytet maszyny (`machineBiasH`), a po audycie: sufit liczony raz (bez podwójnego
+  odejmowania), okno maszyny przesuwane tak, by przy `shiftStart=6` maszyna miała pełne 24 h,
+  jedna definicja puli w SCHEDULE i w Insert LS (kody maszyn porównywane jako tekst).
+- **Statyczny podział w `grafikGodzinImport.js`** (punkt 1 poniżej) — nadal równy podział po
+  maszynach; to tylko fallback/szablon przed planowaniem.
+- **Backend CP-SAT (`cpsat_tardiness.py`):** gniazda 3xxxx jako `cumulative` z K „osobami"
+  (budżet dzienny / okno dnia) — przybliżenie, dokładne gdy budżet to wielokrotność okna;
+  brygady mieszane (maszyna 2xxxx czerpiąca z puli) nie są modelowane, a `wcToBrygada` nie jest
+  jeszcze przekazywany z frontendu (każde gniazdo 3xxxx = osobna pula).
+- **Wąskie gardło:** `utils/bottleneck.js` liczy je z planu, per brygada (suma godzin puli),
+  jako brygadę z największą nadwyżką godzin.
 
 ---
 
@@ -91,11 +109,11 @@ Do zmiany:
 
 Repo ma już **działający, ale niepodłączony do frontendu** backend z solverem CP-SAT:
 
-- `backend/cpsat_tardiness.py` (397 linii) — model weighted tardiness: terminy jako miękkie
+- `backend/cpsat_tardiness.py` — model weighted tardiness: terminy jako miękkie
   ograniczenia (kara za spóźnienie, nie hard constraint → nie ma INFEASIBLE przy przeciążeniu),
   wagi priorytetu (VIP ×5), `AddNoOverlap` dla maszyn 1:1, `AddCumulative` dla gniazd pool,
   pre-check obciążenia z ostrzeżeniem zamiast twardego błędu.
-- `backend/core/optimizer.py` (433 linii), `backend/server.py` (773 linii), `backend/main.py`.
+- `backend/server.py` — API FastAPI (greedy, SA, CP-SAT); `backend/core/optimizer.py` i `backend/main.py` zostały usunięte jako martwy kod.
 
 **Czego jeszcze nie robi ten backend:** jego "pool" to dziś capacity **pojedynczego**
 gniazda (np. stanowisko z 3 osobami = capacity 3 równoległe zadania), **nie** wspólna pula
