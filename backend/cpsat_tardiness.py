@@ -14,27 +14,56 @@
 #    - pre-check obciążenia gniazd — jeśli gniazdo > 100% capacity, loguje ostrzeżenie
 #      zamiast zwracać INFEASIBLE
 #    - większy horyzont — nie obcinamy do 120d, liczymy od max(due_date) + bufor
-#    - AddCumulative zamiast AddNoOverlap dla gniazd pool (capacity > 1)
-#    - log_search_progress w trybie debug
 #    - zwraca szczegółowy raport: lateCount, totalDelay, maxDelay, wcUtilization
 #
-# Wdrożenie Gemini pattern:
-#    ✓ Miękkie terminy (kary zamiast twardych ograniczeń)
-#    ✓ Weighted tardiness w Minimize()
-#    ✓ AddNoOverlap dla maszyn 1:1
-#    ✓ AddCumulative dla pool (capacity > 1)
-#    ✓ Pre-check capacity przed uruchomieniem solvera
-#    ✓ Timeout z parametru config
-#    ✓ Slot 15-minutowy (skala czasu — nie sekundy)
+# Etap 4 audytu — zgodność z silnikiem frontendowym (scheduler.worker.js):
+#
+#  OKNA DOSTĘPNOŚCI (OŚ PRACY). Każdy zasób (maszyna 2xxxx albo pula brygady 3xxxx)
+#  ma własną "oś pracy": ciąg slotów 15-min, które realnie istnieją w kalendarzu
+#  (okna dni, bez weekendów / dni z avail=0 / godzin poza zmianą). Zmienne startu
+#  operacji żyją na tej osi (ws), a czas kalendarzowy to element(tablica osi, ws).
+#  Dzięki temu operacja dłuższa niż okno dnia jest dzielona jak w findSlotForward
+#  (np. 20 h na maszynie 16 h/dobę = 16 h + 4 h następnego dnia roboczego), a
+#  NoOverlap/Cumulative liczone na osi pracy nie widzą przerw.
+#  Okno dnia (jak findSlotForward): długość min(dostępność, 24 h), start = shiftStart
+#  (cfg.shiftStart, domyślnie 6); gdy shiftStart + okno > 24 h okno przesuwa się
+#  wcześniej (24 h → 00:00-24:00).
+#
+#  POOL 3xxxx (KOMPROMIS). Frontend: gniazda 3xxxx jednej brygady współdzielą
+#  dzienny BUDŻET GODZIN (suma dostępności gniazd), bez limitu jednym operatorem.
+#  Dokładne "suma godzin zadań na dzień <= budżet" wymagałoby zmiennych
+#  godzinowych per (operacja x dzień) — zbyt ciężkie dla CP-SAT. Zamiast tego pula
+#  = cumulative z K "osobami" (demand 1), K = ceil(budżet_dzienny / okno_dnia);
+#  w dniach o mniejszym budżecie pojemność jest obniżana stałymi przedziałami.
+#  Okno puli = min(max dostępność gniazda, 24 h). Gdy budżet jest wielokrotnością
+#  okna (typowo: n gniazd x 16 h) model jest dokładny; w przeciwnym razie K jest
+#  zaokrąglane w górę (lekkie zawyżenie przepustowości). Zadanie puli nie jest
+#  dzielone między "osoby", tylko ciągłe na osi pracy puli. Brygady mieszane
+#  (maszyna 2xxxx czerpiąca godziny z puli) NIE są modelowane — maszyna ma własną
+#  oś. Mapowanie gniazdo→brygada: cfg['wcToBrygada'] (opcjonalne; bez niego każde
+#  gniazdo 3xxxx jest osobną pulą).
+#
+#  PREDECESSORS / TRANSFER. Gdy któraś operacja ZP ma niepuste `predecessors`,
+#  precedencje wg grafu (klucz operacji = _opUid ?? sequence; start >= koniec
+#  każdego poprzednika + transfer). Duplikat klucza / brakujący poprzednik / cykl →
+#  fallback do łańcucha po `sequence` + wpis w `warnings`. Bez predecessors łańcuch
+#  po `sequence`. Transfer (cfg.transferTimeH, domyślnie 2 h) dolicza się, gdy
+#  gniazdo następnika jest inne niż poprzednika (jak TRANSFER_TIME_H we frontendzie).
+#
+#  CEL: leksykograficznie (1) ważone spóźnienie, (2) suma czasów zakończenia ZP
+#  (zwarty harmonogram zamiast dowolnego przesuwania w obrębie luzu).
 # ─────────────────────────────────────────────────────────────────────────────
 
 import math, sys
+from bisect import bisect_left
 from datetime import datetime, timedelta
 from ortools.sat.python import cp_model
 
 SLOT_MIN  = 15
 S_PER_DAY = 24 * 60 // SLOT_MIN   # 96 slotów/dobę
-DEFAULT_H = 16
+SLOTS_H   = 60 // SLOT_MIN        # 4 sloty/godz.
+DEFAULT_H = 16                    # = WORK_DAY_H z frontendu
+MACHINE_CEILING_H = 24
 MAX_JOBS  = 8000                    # limit CP-SAT — powyżej czas eksploduje
 
 
@@ -43,15 +72,21 @@ def _date_str(dt):
 
 
 def _get_avail(wc, ds, wc_sched):
+    """Dostępność gniazda w dniu ds [h] — jak getAvail w scheduler.js:
+    brak harmonogramu lub brak klucza daty w słowniku → weekend 0, dzień roboczy DEFAULT_H."""
     sc = wc_sched.get(str(wc))
+    dt = datetime.strptime(ds, '%Y-%m-%d')
+    weekend = dt.weekday() >= 5
     if sc is None:
-        dt = datetime.strptime(ds, '%Y-%m-%d')
-        return 0.0 if dt.weekday() >= 5 else DEFAULT_H
+        return 0.0 if weekend else DEFAULT_H
     if isinstance(sc, dict):
-        return float(sc.get(ds, 0.0))
+        v = sc.get(ds)
+        if v is None:
+            return 0.0 if weekend else DEFAULT_H
+        return float(v)
     if isinstance(sc, list):
-        idx = datetime.strptime(ds, '%Y-%m-%d').weekday()
-        return float(sc[idx]) if idx < len(sc) else 0.0
+        idx = dt.weekday()
+        return float(sc[idx]) if idx < len(sc) and sc[idx] is not None else 0.0
     return DEFAULT_H
 
 
@@ -69,40 +104,88 @@ def _slot_to_dt(slot, plan_start):
     )
 
 
-def _build_wc_capacity(wc_sched, wc_set, horizon, plan_start):
-    """
-    Zwraca:
-      wc_avail_slots[wc]  — suma slotów dostępnych w horyzoncie (dla pre-check)
-      wc_capacity[wc]     — pojemność dzienna w slotach (max w ciągu horyzontu)
-      wc_is_pool[wc]      — True jeśli capacity > 1 (gniazdo pool / montaż)
-    """
-    wc_avail_slots = {}
-    wc_daily_cap   = {}
+def _day_window(avail_h, shift_h):
+    """Okno dnia (start_slot_w_dobie, długość_slotów) wg findSlotForward lub None."""
+    if avail_h <= 0:
+        return None
+    win   = min(avail_h, MACHINE_CEILING_H)
+    floor = shift_h if shift_h + win <= 24 else max(0.0, 24 - win)
+    st = int(round(floor * SLOTS_H))
+    ln = int(round(win * SLOTS_H))
+    ln = min(ln, S_PER_DAY - st)
+    return (st, ln) if ln > 0 else None
 
-    for wc in wc_set:
-        total = 0
-        daily_caps = []
-        for d in range(horizon):
-            ds  = _date_str(plan_start + timedelta(days=d))
-            cap = _h2s(_get_avail(wc, ds, wc_sched))
-            total += cap
-            if cap > 0:
-                daily_caps.append(cap)
-        wc_avail_slots[wc] = total
-        # capacity dzienna = mediana dni roboczych (odporność na outliery)
-        if daily_caps:
-            daily_caps.sort()
-            wc_daily_cap[wc] = daily_caps[len(daily_caps) // 2]
+
+def _build_axis(members, horizon, plan_start, wc_sched, shift_h, pool):
+    """
+    Oś pracy zasobu (maszyny lub puli brygady).
+    members — kody gniazd składających zasób; pool — True dla puli 3xxxx.
+    Zwraca dict: cal (slot kalendarzowy dla indeksu pracy), days
+    [(cal_start, off, len)], K (liczba równoległych "osób"), fillers
+    [(off, len, demand)] — stałe obniżenia pojemności w dniach o mniejszym budżecie.
+    """
+    cal, days, day_k = [], [], []
+    for d in range(horizon):
+        ds     = _date_str(plan_start + timedelta(days=d))
+        avails = [_get_avail(w, ds, wc_sched) for w in members]
+        win    = _day_window(max(avails), shift_h)
+        if win is None:
+            continue
+        st, ln = win
+        off = len(cal)
+        base = d * S_PER_DAY + st
+        cal.extend(range(base, base + ln))
+        days.append((base, off, ln))
+        if pool:
+            budget = int(round(sum(avails) * SLOTS_H))
+            day_k.append(max(1, math.ceil(budget / ln)))
         else:
-            wc_daily_cap[wc] = _h2s(DEFAULT_H)
-
-    # Pool jeśli dzienna capacity > 1 zmiana (96 slotów × 1) — np. 3xxxx brygady
-    # W praktyce: wc startujące od '3' lub daily_cap > S_PER_DAY
-    wc_is_pool = {
-        wc: (wc_daily_cap[wc] > S_PER_DAY) for wc in wc_set
+            day_k.append(1)
+    K = max(day_k) if day_k else 1
+    fillers = [(off, ln, K - k) for (base, off, ln), k in zip(days, day_k) if k < K]
+    return {
+        'cal': cal, 'days': days, 'K': K, 'fillers': fillers,
+        'offs': [off for _, off, _ in days],
+        'lens': [ln for _, _, ln in days],
+        'gaps': [base - off for base, off, _ in days],   # slot kalendarza = indeks pracy + gap(dnia)
     }
 
-    return wc_avail_slots, wc_daily_cap, wc_is_pool
+
+def _work_to_cal(model, axis, w, tag):
+    """
+    Zmienna: slot kalendarzowy odpowiadający indeksowi pracy w (wyrażenie liniowe).
+    Zamiast jednego elementu na tablicy całej osi (tysiące wpisów — presolve CP-SAT
+    eksploduje) używamy zmiennej DNIA i trzech małych elementów (offset, długość
+    okna, przesunięcie kalendarza) o rozmiarze = liczba dni roboczych.
+    """
+    nd  = len(axis['offs'])
+    day = model.new_int_var(0, nd - 1, f'd_{tag}')
+    off = model.new_int_var(min(axis['offs']), max(axis['offs']), f'o_{tag}')
+    gap = model.new_int_var(min(axis['gaps']), max(axis['gaps']), f'g_{tag}')
+    model.add_element(day, axis['offs'], off)
+    model.add_element(day, axis['gaps'], gap)
+    model.add(w >= off)
+    if len(set(axis['lens'])) == 1:
+        model.add(w <= off + (axis['lens'][0] - 1))
+    else:
+        ln = model.new_int_var(min(axis['lens']), max(axis['lens']), f'n_{tag}')
+        model.add_element(day, axis['lens'], ln)
+        model.add(w <= off + ln - 1)
+    cal = model.new_int_var(0, nd and (axis['cal'][-1]), f'c_{tag}')
+    model.add(cal == w + gap)
+    return cal
+
+
+def _build_wc_avail(wc_sched, wc_set, horizon, plan_start):
+    """wc → suma slotów dostępnych w horyzoncie (dla pre-checku)."""
+    out = {}
+    for wc in wc_set:
+        total = 0
+        for d in range(horizon):
+            ds = _date_str(plan_start + timedelta(days=d))
+            total += _h2s(_get_avail(wc, ds, wc_sched))
+        out[wc] = total
+    return out
 
 
 def _precheck_load(zp_list, routing, wc_avail_slots):
@@ -135,6 +218,88 @@ def _precheck_load(zp_list, routing, wc_avail_slots):
     return util
 
 
+def _op_key(op):
+    k = op.get('_opUid')
+    return k if k is not None else op.get('sequence')
+
+
+def _resolve_preds(zp_id, ops, warnings):
+    """
+    Lista poprzedników (indeksy w `ops`, posortowanych po sequence) per operacja.
+    Graf z `predecessors` gdy jest poprawny; w przeciwnym razie łańcuch po sequence
+    (+ ostrzeżenie, gdy to błąd danych).
+    """
+    n     = len(ops)
+    chain = [[i - 1] if i > 0 else [] for i in range(n)]
+    if not any(o.get('predecessors') for o in ops):
+        return chain
+
+    keys = [_op_key(o) for o in ops]
+    if len(set(keys)) < n:
+        warnings.append(f"ZP {zp_id}: duplikat numeru operacji w routingu — użyto łańcucha po sequence")
+        return chain
+    idx = {k: i for i, k in enumerate(keys)}
+    preds = []
+    for o in ops:
+        pl = []
+        for p in (o.get('predecessors') or []):
+            if p not in idx:
+                warnings.append(f"ZP {zp_id}: brak poprzednika {p} w routingu — użyto łańcucha po sequence")
+                return chain
+            pl.append(idx[p])
+        preds.append(pl)
+
+    # wykrywanie cyklu (Kahn)
+    indeg = [len(p) for p in preds]
+    succ  = [[] for _ in range(n)]
+    for i, pl in enumerate(preds):
+        for p in pl:
+            succ[p].append(i)
+    stack, seen = [i for i in range(n) if indeg[i] == 0], 0
+    while stack:
+        u = stack.pop()
+        seen += 1
+        for v in succ[u]:
+            indeg[v] -= 1
+            if indeg[v] == 0:
+                stack.append(v)
+    if seen < n:
+        warnings.append(f"ZP {zp_id}: cykl w predecessors — użyto łańcucha po sequence")
+        return chain
+    return preds
+
+
+def _topo_order(preds):
+    """Kolejność topologiczna indeksów operacji (preds jest acykliczne)."""
+    n = len(preds)
+    indeg = [len(p) for p in preds]
+    succ = [[] for _ in range(n)]
+    for i, pl in enumerate(preds):
+        for p in pl:
+            succ[p].append(i)
+    order, ready = [], [i for i in range(n) if indeg[i] == 0]
+    while ready:
+        u = ready.pop(0)
+        order.append(u)
+        for v in succ[u]:
+            indeg[v] -= 1
+            if indeg[v] == 0:
+                ready.append(v)
+    return order
+
+
+def _segments_from_axis(axis, cs, ce):
+    """Segmenty (start_slot, end_slot) pracy w oknach dni dla przedziału kalendarzowego [cs, ce)."""
+    segs = []
+    for base, off, ln in axis['days']:
+        a, b = max(cs, base), min(ce, base + ln)
+        if b > a:
+            segs.append((a, b))
+        elif base >= ce:
+            break
+    return segs or [(cs, ce)]
+
+
 def solve_tardiness(zp_list, routing, wc_sched, plan_start, cfg):
     """
     CP-SAT z ważonym kosztem spóźnienia jako funkcją celu.
@@ -147,9 +312,13 @@ def solve_tardiness(zp_list, routing, wc_sched, plan_start, cfg):
       cpSatMaxJobs          — limit ZP (domyślnie 800)
       vipWeight             — waga tardiness dla VIP (domyślnie 5)
       normalWeight          — waga tardiness dla normalnych (domyślnie 1)
+      shiftStart            — początek zmiany [h] (domyślnie 6)
+      transferTimeH         — transfer między różnymi gniazdami [h] (domyślnie 2)
+      wcToBrygada           — opcjonalne {gniazdo: brygada}; gniazda 3xxxx jednej
+                              brygady tworzą wspólną pulę godzin
 
     Zwraca: (result_dict, status_name, elapsed_s)
-      result_dict = { fwdZP, zpStatus, cpStatus, wcUtilization }
+      result_dict = { fwdZP, zpStatus, cpStatus, wcUtilization, warnings }
       lub None jeśli INFEASIBLE/UNKNOWN
     """
     vip_buf    = cfg.get('vipBufferDays', 2)
@@ -158,6 +327,10 @@ def solve_tardiness(zp_list, routing, wc_sched, plan_start, cfg):
     max_jobs   = cfg.get('cpSatMaxJobs', MAX_JOBS)
     w_vip      = cfg.get('vipWeight', 5)
     w_normal   = cfg.get('normalWeight', 1)
+    shift_h    = float(cfg.get('shiftStart', 6) if cfg.get('shiftStart') is not None else 6)
+    transfer_s = _h2s(cfg.get('transferTimeH', 2) if cfg.get('transferTimeH') is not None else 2)
+    wc_to_bryg = {str(k): v for k, v in (cfg.get('wcToBrygada') or {}).items()}
+    warnings   = []
 
     # ── 1. Horyzont — rozszerz do max(due_date) + 30d ────────────────────────
     base_horizon = cfg.get('horizonDays', 14) + 60
@@ -179,9 +352,7 @@ def solve_tardiness(zp_list, routing, wc_sched, plan_start, cfg):
         for op in routing.get(zp.get('product', ''), []):
             wc_set.add(str(op['workcenter']))
 
-    wc_avail_slots, wc_daily_cap, wc_is_pool = _build_wc_capacity(
-        wc_sched, wc_set, horizon, plan_start
-    )
+    wc_avail_slots = _build_wc_avail(wc_sched, wc_set, horizon, plan_start)
 
     # ── 3. Pre-check obciążenia ───────────────────────────────────────────────
     wc_util = _precheck_load(zp_list, routing, wc_avail_slots)
@@ -196,15 +367,37 @@ def solve_tardiness(zp_list, routing, wc_sched, plan_start, cfg):
         print(f"[TARDINESS] Ograniczono do {max_jobs} ZP (było {len(zp_sorted)})", file=sys.stderr)
         zp_sorted = zp_sorted[:max_jobs]
 
-    # ── 5. Buduj model CP-SAT ─────────────────────────────────────────────────
+    # ── 5. Osie pracy zasobów ────────────────────────────────────────────────
+    # res_key: maszyna → kod gniazda, gniazdo 3xxxx → POOL_<brygada> (lub kod gniazda)
+    def res_key(wc):
+        if wc.startswith('3') and wc in wc_to_bryg:
+            return f'POOL_{wc_to_bryg[wc]}'
+        return wc
+
+    axes = {}
+    for wc in wc_set:
+        key = res_key(wc)
+        if key in axes:
+            continue
+        if wc.startswith('3'):
+            if key != wc:
+                br = wc_to_bryg[wc]
+                members = sorted({w for w, b in wc_to_bryg.items() if b == br and w.startswith('3')} | {wc})
+            else:
+                members = [wc]
+            axes[key] = _build_axis(members, horizon, plan_start, wc_sched, shift_h, True)
+        else:
+            axes[key] = _build_axis([wc], horizon, plan_start, wc_sched, shift_h, False)
+
+    # ── 6. Buduj model CP-SAT ─────────────────────────────────────────────────
     model = cp_model.CpModel()
 
-    # Kontenery per gniazdo: intervals + demands (dla AddCumulative)
-    wc_intervals = {wc: [] for wc in wc_set}   # dla AddNoOverlap (maszyny 1:1)
-    wc_demands   = {wc: [] for wc in wc_set}   # dla AddCumulative (pool)
-
-    zp_tasks    = []   # (zp, [(op, s_var, e_var, dur_s, dur_h)], due_s, weight)
-    tard_terms  = []   # (tard_var, weight) → do sumy w Minimize
+    res_intervals = {k: [] for k in axes}      # przedziały na osi pracy
+    zp_tasks   = []   # (zp, [(op, cs, ce, dur_s, dur_h, axis_key|None)], due_s, weight)
+    tard_terms = []   # (tard_var, weight)
+    end_vars   = []   # zakończenia ZP (cel drugorzędny)
+    n_ops_total = 0
+    free_at     = {}   # zasób → pierwsze wolne indeksy osi pracy (dla wskazówki)
 
     for zp in zp_sorted:
         zp_id  = zp['zp_id']
@@ -224,83 +417,125 @@ def solve_tardiness(zp_list, routing, wc_sched, plan_start, cfg):
             routing.get(zp.get('product', ''), []),
             key=lambda o: o.get('sequence', 999)
         )
+        preds = _resolve_preds(zp_id, ops, warnings)
 
+        nodes    = {}   # i → (cs, ce, wc) per operacja (także zerowe — przepuszczają graf)
+        hint_ce  = {}   # i → szacowany koniec z zachłannego harmonogramu (wskazówka startowa)
         task_ops = []
-        prev_end = None
 
-        for op in ops:
+        for i in _topo_order(preds):
+            op = ops[i]
             wc    = str(op['workcenter'])
             ct    = op.get('ct_min', 0)
             dur_h = vol * ct / 60 if ct > 0 else op.get('_durH', 0)
             dur_s = _h2s(dur_h)
+            tag   = f'{zp_id}_{i}'
 
             if dur_s == 0 or wc not in wc_set:
-                continue
+                # węzeł zerowy: bez zasobu, tylko przepuszcza precedencje
+                cs = model.new_int_var(0, total_slots, f'z_{tag}')
+                nodes[i] = (cs, cs, wc)
+                hint_ce[i] = max((hint_ce[p] for p in preds[i]), default=0)
+            else:
+                key  = res_key(wc)
+                axis = axes[key]
+                W    = len(axis['cal'])
+                if W < dur_s:
+                    # brak wystarczającej pracy w horyzoncie / gniazdo bez dostępności:
+                    # operacja bez okien i bez zasobu (z ostrzeżeniem)
+                    warnings.append(
+                        f"ZP {zp_id}: gniazdo {wc} nie ma dość dostępnego czasu w horyzoncie "
+                        f"— operacja zaplanowana bez okien dostępności"
+                    )
+                    cs = model.new_int_var(0, total_slots, f's_{tag}')
+                    ce = model.new_int_var(0, total_slots + dur_s, f'e_{tag}')
+                    model.add(ce == cs + dur_s)
+                    nodes[i] = (cs, ce, wc)
+                    hint_ce[i] = max((hint_ce[p] for p in preds[i]), default=0) + dur_s
+                    task_ops.append((op, cs, ce, dur_s, dur_h, None))
+                else:
+                    ws  = model.new_int_var(0, W - dur_s, f'w_{tag}')
+                    wl  = model.new_int_var(dur_s - 1, W - 1, f'wl_{tag}')
+                    model.add(wl == ws + (dur_s - 1))
+                    cs   = _work_to_cal(model, axis, ws, f's_{tag}')
+                    last = _work_to_cal(model, axis, wl, f'l_{tag}')
+                    ce   = model.new_int_var(1, total_slots + 1, f'e_{tag}')
+                    model.add(ce == last + 1)
+                    res_intervals[key].append(
+                        model.new_fixed_size_interval_var(ws, dur_s, f'iv_{tag}')
+                    )
+                    nodes[i] = (cs, ce, wc)
+                    task_ops.append((op, cs, ce, dur_s, dur_h, key))
+                    # wskazówka: zachłanny harmonogram listowy (ZP w kolejności VIP/termin)
+                    cmin = max((hint_ce[p] + (transfer_s if str(ops[p]['workcenter']) != wc else 0)
+                                for p in preds[i]), default=0)
+                    frees = free_at.setdefault(key, [0] * axis['K'])
+                    k = frees.index(min(frees))
+                    w = max(frees[k], bisect_left(axis['cal'], cmin))
+                    if w <= W - dur_s:
+                        frees[k] = w + dur_s
+                        model.add_hint(ws, w)
+                        hint_ce[i] = axis['cal'][w + dur_s - 1] + 1
+                    else:
+                        hint_ce[i] = total_slots
 
-            s_var  = model.new_int_var(0, total_slots,          f's_{zp_id}_{op["sequence"]}')
-            e_var  = model.new_int_var(0, total_slots + dur_s,  f'e_{zp_id}_{op["sequence"]}')
-            iv     = model.new_interval_var(s_var, dur_s, e_var, f'iv_{zp_id}_{op["sequence"]}')
-
-            # Sekwencja operacji — operacja N zaczyna się po końcu N-1
-            if prev_end is not None:
-                model.add(s_var >= prev_end)
-
-            # Rejestruj interval w odpowiednim kontenerze gniazda
-            wc_intervals[wc].append(iv)
-            if wc_is_pool.get(wc, False):
-                # Pool: demand = 1 jednostka capacity (wiele ZP może pracować równolegle)
-                wc_demands[wc].append(1)
-
-            task_ops.append((op, s_var, e_var, dur_s, dur_h))
-            prev_end = e_var
+            # precedencje (+ transfer przy zmianie gniazda)
+            cs_i = nodes[i][0]
+            for p in preds[i]:
+                _, ce_p, wc_p = nodes[p]
+                tr = transfer_s if (wc_p != wc and transfer_s > 0) else 0
+                model.add(cs_i >= ce_p + tr)
 
         if not task_ops:
             continue
+        n_ops_total += len(task_ops)
 
         # ── MIĘKKI termin: tardiness = max(0, last_end - due_s) ──────────────
-        # Zamiast Add(last_end <= due_s) → INFEASIBLE
-        # Robimy: tard >= last_end - due_s  (tard >= 0 z definicji zmiennej)
-        tard_var = model.new_int_var(0, total_slots, f'tard_{zp_id}')
-        model.add(tard_var >= task_ops[-1][2] - due_s)   # task_ops[-1][2] = e_var ostatniej op
-        # tard_var automatycznie = 0 gdy last_end <= due_s (bo minimalizujemy)
+        zp_end = model.new_int_var(0, total_slots + 1, f'end_{zp_id}')
+        for _, _, ce, _, _, _ in task_ops:
+            model.add(zp_end >= ce)
+        tard_var = model.new_int_var(0, total_slots + 1, f'tard_{zp_id}')
+        model.add(tard_var >= zp_end - due_s)
 
         zp_tasks.append((zp, task_ops, due_s, weight))
         tard_terms.append((tard_var, weight))
+        end_vars.append(zp_end)
 
-    # ── 6. Ograniczenia maszyn ────────────────────────────────────────────────
-    for wc in wc_set:
-        ivs = wc_intervals[wc]
+    # ── 7. Ograniczenia zasobów (na osiach pracy) ─────────────────────────────
+    for key, ivs in res_intervals.items():
         if not ivs:
             continue
-
-        if wc_is_pool.get(wc, False):
-            # Pool (3xxxx): AddCumulative — capacity = dzienna pula slotów
-            # Uwaga: capacity w sensie CP-SAT = ile zadań równolegle, nie godziny
-            # Używamy wc_daily_cap jako przybliżenie max równoległych slotów
-            cap = wc_daily_cap.get(wc, S_PER_DAY)
-            demands = wc_demands[wc]
-            model.add_cumulative(ivs, demands, cap)
-            print(f"[TARDINESS] Pool {wc}: AddCumulative capacity={cap}", file=sys.stderr)
-        else:
-            # Maszyna 1:1: AddNoOverlap — jedno zadanie na raz
+        axis = axes[key]
+        K = axis['K']
+        if K <= 1:
             model.add_no_overlap(ivs)
+        else:
+            all_iv = list(ivs)
+            demands = [1] * len(ivs)
+            for off, ln, dem in axis['fillers']:
+                all_iv.append(model.new_fixed_size_interval_var(off, ln, f'fill_{key}_{off}'))
+                demands.append(dem)
+            model.add_cumulative(all_iv, demands, K)
+            print(f"[TARDINESS] Pool {key}: cumulative K={K}", file=sys.stderr)
 
-    # ── 7. Funkcja celu: minimalizuj ważony koszt spóźnienia ─────────────────
-    # Weighted tardiness: sum(weight_i * tard_i)
-    # VIP mają weight=5 → solver 5x bardziej stara się nie spóźniać VIP
-    objective = sum(w * t for t, w in tard_terms)
+    # ── 8. Funkcja celu: (1) ważone spóźnienie, (2) suma zakończeń ZP ────────
+    big = max(1, len(end_vars)) * (total_slots + 1) + 1
+    objective = big * sum(w * t for t, w in tard_terms) + sum(end_vars)
     model.minimize(objective)
 
     print(
-        f"[TARDINESS] Model: {len(zp_tasks)} ZP, {sum(len(t[1]) for t in zp_tasks)} operacji, "
-        f"{sum(len(v) for v in wc_intervals.values())} intervals",
+        f"[TARDINESS] Model: {len(zp_tasks)} ZP, {n_ops_total} operacji, "
+        f"{sum(len(v) for v in res_intervals.values())} intervals",
         file=sys.stderr
     )
 
-    # ── 8. Solver ─────────────────────────────────────────────────────────────
+    # ── 9. Solver ─────────────────────────────────────────────────────────────
     solver = cp_model.CpSolver()
     solver.parameters.max_time_in_seconds = time_limit
     solver.parameters.num_search_workers  = 4
+    # probing/symetria: na modelach z elementami presolve zżerał kilka s przed 1. rozwiązaniem
+    solver.parameters.cp_model_probing_level = 0
+    solver.parameters.symmetry_level = 0
     if debug:
         solver.parameters.log_search_progress = True
 
@@ -319,11 +554,9 @@ def solve_tardiness(zp_list, routing, wc_sched, plan_start, cfg):
     )
 
     if status not in (cp_model.OPTIMAL, cp_model.FEASIBLE):
-        # Przy INFEASIBLE z miękkimi terminami to bardzo rzadkie —
-        # oznaczałoby sprzeczność w samej sekwencji operacji
         return None, status_name, solver.wall_time
 
-    # ── 9. Buduj wyniki ───────────────────────────────────────────────────────
+    # ── 10. Buduj wyniki ──────────────────────────────────────────────────────
     fwd_zp    = []
     zp_status = []
 
@@ -334,11 +567,27 @@ def solve_tardiness(zp_list, routing, wc_sched, plan_start, cfg):
         seq         = 0
         last_end_dt = None
 
-        for op, s_var, e_var, dur_s, dur_h in task_ops:
+        for op, cs, ce, dur_s, dur_h, key in task_ops:
             seq      += 1
-            start_dt  = _slot_to_dt(solver.value(s_var), plan_start)
-            end_dt    = _slot_to_dt(solver.value(e_var),   plan_start)
-            last_end_dt = end_dt
+            cs_v, ce_v = solver.value(cs), solver.value(ce)
+            start_dt  = _slot_to_dt(cs_v, plan_start)
+            end_dt    = _slot_to_dt(ce_v, plan_start)
+            if last_end_dt is None or end_dt > last_end_dt:
+                last_end_dt = end_dt
+
+            if key is not None:
+                raw = _segments_from_axis(axes[key], cs_v, ce_v)
+            else:
+                raw = [(cs_v, ce_v)]
+            n_seg = len(raw)
+            segments = []
+            for a, b in raw:
+                seg_h = (b - a) / SLOTS_H
+                segments.append({
+                    'segStart': _slot_to_dt(a, plan_start).isoformat(),
+                    'segEnd':   _slot_to_dt(b, plan_start).isoformat(),
+                    'durH':     dur_h if n_seg == 1 else seg_h,
+                })
 
             fwd_zp.append({
                 'zp_id':      f"{zp['zp_id']}/{str(seq).zfill(3)}",
@@ -353,11 +602,7 @@ def solve_tardiness(zp_list, routing, wc_sched, plan_start, cfg):
                 'durH':       dur_h,
                 'start_dt':   start_dt.isoformat(),
                 'end_dt':     end_dt.isoformat(),
-                'segments':   [{
-                    'segStart': start_dt.isoformat(),
-                    'segEnd':   end_dt.isoformat(),
-                    'durH':     dur_h,
-                }],
+                'segments':   segments,
                 'due_date':   zp['due_date'],
                 'priority':   zp.get('priority', 0),
                 'realEnd':    end_dt.isoformat(),
@@ -393,5 +638,6 @@ def solve_tardiness(zp_list, routing, wc_sched, plan_start, cfg):
         'zpStatus':      zp_status,
         'cpStatus':      status_name,
         'wcUtilization': wc_util,
+        'warnings':      warnings,
     }
     return result, status_name, solver.wall_time
