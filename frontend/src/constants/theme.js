@@ -40,11 +40,27 @@ export function tocColor(zone) {
 
 
 
+// Wspólne progi obciążenia (util = load/cap): OK ≤ 85%, UWAGA ≤ 100%, BN ≤ 130%, KRYT powyżej.
+// U_HEAT_MID (110%) to tylko podział wizualny pasma BN w heatmapach (pomarańcz → czerwień).
+export const U_OK = 0.85;
+export const U_WARN = 1.00;
+export const U_HEAT_MID = 1.10;
+export const U_BN = 1.30;
+
 export function uStatus(u) {
-  if (u <= 0.85) return { label: "OK",    bg: T.okBg,   text: T.ok,   dot: T.ok };
-  if (u <= 1.00) return { label: "UWAGA", bg: T.warnBg, text: T.warn, dot: T.warn };
-  if (u <= 1.30) return { label: "BN",    bg: T.bnBg,   text: T.bn,   dot: T.bn };
-  return                 { label: "KRYT", bg: T.critBg, text: T.crit, dot: T.crit };
+  if (u <= U_OK)   return { label: "OK",    bg: T.okBg,   text: T.ok,   dot: T.ok };
+  if (u <= U_WARN) return { label: "UWAGA", bg: T.warnBg, text: T.warn, dot: T.warn };
+  if (u <= U_BN)   return { label: "BN",    bg: T.bnBg,   text: T.bn,   dot: T.bn };
+  return                   { label: "KRYT", bg: T.critBg, text: T.crit, dot: T.crit };
+}
+
+// Pasmo koloru heatmapy dla util > 0 (u <= 0 obsługuje wywołujący: '–').
+export function heatBand(u) {
+  if (u <= U_OK)       return { bg: 'rgba(34,197,94,0.12)',  color: '#22c55e' };
+  if (u <= U_WARN)     return { bg: 'rgba(245,158,11,0.15)', color: '#f59e0b' };
+  if (u <= U_HEAT_MID) return { bg: 'rgba(249,115,22,0.15)', color: '#f97316' };
+  if (u <= U_BN)       return { bg: 'rgba(239,68,68,0.15)',  color: '#ef4444' };
+  return                      { bg: 'rgba(220,38,38,0.25)',  color: '#fca5a5' };
 }
 
 

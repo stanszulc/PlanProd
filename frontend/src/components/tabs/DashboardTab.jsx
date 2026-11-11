@@ -40,17 +40,26 @@ export function DashboardTab({ routing, zp, zpStatus, wcSchedule, historyData, g
       const zpForDate = zp.filter(z => z.due_date === d);
       const loads     = computeLoads(globalLookups.routingByProduct, zpForDate, wcSchedule, d);
       Object.entries(loads).forEach(([wc, v]) => {
-        if (!allLoads[wc]) allLoads[wc] = [];
-        allLoads[wc].push(v.util * 100);
+        if (!allLoads[wc]) allLoads[wc] = { load: 0, cap: 0, overDays: 0 };
+        if (v.cap > 0) { allLoads[wc].load += v.load; allLoads[wc].cap += v.cap; }
+        else if (v.load > 0) allLoads[wc].overDays += 1; // praca w dniu bez capa — osobno, bez 999
       });
     });
+    // Utilizacja ważona godzinami (suma load / suma cap po dniach z cap>0).
+    // util=null → gniazdo ma pracę tylko w dniach bez capa (przeciążenie bez wartości %).
     return Object.entries(allLoads)
-      .map(([wc, arr]) => ({ wc, util: Math.round(arr.reduce((s, v) => s + v, 0) / arr.length) }))
-      .sort((a, b) => b.util - a.util);
+      .map(([wc, a]) => ({
+        wc,
+        util: a.cap > 0 ? Math.round(a.load / a.cap * 100) : null,
+        overDays: a.overDays,
+      }))
+      .filter(w => w.util !== null || w.overDays > 0)
+      .sort((a, b) => (b.util ?? Infinity) - (a.util ?? Infinity));
   }, [zp, routing, globalLookups, wcSchedule]);
 
-  const avgUtil = wcLoads.length
-    ? Math.round(wcLoads.reduce((s, w) => s + w.util, 0) / wcLoads.length)
+  const measured = wcLoads.filter(w => w.util !== null);
+  const avgUtil = measured.length
+    ? Math.round(measured.reduce((s, w) => s + w.util, 0) / measured.length)
     : 0;
 
   // ── Alerty TOC ─────────────────────────────────────────────────────────────
@@ -212,15 +221,20 @@ export function DashboardTab({ routing, zp, zpStatus, wcSchedule, historyData, g
             <div style={{ color: T.text3, fontSize: 12 }}>Brak danych obciążenia</div>
           ) : (
             <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
-              {wcLoads.map(({ wc, util }) => {
-                const st = uStatus(util / 100);
+              {wcLoads.map(({ wc, util: utilRaw, overDays }) => {
+                const noCap = utilRaw === null;
+                const util  = noCap ? 130 : utilRaw;
+                const st = uStatus(noCap ? Infinity : util / 100);
                 return (
                   <div key={wc}>
                     <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 4 }}>
                       <span style={{ fontSize: 12, fontWeight: 600, color: T.text }}>{wc}</span>
                       <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
                         <span style={{ ...s.badge(st), fontSize: 10 }}>{st.label}</span>
-                        <span style={{ fontSize: 12, fontWeight: 600, color: st.text, fontFamily: 'monospace' }}>{util}%</span>
+                        <span style={{ fontSize: 12, fontWeight: 600, color: st.text, fontFamily: 'monospace' }}
+                          title={overDays > 0 ? `Praca w ${overDays} dn. bez dostępnej pojemności` : undefined}>
+                          {noCap ? '!' : `${util}%${overDays > 0 ? ' !' : ''}`}
+                        </span>
                       </div>
                     </div>
                     <div style={{ background: T.surface3, borderRadius: 4, height: 8, overflow: 'hidden' }}>

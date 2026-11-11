@@ -1,17 +1,18 @@
-import { useState, useMemo, useEffect, useRef, useCallback } from 'react';
-import { T, PALETTE, s, tocColor, uStatus } from '../../constants/theme.js';
-import { localDateStr, fmtDt, computeLoads, getAvail } from '../../utils/scheduler.js';
-import { Dot } from '../common/Dot.jsx';
+import { useState, useMemo } from 'react';
+import { T, s, uStatus } from '../../constants/theme.js';
+import { computeLoads } from '../../utils/scheduler.js';
 import { EmptyState } from '../common/EmptyState.jsx';
 import { DatePicker } from '../common/DatePicker.jsx';
 export function SwimlaneTab({ routing, zp, globalLookups, wcSchedule }) {
   const dates = useMemo(() => [...new Set(zp.map(z => z.due_date))].sort(), [zp]);
-  const [date, setDate] = useState(dates[0] || "");
+  const [selDate, setDate] = useState(dates[0] || "");
+  // Dane mogą dojść po pierwszym renderze — wybrana data wyprowadzana (bez setState w efekcie):
+  // jeśli zapamiętana data nie istnieje w danych, bierzemy pierwszy termin.
+  const date = dates.includes(selDate) ? selDate : (dates[0] || "");
   const allWC = useMemo(() => [...new Set(routing.map(r => r.workcenter))].sort(), [routing]);
   
   const zpForDate = useMemo(() => zp.filter(z => z.due_date === date), [zp, date]);
   const loads = useMemo(() => date ? computeLoads(globalLookups.routingByProduct, zpForDate, wcSchedule, date) : {}, [globalLookups.routingByProduct, zpForDate, wcSchedule, date]);
-  const maxUtil = Object.values(loads).length ? Math.max(...Object.values(loads).map(v => v.util)) : 0;
   
   if (!dates.length) return <EmptyState icon="🏊" title="Brak danych" sub="Wgraj pliki CSV" />;
 
@@ -27,8 +28,15 @@ export function SwimlaneTab({ routing, zp, globalLookups, wcSchedule }) {
           {allWC.map((w, wi) => {
             const y = wi * LANE_H;
             const wcData = loads[w] || { util: 0, cap: 8, load: 0, contrib: {} };
-            const isBn = Math.abs(wcData.util - maxUtil) < 0.001 && wcData.util > 0.85;
-            const scale = wcData.load > 0 ? Math.min(CAP_W / (wcData.cap * 1.4), CAP_W / (wcData.load * 1.05)) : CAP_W / wcData.cap;
+            // Wąskie gardło = każde gniazdo ze statusem BN/KRYT (util > 100%, wspólne progi uStatus),
+            // niezależnie od remisów z maksimum.
+            const stLabel = uStatus(wcData.util).label;
+            const isBn = wcData.load > 0 && (stLabel === 'BN' || stLabel === 'KRYT');
+            const noCap = !(wcData.cap > 0);
+            const capScale = noCap ? Infinity : CAP_W / (wcData.cap * 1.4);
+            const scale = wcData.load > 0
+              ? Math.min(capScale, CAP_W / (wcData.load * 1.05))
+              : (noCap ? CAP_W / 8 : CAP_W / wcData.cap);
             let curX = LABEL_W + 10;
             return (
               <g key={w}>
@@ -47,7 +55,7 @@ export function SwimlaneTab({ routing, zp, globalLookups, wcSchedule }) {
                   curX += w_px + 2;
                   return block;
                 })}
-                <text x={curX + 10} y={y + LANE_H / 2 + 4} fontSize="11" fontWeight="700" fill={T.text2}>{Math.round(wcData.util * 100)}%</text>
+                <text x={curX + 10} y={y + LANE_H / 2 + 4} fontSize="11" fontWeight="700" fill={T.text2}>{noCap && wcData.load > 0 ? '!' : `${Math.round(wcData.util * 100)}%`}</text>
               </g>
             );
           })}

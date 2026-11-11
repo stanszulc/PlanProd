@@ -1,5 +1,5 @@
 import { useState, useMemo, useRef, useEffect } from 'react';
-import { T, s } from '../../constants/theme.js';
+import { T, s, heatBand } from '../../constants/theme.js';
 import { localDateStr } from '../../utils/scheduler.js';
 import { EmptyState } from '../common/EmptyState.jsx';
 import { WC_DAILY_CAPACITY, WC_TO_WC2 } from '../../constants/demoData.js';
@@ -410,23 +410,17 @@ export function HeatmapPlanTab({ fwdZP = [], routing = [], wcSchedule = {}, onSc
     if (avail === 0) return { bg: 'rgba(239,68,68,0.2)', color: '#ef4444', text: mode === 'h' ? load.toFixed(1) + 'h' : '!' };
     const u    = load / avail;
     const text = mode === 'h' ? load.toFixed(1) + 'h' : Math.round(u * 100) + '%';
-    if (u <= 0.85) return { bg: 'rgba(34,197,94,0.12)',  color: '#22c55e', text };
-    if (u <= 1.00) return { bg: 'rgba(245,158,11,0.15)', color: '#f59e0b', text };
-    if (u <= 1.10) return { bg: 'rgba(249,115,22,0.15)', color: '#f97316', text };
-    return               { bg: 'rgba(239,68,68,0.2)',    color: '#ef4444', text };
+    return { ...heatBand(u), text };
   }
 
   function brStyle(capH, loadH) {
     if (loadH === 0) return { bg: T.surface2, color: T.text3, text: '–', sub: '' };
     const u    = capH > 0 ? loadH / capH : 999;
-    const pct  = Math.round(u * 100) + '%';
+    const pct  = capH > 0 ? Math.round(u * 100) + '%' : '!';
     const hrs  = loadH.toFixed(0) + 'h';
     const text = mode === 'h' ? hrs : pct;
     const sub  = mode === 'h' ? pct : hrs;
-    if (u <= 0.85) return { bg: 'rgba(34,197,94,0.12)',  color: '#22c55e', text, sub };
-    if (u <= 1.00) return { bg: 'rgba(245,158,11,0.15)', color: '#f59e0b', text, sub };
-    if (u <= 1.10) return { bg: 'rgba(249,115,22,0.15)', color: '#f97316', text, sub };
-    return               { bg: 'rgba(239,68,68,0.2)',    color: '#ef4444', text, sub };
+    return { ...heatBand(u), text, sub };
   }
 
   function fmtDate(d) {

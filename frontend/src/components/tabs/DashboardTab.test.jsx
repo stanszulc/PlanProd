@@ -49,3 +49,26 @@ describe('DashboardTab — Alert Center delay label', () => {
     expect(screen.getAllByText('200%').length).toBeGreaterThan(0);
   });
 });
+
+describe('DashboardTab — utilizacja z dniem bez capa', () => {
+  test('termin w weekend (cap=0) nie zawyża Avg utilization', () => {
+    // WC1: pn 2026-08-17 load 4h/cap 8h = 50%; sobota 2026-08-22 load 4h/cap 0 -> pomijane w średniej.
+    render(
+      <DashboardTab
+        routing={[{ product: 'P1', workcenter: 'WC1', sequence: 1 }]}
+        zp={[
+          { product: 'P1', volume: 1, due_date: '2026-08-17' },
+          { product: 'P1', volume: 1, due_date: '2026-08-22' },
+        ]}
+        zpStatus={[]}
+        wcSchedule={{}}
+        historyData={[]}
+        globalLookups={{ routingByProduct: { P1: [{ workcenter: 'WC1', ct_min: 240, sequence: 1 }] } }}
+        onTabChange={() => {}}
+        hybridMode={false}
+      />
+    );
+    expect(screen.queryByText(/99900/)).toBeNull();
+    expect(screen.getAllByText(/^25%/).length).toBeGreaterThan(0);
+  });
+});

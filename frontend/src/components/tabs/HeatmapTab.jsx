@@ -1,8 +1,31 @@
 import { useState, useMemo } from 'react';
-import { T, s } from '../../constants/theme.js';
+import { T, s, heatBand } from '../../constants/theme.js';
 import { computeLoads, getAvail, localDateStr } from '../../utils/scheduler.js';
 import { WC_TO_WC2 } from '../../constants/demoData.js';
 import { EmptyState } from '../common/EmptyState.jsx';
+
+const NO_CAP_U = 999; // znacznik z utilFrom: cap=0, load>0
+
+function hmStyleFor(u, load, mode) {
+  const band = u <= 0 ? { bg: T.surface2, color: T.text3 } : heatBand(u);
+  const text = u <= 0 ? '–'
+    : mode === 'h' ? `${load.toFixed(1)}h`
+    : u >= NO_CAP_U ? '!' // cap=0 przy load>0 — bez bezsensownych 99900%
+    : `${Math.round(u * 100)}%`;
+  return { ...band, text };
+}
+
+function Cell({ u, load, mode, height = 28 }) {
+  const hs = hmStyleFor(u, load, mode);
+  return (
+    <div style={{ display: 'inline-flex', alignItems: 'center',
+      justifyContent: 'center', width: 68, height,
+      borderRadius: 6, background: hs.bg, color: hs.color,
+      fontSize: 11, fontWeight: 600, fontFamily: 'monospace' }}>
+      {hs.text}
+    </div>
+  );
+}
 
 export function HeatmapTab({ routing, zp, globalLookups, wcSchedule, fwdZP = [], planStart, horizonDays = 14 }) {
   const [groupBy, setGroupBy] = useState('due'); // 'due' (wg terminu) | 'plan' (wg planu)
@@ -112,30 +135,6 @@ export function HeatmapTab({ routing, zp, globalLookups, wcSchedule, fwdZP = [],
 
   if (!dates.length) return <EmptyState icon="🌡️" title="Brak danych" sub="Wgraj pliki CSV" />;
 
-  function hmStyle(u, load) {
-    const band =
-      u <= 0   ? { bg: T.surface2, color: T.text3 } :
-      u <= .85 ? { bg: 'rgba(34,197,94,0.12)',  color: '#22c55e' } :
-      u <= 1.0 ? { bg: 'rgba(245,158,11,0.15)', color: '#f59e0b' } :
-      u <= 1.1 ? { bg: 'rgba(249,115,22,0.15)', color: '#f97316' } :
-      u <= 1.3 ? { bg: 'rgba(239,68,68,0.15)',  color: '#ef4444' } :
-                 { bg: 'rgba(220,38,38,0.25)',  color: '#fca5a5' };
-    const text = u <= 0 ? '–' : mode === 'h' ? `${load.toFixed(1)}h` : `${Math.round(u * 100)}%`;
-    return { ...band, text };
-  }
-
-  function Cell({ u, load, height = 28 }) {
-    const hs = hmStyle(u, load);
-    return (
-      <div style={{ display: 'inline-flex', alignItems: 'center',
-        justifyContent: 'center', width: 68, height,
-        borderRadius: 6, background: hs.bg, color: hs.color,
-        fontSize: 11, fontWeight: 600, fontFamily: 'monospace' }}>
-        {hs.text}
-      </div>
-    );
-  }
-
   return (
     <div style={s.card}>
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 14 }}>
@@ -186,7 +185,7 @@ export function HeatmapTab({ routing, zp, globalLookups, wcSchedule, fwdZP = [],
                   </td>
                   {agg.map(({ load, cap }, i) => (
                     <td key={dates[i]} style={{ padding: 4 }}>
-                      <Cell u={utilFrom(load, cap)} load={load} />
+                      <Cell u={utilFrom(load, cap)} load={load} mode={mode} />
                     </td>
                   ))}
                 </tr>,
@@ -203,7 +202,7 @@ export function HeatmapTab({ routing, zp, globalLookups, wcSchedule, fwdZP = [],
                       const { load, cap } = loadCapFor(wc, d);
                       return (
                         <td key={d} style={{ padding: 4 }}>
-                          <Cell u={utilFrom(load, cap)} load={load} height={24} />
+                          <Cell u={utilFrom(load, cap)} load={load} mode={mode} height={24} />
                         </td>
                       );
                     })}

@@ -203,3 +203,20 @@ describe('HeatmapTab — grupowanie wierszy po brygadzie (WC3)', () => {
     expect(screen.queryByText('WC1')).not.toBeInTheDocument();
   });
 });
+
+describe('HeatmapTab — cap=0 przy load>0', () => {
+  const zp = [{ product: 'P1', volume: 2, due_date: '2026-08-22', zp_id: 'ZP1' }]; // sobota
+  const props = { routing, zp, globalLookups, wcSchedule: {}, fwdZP: [], planStart: '2026-08-22', horizonDays: 1 };
+
+  test('tryb %: pokazuje "!" zamiast 99900%', () => {
+    render(<HeatmapTab {...props} />);
+    fireEvent.change(screen.getByRole('combobox'), { target: { value: 'pct' } });
+    expect(screen.queryByText('99900%')).toBeNull();
+    expect(screen.getAllByText('!').length).toBeGreaterThan(0);
+  });
+
+  test('tryb godzin: pokazuje godziny', () => {
+    render(<HeatmapTab {...props} />);
+    expect(screen.getAllByText('2.0h').length).toBeGreaterThan(0);
+  });
+});

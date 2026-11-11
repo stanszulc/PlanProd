@@ -1,49 +1,52 @@
-import { useState, useMemo, useEffect, useRef, useCallback } from 'react';
-import { T, PALETTE, s, tocColor, uStatus } from '../../constants/theme.js';
-import { localDateStr, fmtDt, computeLoads, getAvail } from '../../utils/scheduler.js';
+import { useState, useMemo } from 'react';
+import { T, s, uStatus, U_OK } from '../../constants/theme.js';
+import { localDateStr, computeLoads } from '../../utils/scheduler.js';
 import { Dot } from '../common/Dot.jsx';
 import { Bar } from '../common/Bar.jsx';
 import { KpiCard } from '../common/KpiCard.jsx';
 import { EmptyState } from '../common/EmptyState.jsx';
-export function BottleneckTab({ routing, zp, globalLookups, wcSchedule, subZP }) {
+export function BottleneckTab({ zp, globalLookups, wcSchedule, subZP }) {
   const dates    = useMemo(() => [...new Set(zp.map(z => z.due_date))].sort(), [zp]);
   const allDates = useMemo(() => {
     const set = new Set(dates);
-    if (subZP) subZP.forEach(s => {
-      if (s.start_dt) set.add(localDateStr(new Date(s.start_dt)));
+    if (subZP) subZP.forEach(sz => {
+      if (sz.start_dt) set.add(localDateStr(new Date(sz.start_dt)));
     });
     return [...set].sort();
-  }, [dates.join(','), subZP ? subZP.length : 0]);
+  }, [dates, subZP]);
 
-  const [date, setDate]  = useState(dates[0] || '');
-  useEffect(() => { if (!date && dates.length) setDate(dates[0]); }, [dates.join(',')]);
+  // Wybrana data wyprowadzana: gdy dane dojdą później, bierzemy pierwszy termin.
+  const [selDate, setDate] = useState(dates[0] || '');
+  const date = selDate && allDates.includes(selDate) ? selDate : (dates[0] || '');
 
-  const products  = useMemo(() => [...new Set(routing.map(r => r.product))], [routing]);
-  const zpForDate = useMemo(() => zp.filter(z => z.due_date === date), [zp.length, date]);
+  const zpForDate = useMemo(() => zp.filter(z => z.due_date === date), [zp, date]);
+  const routingByProduct = globalLookups.routingByProduct;
   const loads     = useMemo(() => {
     if (!date) return {};
-    return computeLoads(globalLookups.routingByProduct, zpForDate, wcSchedule, date);
-  }, [zpForDate.length, date, wcSchedule]);
+    return computeLoads(routingByProduct, zpForDate, wcSchedule, date);
+  }, [zpForDate, date, wcSchedule, routingByProduct]);
   const entries   = useMemo(() => Object.entries(loads).sort((a,b) => b[1].util-a[1].util), [loads]);
   const maxU      = entries.length ? Math.max(...entries.map(([,v]) => v.util)) : 0;
-  const bn        = entries[0]?.[0] || '–';
+  // Wąskie gardło tylko gdy najwyższe obciążenie przekracza próg OK (85%).
+  const bn        = entries.length && maxU > U_OK ? entries[0][0] : '–';
+
+  // Kolor przycisku daty wg statusu (jedno przeliczenie dla wszystkich terminów ZP)
+  const dateColors = useMemo(() => {
+    const m = {};
+    dates.forEach(d => {
+      const zpD = zp.filter(z => z.due_date === d);
+      const lds = Object.values(computeLoads(routingByProduct, zpD, wcSchedule, d));
+      const u   = lds.length ? Math.max(...lds.map(v => v.util)) : 0;
+      if (u <= 0) { m[d] = { border: T.border, text: T.text3, bg: 'transparent' }; return; }
+      const st = uStatus(u);
+      m[d] = { border: st.dot, text: st.text, bg: st.bg };
+    });
+    return m;
+  }, [dates, zp, routingByProduct, wcSchedule]);
 
   if (!dates.length) return <EmptyState icon="📊" title="Brak danych" sub="Wgraj pliki w zakładce Import" />;
 
   const st = uStatus(maxU);
-
-  // Kolor przycisku daty wg statusu (obliczamy tylko dla due_dates, lekko)
-  function dateColor(d) {
-    if (!dates.includes(d)) return { border: T.border, text: T.text3, bg: 'transparent' };
-    const zpD = zp.filter(z => z.due_date === d);
-    const lds = computeLoads(globalLookups.routingByProduct, zpD, wcSchedule, d);
-    const u   = Object.values(lds).length ? Math.max(...Object.values(lds).map(v=>v.util)) : 0;
-    if (u > 1.3) return { border: T.crit, text: T.crit, bg: T.critBg };
-    if (u > 1.0) return { border: T.bn,   text: T.bn,   bg: T.bnBg   };
-    if (u > 0.85)return { border: T.warn, text: T.warn, bg: T.warnBg };
-    if (u > 0)   return { border: T.ok,   text: T.ok,   bg: T.okBg   };
-    return              { border: T.border,text: T.text3,bg:'transparent' };
-  }
 
   return (
     <div>
@@ -63,7 +66,9 @@ export function BottleneckTab({ routing, zp, globalLookups, wcSchedule, subZP })
 
       {/* KPI */}
       <div style={{ display:'grid', gridTemplateColumns:'repeat(auto-fit,minmax(140px,1fr))', gap:12, marginBottom:20 }}>
-        <KpiCard label="Bottleneck" value={bn} sub={`${Math.round(maxU*100)}% obciążenia`} color={st.text}/>
+        <KpiCard label="Bottleneck" value={bn}
+          sub={bn === '–' ? `brak wąskiego gardła (max ${Math.round(maxU*100)}%)` : `${Math.round(maxU*100)}% obciążenia`}
+          color={bn === '–' ? T.text3 : st.text}/>
         <KpiCard label="Gniazda" value={entries.length} sub="aktywne"/>
         <KpiCard label="ZP na termin" value={zpForDate.length} sub={date}/>
         <KpiCard label="Terminów" value={dates.length} sub={`${dates[0]?.slice(5)} – ${dates[dates.length-1]?.slice(5)}`}/>
@@ -74,7 +79,7 @@ export function BottleneckTab({ routing, zp, globalLookups, wcSchedule, subZP })
         <span style={{ fontSize:12, color:T.text3 }}>Termin:</span>
         {allDates.map(d => {
           const isDue = dates.includes(d);
-          const dc    = isDue ? dateColor(d) : { border:T.border, text:T.text3, bg:'transparent' };
+          const dc    = isDue ? dateColors[d] : { border:T.border, text:T.text3, bg:'transparent' };
           const isSel = d === date;
           return (
             <button key={d} onClick={() => setDate(d)}
