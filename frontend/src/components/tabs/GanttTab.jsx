@@ -1,11 +1,12 @@
 import { useState, useMemo, useEffect, useRef } from 'react';
 import { T, s } from '../../constants/theme.js';
-import { fmtDt, localDateStr, getAvail } from '../../utils/scheduler.js';
+import { fmtDt } from '../../utils/scheduler.js';
+import { planBottleneckView } from './bottleneckView.js';
 import { DAY_NAMES } from '../../constants/theme.js';
 import { Dot } from '../common/Dot.jsx';
 import { EmptyState } from '../common/EmptyState.jsx';
 
-export function GanttTab({ routing, zp, globalLookups, wcSchedule, subZP, fwdZP, zpStatus, onRecalc, ganttDirty, onViewChange, slaveMode, planStart, onPlanStartChange, embedded, selectedWC: selectedWCProp, onWCSelect, selectedDate, onDateSelect, heatmapFilter, onHeatmapFilterChange }) {
+export function GanttTab({ routing, zp, globalLookups, wcSchedule, subZP, fwdZP, zpStatus, onRecalc, ganttDirty, onViewChange, slaveMode, planStart, onPlanStartChange, embedded, selectedWC: selectedWCProp, onWCSelect, selectedDate, onDateSelect, heatmapFilter, onHeatmapFilterChange, wcToBrygada }) {
 
   const wcNameMap = useMemo(() => { const m = {}; routing.forEach(r => { if (!m[r.workcenter]) m[r.workcenter] = r.operation; }); return m; }, [routing]);
   const allWCFull = useMemo(() => { const wcSeq = {}; routing.forEach(r => { const seq = parseInt(r.sequence)||999; if (wcSeq[r.workcenter]===undefined||seq<wcSeq[r.workcenter]) wcSeq[r.workcenter]=seq; }); return [...new Set(routing.map(r=>r.workcenter))].sort((a,b)=>(wcSeq[a]||999)-(wcSeq[b]||999)); }, [routing]);
@@ -285,25 +286,13 @@ export function GanttTab({ routing, zp, globalLookups, wcSchedule, subZP, fwdZP,
     return result;
   }, [axisStart?.getTime(), axisEnd?.getTime(), scale.tick]);
 
-  // Obciążenie do etykiety "wąskie gardło" — liczone z RZECZYWISTYCH segmentów planu
-  // (planBase = pełny, nieprzefiltrowany fwdZP), nie z teoretycznego modelu wg terminów
-  // (computeLoads) — inaczej ta etykieta pokazywałaby co innego niż same paski obok niej
-  // i niż Heatmapa planu, która też liczy z segmentów.
-  const loads = useMemo(() => {
-    const targetDate = dates[0];
-    const byWc = {};
-    if (!targetDate) return byWc;
-    planBase.forEach(s2 => {
-      (s2.segments || []).forEach(seg => {
-        if (!seg.segStart || localDateStr(seg.segStart) !== targetDate) return;
-        if (!byWc[s2.workcenter]) byWc[s2.workcenter] = { load: 0, cap: getAvail(s2.workcenter, targetDate, wcSchedule) };
-        byWc[s2.workcenter].load += seg.durH;
-      });
-    });
-    Object.values(byWc).forEach(v => { v.util = v.cap > 0 ? v.load / v.cap : (v.load > 0 ? 999 : 0); });
-    return byWc;
-  }, [planBase, wcSchedule, dates[0]]);
-  const maxUtil = Object.values(loads).length ? Math.max(...Object.values(loads).map(v => v.util)) : 0;
+  // Etykieta "wąskie gardło": jedna definicja z utils/bottleneck.js — brygada primary
+  // liczona z całego planu (planBase), nie z widoku po filtrach. Źródło mapowania gniazdo→brygada:
+  // prop wcToBrygada (z App), fallback na mapowanie z routingu.
+  const bnMembers = useMemo(() => {
+    const map = wcToBrygada && Object.keys(wcToBrygada).length ? wcToBrygada : wcToBrygadaGM;
+    return planBottleneckView({ fwdZP: planBase, wcSchedule, wcToBrygada: map }).primaryMembers;
+  }, [planBase, wcSchedule, wcToBrygada, wcToBrygadaGM]);
 
   // [PERF #4] Pre-compute segment pixel X positions — oblicza się raz z planBase, NIE z displayZP
   // Zmiana filtra nie wywołuje przeliczenia; wcSegments (lekkie) decyduje co pokazać
@@ -699,8 +688,7 @@ export function GanttTab({ routing, zp, globalLookups, wcSchedule, subZP, fwdZP,
                 <g>
                   {allWC.slice(visRows[0], visRows[1]).map((w, li) => {
                     const wi = visRows[0]+li;
-                    const ld = loads[w]||{util:0};
-                    const isBn = Math.abs(ld.util-maxUtil)<0.001 && ld.util>0.85;
+                    const isBn = bnMembers.has(String(w));
                     const isSel = selectedWC === w;
                     return <g key={`lbl-${w}`} style={{cursor:'pointer'}}
                       onClick={() => { setSelectedWC(prev => prev === w ? null : w); setSelectedZp(null); }}>

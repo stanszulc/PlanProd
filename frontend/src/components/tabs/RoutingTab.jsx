@@ -1,6 +1,7 @@
 import { useState, useMemo, useRef, useCallback } from 'react';
 import { T, PALETTE, s, tocColor, uStatus } from '../../constants/theme.js';
 import { localDateStr, fmtDt, computeLoads, getAvail } from '../../utils/scheduler.js';
+import { planBottleneckView } from './bottleneckView.js';
 import { Dot } from '../common/Dot.jsx';
 import { EmptyState } from '../common/EmptyState.jsx';
 
@@ -24,7 +25,7 @@ function wrapTwoLines(text, maxCharsPerLine = 13) {
   return [text.slice(0, idx).trim(), text.slice(idx).trim()];
 }
 
-export function RoutingTab({ routing, zp, globalLookups, wcSchedule }) {
+export function RoutingTab({ routing, zp, globalLookups, wcSchedule, fwdZP, wcToBrygada }) {
   // Kolor per brygada (WC3) — stabilny w całym zbiorze danych (nie tylko widocznych
   // po filtrze), żeby ten sam kolor zawsze znaczył tę samą brygadę.
   const brigadeColorMap = useMemo(() => {
@@ -127,6 +128,11 @@ export function RoutingTab({ routing, zp, globalLookups, wcSchedule }) {
   const firstDateZP = useMemo(() => dates.length ? zp.filter(z => z.due_date === dates[0]) : [], [zp, dates]);
   const wcLoads = useMemo(() => dates.length ? computeLoads(globalLookups.routingByProduct, firstDateZP, wcSchedule, dates[0]) : {}, [dates.join(','), firstDateZP.length, globalLookups, wcSchedule]);
   const maxUtil = Object.values(wcLoads).length ? Math.max(...Object.values(wcLoads).map(v => v.util)) : 0;
+  // Wąskie gardła z planu (utils/bottleneck.js) — gdy brak planu, zostaje fallback wg popytu (wcLoads).
+  const bnView = useMemo(
+    () => planBottleneckView({ fwdZP, wcSchedule, wcToBrygada }),
+    [fwdZP, wcSchedule, wcToBrygada]
+  );
 
   if (!routing.length) return <EmptyState icon="🔀" title="Brak danych" sub="Wgraj routing.csv" />;
 
@@ -264,9 +270,17 @@ export function RoutingTab({ routing, zp, globalLookups, wcSchedule }) {
 
                     {ops.map(op => {
                       const { x: boxX, y: boxY } = boxPos(op);
-                      const wcData = wcLoads[op.workcenter] || { util: 0 };
-                      const u = wcData.util;
-                      const isBn = Math.abs(u - maxUtil) < 0.001 && u > 0.85;
+                      let isBn, isWarn = false;
+                      if (bnView.hasPlan) {
+                        const grp = bnView.groupOfWc[String(op.workcenter)];
+                        isBn = bnView.primaryMembers.has(String(op.workcenter))
+                          || (!!grp && (grp.status === 'BN' || grp.status === 'KRYT'));
+                        isWarn = !isBn && !!grp && grp.status === 'UWAGA';
+                      } else {
+                        const u = (wcLoads[op.workcenter] || { util: 0 }).util;
+                        isBn = Math.abs(u - maxUtil) < 0.001 && u > 0.85;
+                      }
+                      const isPrimary = bnView.primaryMembers.has(String(op.workcenter));
                       const isHighlighted = filterWC && String(op.workcenter) === filterWC;
                       const brigadeColor = brigadeColorMap[op.wc_group] || T.border2;
                       const [nameLine1, nameLine2] = wrapTwoLines(op.machine_name || op.operation || '');
@@ -274,8 +288,8 @@ export function RoutingTab({ routing, zp, globalLookups, wcSchedule }) {
                         <g key={opKey(op)}>
                           <rect x={boxX} y={boxY} width={BW} height={BH} rx="8"
                             fill={isHighlighted ? 'rgba(77,148,255,0.12)' : T.surface2}
-                            stroke={isHighlighted ? T.accent : isBn ? T.bn : T.border2}
-                            strokeWidth={isHighlighted ? 2 : isBn ? 2 : 1}
+                            stroke={isHighlighted ? T.accent : isBn ? T.bn : isWarn ? T.warn : T.border2}
+                            strokeWidth={isPrimary ? 3 : isHighlighted || isBn ? 2 : 1}
                           />
                           {op.wc_group && (
                             <rect x={boxX} y={boxY} width={4} height={BH} fill={brigadeColor} rx="2" />

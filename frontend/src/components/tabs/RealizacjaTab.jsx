@@ -44,7 +44,8 @@ function calcPozycja(ops) {
   const queueH  = ltH != null ? Math.max(0, ltH - touchH) : null;
   const effPct  = ltH && ltH > 0 ? Math.round((touchH / ltH) * 100) : null;
 
-  // bottleneck — najdłuższa operacja CNF
+  // pole `bottleneck` = NAJDŁUŻSZA operacja CNF tego ZP (nie wąskie gardło zasobowe —
+  // te liczy utils/bottleneck.js z planu)
   const bottleneck = cnfOps.length
     ? cnfOps.reduce((b, o) => {
         const s = parseDt(o.actual_start), e = parseDt(o.actual_end);
@@ -264,8 +265,8 @@ function ZsRow({ zs, expanded, onToggle }) {
           <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 11 }}>
             <thead>
               <tr>
-                {['Poz.', 'ZP', 'Produkt', 'Termin', 'Status', 'Wolumen', 'OTIF', 'LT', 'Touch', 'Queue', 'Efekt.', 'Opóźn.', 'BN'].map(h => (
-                  <th key={h} style={thStyle}>{h}</th>
+                {['Poz.', 'ZP', 'Produkt', 'Termin', 'Status', 'Wolumen', 'OTIF', 'LT', 'Touch', 'Queue', 'Efekt.', 'Opóźn.', 'Najdł. op.'].map(h => (
+                  <th key={h} style={thStyle} title={h === 'Najdł. op.' ? 'Najdłuższa operacja ZP (nie wąskie gardło zasobowe)' : undefined}>{h}</th>
                 ))}
               </tr>
             </thead>

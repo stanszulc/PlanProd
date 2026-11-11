@@ -5,7 +5,7 @@ import { GanttTab } from './GanttTab.jsx';
 
 export function PlanTab({ routing, zp, globalLookups, wcSchedule, subZP, fwdZP, zpStatus,
                      onRecalc, ganttDirty, planStart, onPlanStartChange,
-                     selectedWC, onWCSelect, selectedDate, onDateSelect, heatmapFilter, onHeatmapFilterChange }) {
+                     selectedWC, onWCSelect, selectedDate, onDateSelect, heatmapFilter, onHeatmapFilterChange, wcToBrygada }) {
 
   const panelStyle = {
     background: T.surface,
@@ -44,6 +44,7 @@ export function PlanTab({ routing, zp, globalLookups, wcSchedule, subZP, fwdZP, 
             selectedWC={selectedWC} onWCSelect={onWCSelect}
             selectedDate={selectedDate} onDateSelect={onDateSelect}
             heatmapFilter={heatmapFilter} onHeatmapFilterChange={onHeatmapFilterChange}
+            wcToBrygada={wcToBrygada}
           />
         </div>
       </div>
@@ -60,7 +61,7 @@ export function PlanTab({ routing, zp, globalLookups, wcSchedule, subZP, fwdZP, 
           <div style={{ overflowY:'auto', overflowX:'auto' }}>
             <table style={{ width:'100%', borderCollapse:'collapse', fontSize:12 }}>
               <thead><tr>
-                {['ZS / Pozycja / Klient','ZP','Produkt','Due date','Koniec','Opóźnienie','Bottleneck','Bufor','Status'].map(h => (
+                {['ZS / Pozycja / Klient','ZP','Produkt','Due date','Koniec','Opóźnienie','Najdłuższa operacja','Bufor','Status'].map(h => (
                   <th key={h} style={{ fontSize:10, fontWeight:600, letterSpacing:'.06em',
                     textTransform:'uppercase', color:T.text3, padding:'6px 8px',
                     textAlign:'left', borderBottom:`1px solid ${T.border}`,
@@ -127,9 +128,9 @@ export function PlanTab({ routing, zp, globalLookups, wcSchedule, subZP, fwdZP, 
                                 {st.delayDays>0?`+${st.delayDays}d`:'✓ OK'}
                               </td>
                               <td style={{ padding:'6px 8px', borderBottom:`1px solid ${T.border}` }}>
-                                {st.bottleneck && <span style={{ display:'inline-flex', alignItems:'center',
+                                {st.bottleneck && <span title="Najdłuższa operacja tego ZP (nie wąskie gardło zasobowe)" style={{ display:'inline-flex', alignItems:'center',
                                   gap:4, padding:'2px 7px', borderRadius:4, fontSize:11, fontWeight:600,
-                                  background:T.bnBg, color:T.bn }}>🔴 {st.bottleneck}</span>}
+                                  background:T.surface2, color:T.text2 }}>{st.bottleneck}</span>}
                               </td>
                               <td style={{ padding:'6px 8px', borderBottom:`1px solid ${T.border}` }}>
                                 <div style={{ height:5, background:T.surface3, borderRadius:3, width:70, marginBottom:2 }}>

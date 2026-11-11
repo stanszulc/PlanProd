@@ -1,6 +1,7 @@
 import { useMemo } from 'react';
 import { T, s, tocColor, uStatus } from '../../constants/theme.js';
 import { computeLoads } from '../../utils/scheduler.js';
+import { calcBottlenecks } from '../../utils/bottleneck.js';
 
 // Wersja aplikacji — ręcznie podbijana (V1.1 -> V1.2 -> ...), bez powiązania z commitami.
 const APP_VERSION = 'V1.2';
@@ -11,7 +12,7 @@ function tocZone(toc) {
   return toc.zone || 'green';
 }
 
-export function DashboardTab({ routing, zp, zpStatus, wcSchedule, historyData, globalLookups, onTabChange, hybridMode }) {
+export function DashboardTab({ routing, zp, zpStatus, wcSchedule, historyData, globalLookups, onTabChange, hybridMode, fwdZP, wcToBrygada }) {
 
   // ── KPI ────────────────────────────────────────────────────────────────────
   const kpi = useMemo(() => {
@@ -57,10 +58,26 @@ export function DashboardTab({ routing, zp, zpStatus, wcSchedule, historyData, g
       .sort((a, b) => (b.util ?? Infinity) - (a.util ?? Infinity));
   }, [zp, routing, globalLookups, wcSchedule]);
 
+  // ── Wąskie gardła wg planu (jedna definicja: utils/bottleneck.js) ──────────
+  const hasPlan = Array.isArray(fwdZP) && fwdZP.length > 0;
+  const planBn = useMemo(
+    () => (hasPlan ? calcBottlenecks({ fwdZP, wcSchedule, wcToBrygada: wcToBrygada || {} }) : null),
+    [hasPlan, fwdZP, wcSchedule, wcToBrygada]
+  );
+
   const measured = wcLoads.filter(w => w.util !== null);
-  const avgUtil = measured.length
+  const demandAvg = measured.length
     ? Math.round(measured.reduce((s, w) => s + w.util, 0) / measured.length)
     : 0;
+  // Wg planu: Σload / Σcap po wszystkich brygadach na dniach cap>0 (nie średnia z procentów).
+  const planAvg = useMemo(() => {
+    if (!planBn) return 0;
+    let load = 0, cap = 0;
+    planBn.groups.forEach(g => g.days.forEach(d => { if (d.cap > 0) { load += d.load; cap += d.cap; } }));
+    return cap > 0 ? Math.round(load / cap * 100) : 0;
+  }, [planBn]);
+  const avgUtil = planBn ? planAvg : demandAvg;
+  const basisLabel = planBn ? 'wg planu' : 'wg terminów';
 
   // ── Alerty TOC ─────────────────────────────────────────────────────────────
   const alerts = useMemo(() => {
@@ -150,7 +167,7 @@ export function DashboardTab({ routing, zp, zpStatus, wcSchedule, historyData, g
         <KpiCard
           label="Avg utilization"
           value={`${avgUtil}%`}
-          sub={`${wcLoads.length} gniazd`}
+          sub={planBn ? `${planBn.groups.length} brygad · ${basisLabel}` : `${wcLoads.length} gniazd · ${basisLabel}`}
           color={avgUtil <= 85 ? T.ok : avgUtil <= 100 ? T.warn : T.bn}
           icon="⚙️"
           onClick={() => onTabChange('heatmap')}
@@ -181,8 +198,8 @@ export function DashboardTab({ routing, zp, zpStatus, wcSchedule, historyData, g
           </div>
         ) : (
           <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
-            <div style={{ display: 'grid', gridTemplateColumns: '90px 1fr 1fr 100px 90px 80px', gap: 8, padding: '4px 8px' }}>
-              {['Strefa', 'ZP', 'ZS / Klient', 'Termin', 'Opóźnienie', 'Bottleneck'].map(h => (
+            <div style={{ display: 'grid', gridTemplateColumns: '90px 1fr 1fr 100px 90px 120px', gap: 8, padding: '4px 8px' }}>
+              {['Strefa', 'ZP', 'ZS / Klient', 'Termin', 'Opóźnienie', 'Najdłuższa operacja'].map(h => (
                 <span key={h} style={{ fontSize: 10, fontWeight: 600, textTransform: 'uppercase', letterSpacing: '0.07em', color: T.text3 }}>{h}</span>
               ))}
             </div>
@@ -191,7 +208,7 @@ export function DashboardTab({ routing, zp, zpStatus, wcSchedule, historyData, g
               const delayTxt = z.delayDays > 0 ? `+${z.delayDays}d` : tocZone(z.toc) === 'black' ? 'po term.' : '—';
               return (
                 <div key={z.zp_id}
-                  style={{ display: 'grid', gridTemplateColumns: '90px 1fr 1fr 100px 90px 80px', gap: 8, padding: '8px', borderRadius: 8, background: tc.bg, border: `1px solid ${tc.border}`, alignItems: 'center', cursor: 'pointer' }}
+                  style={{ display: 'grid', gridTemplateColumns: '90px 1fr 1fr 100px 90px 120px', gap: 8, padding: '8px', borderRadius: 8, background: tc.bg, border: `1px solid ${tc.border}`, alignItems: 'center', cursor: 'pointer' }}
                   onClick={() => onTabChange('late_zs')}>
                   <span style={{ ...s.badge(tc), fontSize: 10, justifyContent: 'center' }}>
                     {tocZone(z.toc) === 'black' ? '⚫ CZARNY' : tocZone(z.toc) === 'red' ? '🔴 CZERWONY' : '🟡 ŻÓŁTY'}
@@ -216,8 +233,42 @@ export function DashboardTab({ routing, zp, zpStatus, wcSchedule, historyData, g
 
         {/* Capacity Watch */}
         <div style={s.card}>
-          <div style={s.cardTitle}>⚙️ Capacity Watch</div>
-          {wcLoads.length === 0 ? (
+          <div style={s.cardTitle}>⚙️ Capacity Watch <span style={{ textTransform: 'none', letterSpacing: 0, fontWeight: 400 }}>· {basisLabel}</span></div>
+          {planBn ? (
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
+              {planBn.primary ? (
+                <div style={{ fontSize: 12, fontWeight: 600, color: uStatus(planBn.primary.peakUtil).text }}>
+                  Wąskie gardło: {planBn.primary.name} — nadwyżka {planBn.primary.excessH.toFixed(1)} h w {planBn.primary.overloadDays} dniach
+                </div>
+              ) : (
+                <div style={{ fontSize: 12, fontWeight: 600, color: T.ok }}>brak przeciążeń</div>
+              )}
+              {planBn.groups.map(g => {
+                const st = uStatus(g.peakUtil);
+                const pct = Math.round(g.avgUtil * 100);
+                return (
+                  <div key={g.name}>
+                    <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 4 }}>
+                      <span style={{ fontSize: 12, fontWeight: 600, color: T.text }}>{g.name}</span>
+                      <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+                        <span style={{ ...s.badge(st), fontSize: 10 }}>{g.status}</span>
+                        <span style={{ fontSize: 12, fontWeight: 600, color: st.text, fontFamily: 'monospace' }}
+                          title={`Szczyt ${Math.round(g.peakUtil * 100)}% (${g.peakDate})`}>{pct}%</span>
+                      </div>
+                    </div>
+                    <div style={{ background: T.surface3, borderRadius: 4, height: 8, overflow: 'hidden' }}>
+                      <div style={{ width: `${Math.min(pct, 130)}%`, height: '100%', background: st.dot, borderRadius: 4 }} />
+                    </div>
+                  </div>
+                );
+              })}
+              <div style={{ display: 'flex', gap: 14, marginTop: 6 }}>
+                <LegendDot color={T.ok}   label="≤ 85% OK" />
+                <LegendDot color={T.warn} label="86–100% Uwaga" />
+                <LegendDot color={T.bn}   label="> 100% BN" />
+              </div>
+            </div>
+          ) : wcLoads.length === 0 ? (
             <div style={{ color: T.text3, fontSize: 12 }}>Brak danych obciążenia</div>
           ) : (
             <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>

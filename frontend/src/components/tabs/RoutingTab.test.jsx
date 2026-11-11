@@ -73,3 +73,30 @@ describe('RoutingTab — pokazuje brygadę (WC3) i nazwę maszyny na boksie', ()
     expect(screen.getByText('gilotyna SG6')).toBeInTheDocument();
   });
 });
+
+describe('RoutingTab — wąskie gardło z planu (fwdZP, brygady)', () => {
+  const routing = [
+    { product: 'P1', workcenter: 'A1', sequence: 1, wc_group: 'Alfa' },
+    { product: 'P2', workcenter: 'B1', sequence: 1, wc_group: 'Beta' },
+  ];
+  const globalLookups = {
+    routingByProduct: {
+      P1: [{ workcenter: 'A1', sequence: 1, ct_min: 1, wc_group: 'Alfa' }],
+      P2: [{ workcenter: 'B1', sequence: 1, ct_min: 1, wc_group: 'Beta' }],
+    },
+    productIndexMap: { P1: 0, P2: 1 },
+  };
+  const seg = (h) => ({ segStart: new Date(2026, 7, 17, 6), durH: h });
+
+  test('podświetla tylko gniazdo przeciążonej brygady', () => {
+    const fwdZP = [
+      { workcenter: 'A1', segments: [seg(40)] },
+      { workcenter: 'B1', segments: [seg(2)] },
+    ];
+    const { container } = render(
+      <RoutingTab routing={routing} zp={[]} globalLookups={globalLookups} wcSchedule={{}}
+        fwdZP={fwdZP} wcToBrygada={{ A1: 'Alfa', B1: 'Beta' }} />
+    );
+    expect(container.querySelectorAll(`rect[stroke="${T.bn}"]`)).toHaveLength(1);
+  });
+});

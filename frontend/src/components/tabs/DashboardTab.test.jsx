@@ -72,3 +72,41 @@ describe('DashboardTab — utilizacja z dniem bez capa', () => {
     expect(screen.getAllByText(/^25%/).length).toBeGreaterThan(0);
   });
 });
+
+describe('DashboardTab — wąskie gardło wg planu', () => {
+  const seg = (day, h) => ({ segStart: new Date(`2026-08-${day}T06:00:00`), durH: h });
+  const base = (fwdZP) => ({
+    routing: [{ product: 'P1', workcenter: 'A1', sequence: 1 }],
+    zp: [{ product: 'P1', volume: 1, due_date: '2026-08-17' }],
+    zpStatus: [], wcSchedule: { A1: { '2026-08-17': 8 }, B1: { '2026-08-17': 8 } },
+    historyData: [], globalLookups: { routingByProduct: { P1: [{ workcenter: 'A1', ct_min: 60, sequence: 1 }] } },
+    onTabChange: () => {}, hybridMode: false, fwdZP, wcToBrygada: { A1: 'BrygA', B1: 'BrygB' },
+  });
+
+  test('z planem: Avg utilization = Σload/Σcap, podpis wg planu, primary z nadwyżką', () => {
+    // BrygA 12/8 (150%), BrygB 4/8 -> Σ16/16 = 100%
+    const fwdZP = [{ workcenter: 'A1', segments: [seg('17', 12)] }, { workcenter: 'B1', segments: [seg('17', 4)] }];
+    render(<DashboardTab {...base(fwdZP)} />);
+    expect(screen.getByText('100%')).toBeInTheDocument();
+    expect(screen.getAllByText(/wg planu/).length).toBeGreaterThan(0);
+    expect(screen.getByText(/Wąskie gardło: BrygA/)).toBeInTheDocument();
+    expect(screen.getByText(/4\.0 h/)).toBeInTheDocument();
+  });
+
+  test('z planem bez przeciążeń: "brak przeciążeń"', () => {
+    render(<DashboardTab {...base([{ workcenter: 'A1', segments: [seg('17', 2)] }])} />);
+    expect(screen.getByText(/brak przeciążeń/)).toBeInTheDocument();
+  });
+
+  test('bez planu: podpis wg terminów', () => {
+    render(<DashboardTab {...base([])} />);
+    expect(screen.getAllByText(/wg terminów/).length).toBeGreaterThan(0);
+  });
+
+  test('nagłówek kolumny alertów to "Najdłuższa operacja"', () => {
+    const zpStatus = [{ zp_id: 'ZP1', due_date: '2026-08-20', delayDays: 1, toc: { zone: 'red' }, bottleneck: 'WC9' }];
+    render(<DashboardTab {...base([])} zpStatus={zpStatus} />);
+    expect(screen.getByText('Najdłuższa operacja')).toBeInTheDocument();
+  });
+});
+

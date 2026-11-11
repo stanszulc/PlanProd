@@ -23,6 +23,9 @@ export function SwimlaneTab({ routing, zp, globalLookups, wcSchedule }) {
   return (
     <div>
       <DatePicker dates={dates} selected={date} onChange={setDate} />
+      <div style={{ fontSize: 11, color: T.text3, marginBottom: 6 }}>
+        Prognoza popytu wg terminów ZP (nie plan) — wąskie gardła planu: zakładka Wąskie gardła/Heatmapa planu
+      </div>
       <div style={{ ...s.card, padding: 0, overflowX: "auto" }}>
         <svg width="100%" viewBox={`0 0 ${svgW} ${svgH}`} style={{ display: "block" }}>
           {allWC.map((w, wi) => {
