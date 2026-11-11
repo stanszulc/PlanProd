@@ -21,7 +21,6 @@ import uvicorn
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, ConfigDict, Field, field_validator
-from ortools.sat.python import cp_model
 from cpsat_tardiness import solve_tardiness
 
 log = logging.getLogger('planprod.server')
@@ -46,8 +45,6 @@ app.add_middleware(
 )
 
 # ── STAŁE ────────────────────────────────────────────────────────────────────
-SLOT_MIN  = 15
-S_PER_DAY = 24 * 60 // SLOT_MIN  # 96
 # Domyślna dostępność (h) dnia roboczego bez grafiku — zgodna z frontendową WORK_DAY_H = 16
 # (frontend/src/constants/schedule.js); delayDays = delayH / DEFAULT_H liczy "dni robocze".
 DEFAULT_H = 16
@@ -99,188 +96,6 @@ def get_avail(wc, ds, wc_sched):
         idx = datetime.strptime(ds, '%Y-%m-%d').weekday()
         return float(sc[idx]) if idx < len(sc) else 0.0
     return DEFAULT_H
-
-def h2s(h):
-    if h <= 0: return 0
-    return max(1, math.ceil(h * 60 / SLOT_MIN))
-
-def slot_to_dt(slot, plan_start):
-    return plan_start + timedelta(days=slot // S_PER_DAY, minutes=(slot % S_PER_DAY) * SLOT_MIN)
-
-# ── CP-SAT ───────────────────────────────────────────────────────────────────
-def solve(zp_list, routing, wc_sched, plan_start, cfg):
-    horizon    = min(cfg.get('horizonDays', 14) + 60, 120)
-    vip_buf    = cfg.get('vipBufferDays', 2)
-    time_limit = cfg.get('cpSatTimeLimitSeconds', 30)
-    total_slots = horizon * S_PER_DAY
-
-    # Zbierz WC
-    wc_set = set()
-    for zp in zp_list:
-        for op in routing.get(zp.get('product', ''), []):
-            wc_set.add(str(op['workcenter']))
-
-    max_due = max((zp.get('due_date','') for zp in zp_list), default='')
-    print(f"ZP: {len(zp_list)}, WC: {len(wc_set)}, horyzont: {horizon}d, max_due: {max_due}", file=sys.stderr)
-
-    # Ogranicz do ZP w horyzoncie — tak samo jak JS scheduler
-    horizon_end = plan_start + timedelta(days=horizon)
-    zp_list_filtered = [
-        zp for zp in zp_list
-        if datetime.strptime(zp['due_date'], '%Y-%m-%d') <= horizon_end
-    ]
-    print(f"ZP po filtrze horyzontu: {len(zp_list_filtered)}", file=sys.stderr)
-
-    # Dla dużych instancji — ogranicz do max 500 ZP (najpiniejsze wg due_date)
-    if len(zp_list_filtered) > 500:
-        zp_list_filtered = sorted(zp_list_filtered, key=lambda z: z.get('due_date',''))[:500]
-        print(f"Ograniczono do 500 najpiniejszych ZP dla CP-SAT", file=sys.stderr)
-
-    # Oblicz potrzebny horyzont z max due_date
-    if max_due:
-        try:
-            max_due_dt = datetime.strptime(max_due, '%Y-%m-%d')
-            needed = (max_due_dt - plan_start).days + 14
-            if needed > horizon:
-                horizon = min(needed, 180)
-                total_slots = horizon * S_PER_DAY
-                print(f"Rozszerzono horyzont do {horizon}d", file=sys.stderr)
-        except:
-            pass
-
-    # Okna dostępności
-    wc_windows = {}
-    for wc in wc_set:
-        wins = []
-        for d in range(horizon):
-            ds = date_str(plan_start + timedelta(days=d))
-            ns = h2s(get_avail(wc, ds, wc_sched))
-            if ns > 0:
-                gs = d * S_PER_DAY
-                wins.append((gs, gs + ns))
-        wc_windows[wc] = wins
-
-    model  = cp_model.CpModel()
-    solver = cp_model.CpSolver()
-    solver.parameters.max_time_in_seconds = time_limit
-    solver.parameters.num_search_workers  = 4
-
-    wc_ivals  = {wc: [] for wc in wc_set}
-    zp_tasks  = []
-    tard_vars = []
-
-    for zp in zp_list_filtered:
-        ops = sorted(routing.get(zp.get('product', ''), []), key=lambda o: o.get('sequence', 999))
-        task_ops = []
-        prev_end = None
-
-        try:
-            due_dt = datetime.strptime(zp['due_date'], '%Y-%m-%d')
-            buf    = vip_buf if zp.get('priority', 0) == 1 else 0
-            due_s  = max(0, (due_dt - plan_start).days - buf) * S_PER_DAY + S_PER_DAY - 1
-        except:
-            due_s = total_slots
-
-        for op in ops:
-            wc    = str(op['workcenter'])
-            vol   = zp.get('volume', 1)
-            ct    = op.get('ct_min', 0)
-            dur_h = vol * ct / 60 if ct > 0 else op.get('_durH', 0)
-            dur_s = h2s(dur_h)
-            if dur_s == 0 or wc not in wc_set:
-                continue
-
-            s  = model.new_int_var(0, total_slots,         f's_{zp["zp_id"]}_{op["sequence"]}')
-            e  = model.new_int_var(0, total_slots + dur_s,  f'e_{zp["zp_id"]}_{op["sequence"]}')
-            iv = model.new_interval_var(s, dur_s, e,        f'iv_{zp["zp_id"]}_{op["sequence"]}')
-
-            if prev_end is not None:
-                model.add(s >= prev_end)
-            # Brak twardego constraintu dostępności — CP-SAT sam znajdzie sloty
-            # wins = wc_windows.get(wc, [])
-
-            wc_ivals[wc].append(iv)
-            task_ops.append((op, s, e, dur_s, dur_h))
-            prev_end = e
-
-        if not task_ops:
-            continue
-
-        tard = model.new_int_var(0, total_slots, f'tard_{zp["zp_id"]}')
-        # tard >= last_e - due_s  (tard >= 0 już z definicji)
-        model.add(tard >= task_ops[-1][2] - due_s)
-        zp_tasks.append((zp, task_ops, due_s))
-        tard_vars.append(tard)
-
-    for wc, ivals in wc_ivals.items():
-        if ivals:
-            model.add_no_overlap(ivals)
-
-    model.minimize(sum(tard_vars))
-    status = solver.solve(model)
-
-    status_name = {
-        cp_model.OPTIMAL:    'OPTIMAL',
-        cp_model.FEASIBLE:   'FEASIBLE',
-        cp_model.INFEASIBLE: 'INFEASIBLE',
-        cp_model.UNKNOWN:    'UNKNOWN',
-    }.get(status, 'UNKNOWN')
-
-    if status not in (cp_model.OPTIMAL, cp_model.FEASIBLE):
-        return None, status_name, solver.wall_time
-
-    # Buduj wyniki
-    fwd_zp    = []
-    zp_status = []
-
-    for zp, task_ops, due_s in zp_tasks:
-        due_dt_full = datetime.strptime(zp['due_date'], '%Y-%m-%d').replace(hour=23, minute=59, second=59)
-        seq = 0
-        last_end_dt = None
-
-        for op, s_var, e_var, dur_s, dur_h in task_ops:
-            seq += 1
-            start_dt = slot_to_dt(solver.value(s_var), plan_start)
-            end_dt   = slot_to_dt(solver.value(e_var),   plan_start)
-            last_end_dt = end_dt
-            fwd_zp.append({
-                'zp_id':      f"{zp['zp_id']}/{str(seq).zfill(3)}",
-                'parent_zp':  zp['zp_id'],
-                'zs_id':      zp.get('zs_id', ''),
-                'klient':     zp.get('klient', ''),
-                'product':    zp.get('product', ''),
-                'workcenter': str(op['workcenter']),
-                'operation':  op.get('operation', op.get('machine_name', '')),
-                'sequence':   op.get('sequence', 0),
-                'volume':     zp.get('volume', 1),
-                'durH':       dur_h,
-                'start_dt':   start_dt.isoformat(),
-                'end_dt':     end_dt.isoformat(),
-                'segments':   [{'segStart': start_dt.isoformat(), 'segEnd': end_dt.isoformat(), 'durH': dur_h}],
-                'due_date':   zp['due_date'],
-                'priority':   zp.get('priority', 0),
-                'realEnd':    end_dt.isoformat(),
-            })
-
-        if last_end_dt is None:
-            continue
-
-        delay_h = max(0, (last_end_dt - due_dt_full).total_seconds() / 3600)
-        zp_status.append({
-            'zp_id':     zp['zp_id'],
-            'zs_id':     zp.get('zs_id', ''),
-            'klient':    zp.get('klient', ''),
-            'product':   zp.get('product', ''),
-            'due_date':  zp['due_date'],
-            'priority':  zp.get('priority', 0),
-            'realEnd':   last_end_dt.isoformat(),
-            'delayH':    delay_h,
-            'delayDays': round(delay_h / DEFAULT_H, 1),
-            'late':      delay_h > 0,
-            'toc': {'zone': 'black' if delay_h > 0 else 'green', 'label': 'SPÓŹNIONE' if delay_h > 0 else 'OK', 'consumed': 1.0 if delay_h > 0 else 0.0},
-        })
-
-    return {'fwdZP': fwd_zp, 'zpStatus': zp_status, 'cpStatus': status_name}, status_name, solver.wall_time
 
 # ── MODELE WEJŚCIA ───────────────────────────────────────────────────────────
 Num = Union[int, float]

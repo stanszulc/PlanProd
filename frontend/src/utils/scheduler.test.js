@@ -1,5 +1,5 @@
 import { describe, test, expect } from 'vitest';
-import { getAvail, prevDayEnd, buildWcSchedule } from './scheduler.js';
+import { getAvail, buildWcSchedule } from './scheduler.js';
 
 describe('getAvail — workcenter missing entirely from wcSchedule', () => {
   test('treats Saturday as closed (0h), matching scheduler.worker.js and the backend', () => {
@@ -10,16 +10,6 @@ describe('getAvail — workcenter missing entirely from wcSchedule', () => {
   test('still grants the default availability on a weekday', () => {
     const monday = new Date('2026-08-17T12:00:00');
     expect(getAvail('WC_UNKNOWN', monday, {})).toBe(16);
-  });
-});
-
-describe('prevDayEnd — fractional shift hours', () => {
-  test('preserves a half-hour shift (7.5h) instead of truncating to whole hours', () => {
-    const dt = new Date('2026-08-18T10:00:00'); // Tuesday
-    const result = prevDayEnd(dt, 7.5);
-    expect(result.getDate()).toBe(17);
-    expect(result.getHours()).toBe(7);
-    expect(result.getMinutes()).toBe(30);
   });
 });
 

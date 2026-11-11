@@ -11,7 +11,6 @@ import { WORK_DAY_H } from '../constants/schedule.js';
 // [ZMIANA] Magic numbers wyciągnięte do named constants — czytelność + łatwa zmiana
 const MS_PER_HOUR   = 3_600_000;
 const DEFAULT_AVAIL = 16;        // h/dzień gdy brak grafiku
-const DEFAULT_CAP   = 8;         // h/dzień fallback capacity
 const SAFETY_LIMIT  = 10_000;    // max iteracji pętli while (zabezpieczenie)
 const EPSILON       = 0.0001;    // próg "praktycznie zero godzin"
 const TOC_YELLOW    = 0.33;
@@ -38,58 +37,11 @@ function jsDay2idx(jsDay) {
   return jsDay === 0 ? 6 : jsDay - 1;
 }
 
-// [ZMIANA] nextDayStart / prevDayEnd wyciągnięte z duplikujących się bloków
-// w backScheduleOp i forwardScheduleOp — DRY
 function nextDayStart(dt) {
   const d = new Date(dt);
   d.setDate(d.getDate() + 1);
   d.setHours(0, 0, 0, 0);
   return d;
-}
-
-export function prevDayEnd(dt, avail) {
-  const d = new Date(dt);
-  d.setDate(d.getDate() - 1);
-  if (avail > 0) {
-    const h = Math.floor(avail);
-    const m = Math.round((avail - h) * 60);
-    d.setHours(h, m, 0, 0);
-  } else {
-    d.setHours(23, 59, 0, 0);
-  }
-  return d;
-}
-
-
-// ─── HELPER: BUDOWANIE SUB-ZP ─────────────────────────────────────────────────
-// [ZMIANA] IIFE do generowania zp_id powtarzało się identycznie w backSchedule
-// i forwardSchedule (linia 238 i 380 oryginału) → wyciągnięte do funkcji
-function nextSubId(counter, parentId) {
-  counter[parentId] = (counter[parentId] || 0) + 1;
-  return `${parentId}/${String(counter[parentId]).padStart(3,'0')}`;
-}
-
-// [ZMIANA] Tworzenie obiektu sub-ZP było zduplikowane w obu schedulerach
-// z drobnymi różnicami → jeden builder z opcjonalnymi polami
-function buildSubOp(zp, op, { zp_id, start_dt, end_dt, segments, durH }) {
-  return {
-    zp_id,
-    parent_zp:  zp.zp_id,
-    zs_id:      zp.zs_id  || '',
-    klient:     zp.klient || '',
-    sub_id:     `${zp.zp_id}/${String(op.sequence).padStart(3,'0')}`,
-    product:    zp.product,
-    workcenter: op.workcenter,
-    operation:  op.operation,
-    sequence:   op.sequence,
-    volume:     zp.volume,
-    durH,
-    start_dt,
-    end_dt,
-    segments,
-    due_date:   zp.due_date,
-    priority:   zp.priority,
-  };
 }
 
 
@@ -115,92 +67,6 @@ export function safeSplitCSV(line, sep) {
   return result.map(v => v.replace(/^"|"$/g, ''));
 }
 
-// [ZMIANA] parseRouting / parseZP / parseZS miały zduplikowany boilerplate
-// (BOM strip, split lines, detect sep, map headers) → wyciągnięte do parseCsv()
-function parseCsv(text) {
-  const clean   = text.replace(/^\uFEFF/, '');
-  const lines   = clean.trim().split('\n').map(l => l.trim()).filter(Boolean);
-  if (lines.length < 2) return null;
-  const sep     = lines[0].includes(';') ? ';' : ',';
-  const headers = safeSplitCSV(lines[0], sep).map(h => h.toLowerCase());
-  const rows    = lines.slice(1).map(line => {
-    const vals = safeSplitCSV(line, sep);
-    const r    = {};
-    headers.forEach((h, i) => { r[h] = vals[i] || ''; });
-    return r;
-  });
-  return rows;
-}
-
-export function parseRouting(text) {
-  const rows = parseCsv(text);
-  if (!rows) return [];
-
-  return rows.map(r => {
-    const ct  = Math.max(0, parseFloat(r.ct_min || r.ct || 0));
-    const cap = parseFloat(r.capacity_h || r.cap || r.capacity || DEFAULT_CAP);
-    return {
-      product:      r.product    || '',
-      operation:    r.operation  || '',
-      workcenter:   (r.workcenter || r.wc || '').toUpperCase(),
-      ct_min:       ct,
-      sequence:     parseInt(r.sequence || r.seq || 1),
-      predecessors: (r.predecessors || r.pred || '')
-                      .split(/[,|]/)
-                      .map(s => parseInt(s.trim()))
-                      .filter(n => !isNaN(n)),
-      capacity_h:   cap <= 0 ? DEFAULT_CAP : cap,
-    };
-  }).filter(r => r.product && r.workcenter && r.ct_min > 0);
-}
-
-export function parseZP(text) {
-  const rows = parseCsv(text);
-  if (!rows) return [];
-
-  return rows.map(r => ({
-    zp_id:    r.zp_id || r.zp || r.id || '',
-    product:  r.product || '',
-    volume:   Math.max(0, parseFloat(r.volume || r.vol || r.qty || 0)),
-    due_date: r.due_date || r.due || r.data || '',
-    priority: parseInt(r.priority || r.prio || 1),
-  })).filter(r => r.product && r.volume > 0 && r.due_date);
-}
-
-export function parseZS(text) {
-  const rows = parseCsv(text);
-  if (!rows) return [];
-
-  return rows.map(r => ({
-    zs_id:    r.zs_id || r.zs || '',
-    pozycja:  parseInt(r.pozycja || r.poz || 1),
-    klient:   r.klient || r.client || r.customer || '',
-    product:  r.product || '',
-    volume:   Math.max(0, parseFloat(r.volume || r.vol || 0)),
-    due_date: r.due_date || r.due || '',
-    priority: parseInt(r.priority || r.prio || 1),
-  })).filter(r => r.product && r.volume > 0 && r.due_date);
-}
-
-// [ZMIANA] zsToZP — bez zmian merytorycznych, tylko wyrównanie stylu
-export function zsToZP(zsList) {
-  return zsList.map(zs => {
-    const zsNum  = (zs.zs_id.replace(/[^0-9]/g, '') || '001').padStart(3, '0');
-    const pozNum = String(zs.pozycja || 1).padStart(2, '0');
-    return {
-      zp_id:    `ZP-${zsNum}/${pozNum}`,
-      zs_id:    zs.zs_id,
-      pozycja:  zs.pozycja,
-      klient:   zs.klient,
-      product:  zs.product,
-      volume:   zs.volume,
-      due_date: zs.due_date,
-      priority: zs.priority,
-    };
-  });
-}
-
-
 // ─── DOSTĘPNOŚĆ GNIAZD ────────────────────────────────────────────────────────
 
 // [ZMIANA] getAvail — logika identyczna, ale:
@@ -223,109 +89,6 @@ export function getAvail(wc, dt, wcSchedule) {
   // Stary format: tablica [pon..nd]
   const idx = jsDay2idx(jsDay);
   return sched[idx] ?? 0;
-}
-
-
-// ─── BACK-SCHEDULE ────────────────────────────────────────────────────────────
-
-// [ZMIANA] backScheduleOp — logika bez zmian, ale:
-// 1. Wyciągnięto nextDayStart / prevDayEnd (DRY)
-// 2. Usunięto zbędne `new Date(cursor)` gdzie cursor był już właśnie skopiowany
-// 3. SAFETY_LIMIT i EPSILON z named constants zamiast magic numbers
-export function backScheduleOp(endDt, hoursNeeded, wc, wcSchedule) {
-  const segments = [];
-  let cursor     = new Date(endDt);
-  let remaining  = hoursNeeded;
-  let safety     = 0;
-
-  while (remaining > EPSILON && safety++ < SAFETY_LIMIT) {
-    const avail = getAvail(wc, cursor, wcSchedule);
-
-    if (avail === 0) {
-      cursor = prevDayEnd(cursor, 0);
-      continue;
-    }
-
-    const curH       = cursor.getHours() + cursor.getMinutes() / 60;
-    const availToday = Math.min(curH, avail);
-
-    if (availToday <= EPSILON) {
-      const prevAvail = getAvail(wc, prevDayEnd(cursor, 0), wcSchedule);
-      cursor = prevDayEnd(cursor, prevAvail);
-      continue;
-    }
-
-    const take      = Math.min(remaining, availToday);
-    remaining      -= take;
-    const startH    = curH - take;
-    const segEndDt  = new Date(cursor);
-    const segStart  = new Date(cursor);
-    segStart.setHours(Math.floor(startH), Math.round((startH % 1) * 60), 0, 0);
-
-    segments.unshift({ segStart, segEnd: segEndDt, durH: take });
-
-    if (remaining > EPSILON) {
-      const prevAvail = getAvail(wc, segStart, wcSchedule);
-      cursor = prevDayEnd(segStart, prevAvail);
-    } else {
-      cursor = segStart;
-    }
-  }
-
-  return { startDt: cursor, segments };
-}
-
-// [ZMIANA] backSchedule:
-// 1. BUG FIX: sub_id: result[result.length] → zawsze undefined (off-by-one).
-//    Naprawiono przez buildSubOp który używa op.sequence
-// 2. Wyciągnięto nextSubId i buildSubOp (DRY z forwardSchedule)
-// 3. forEach → for...of dla spójności z forwardSchedule
-export function backSchedule(zpList, routingByProduct, wcSchedule) {
-  const result       = [];
-  const zpOpCounter  = {};
-
-  for (const zp of zpList) {
-    const ops = (routingByProduct[zp._routingKey || zp.product] || [])
-      .slice()
-      .sort((a, b) => b.sequence - a.sequence);
-    if (!ops.length) continue;
-
-    let cursor   = new Date(zp.due_date + 'T00:00:00');
-    const avail0 = getAvail(ops[0].workcenter, cursor, wcSchedule) || DEFAULT_AVAIL;
-    cursor.setHours(avail0, 0, 0, 0);
-
-    const doneStarts = {};
-
-    for (const op of ops) {
-      const durH = op.ct_min > 0 ? zp.volume * op.ct_min / 60 : (op._durH ?? 0);
-      let endDt  = new Date(cursor);
-
-      if (op.predecessors?.length > 0) {
-        const successorStarts = ops
-          .filter(o => o.predecessors?.includes(op.sequence))
-          .map(o => doneStarts[o.sequence])
-          .filter(Boolean)
-          .map(d => new Date(d).getTime());
-        if (successorStarts.length > 0)
-          endDt = new Date(Math.min(...successorStarts));
-      }
-
-      const { startDt, segments } = backScheduleOp(endDt, durH, op.workcenter, wcSchedule);
-      doneStarts[op.sequence] = startDt;
-
-      result.push(buildSubOp(zp, op, {
-        zp_id:    nextSubId(zpOpCounter, zp.zp_id),
-        start_dt: startDt,
-        end_dt:   endDt,
-        segments,
-        durH,
-      }));
-
-      cursor = new Date(startDt);
-    }
-  }
-
-  return result.sort((a, b) => a.start_dt - b.start_dt);
 }
 
 
@@ -398,69 +161,6 @@ export function forwardScheduleOp(fromDt, hoursNeeded, wc, wcSchedule, occupancy
   };
 }
 
-// [ZMIANA] forwardSchedule:
-// 1. Wyciągnięto nextSubId i buildSubOp (DRY z backSchedule)
-// 2. forEach → for...of
-// 3. Obliczenie delayH/delayDays wyciągnięte do calcDelay() (reused w hybridzie)
-export function forwardSchedule(zpList, routingByProduct, wcSchedule, planStart) {
-  const occupancy   = {};
-  const result      = [];
-  const zpOpCounter = {};
-
-  const sorted = [...zpList].sort((a, b) =>
-    a.priority - b.priority || a.due_date.localeCompare(b.due_date)
-  );
-
-  for (const zp of sorted) {
-    const ops = (routingByProduct[zp._routingKey || zp.product] || [])
-      .slice()
-      .sort((a, b) => a.sequence - b.sequence);
-    if (!ops.length) continue;
-
-    const doneEnds = {};
-    const subOps   = [];
-
-    for (const op of ops) {
-      const durH = op.ct_min > 0 ? zp.volume * op.ct_min / 60 : (op._durH ?? 0);
-      let cursor  = new Date(planStart);
-
-      if (op.predecessors?.length > 0) {
-        for (const seq of op.predecessors) {
-          if (doneEnds[seq] && doneEnds[seq] > cursor)
-            cursor = new Date(doneEnds[seq]);
-        }
-      } else if (subOps.length > 0) {
-        const prevEnd = subOps[subOps.length-1].end_dt;
-        if (prevEnd && new Date(prevEnd) > cursor)
-          cursor = new Date(prevEnd);
-      }
-
-      const { startDt, endDt, segments } = forwardScheduleOp(
-        cursor, durH, op.workcenter, wcSchedule, occupancy
-      );
-      doneEnds[op.sequence] = endDt;
-
-      subOps.push(buildSubOp(zp, op, {
-        zp_id:    nextSubId(zpOpCounter, zp.zp_id),
-        start_dt: startDt,
-        end_dt:   endDt,
-        segments,
-        durH,
-      }));
-
-      cursor = new Date(endDt);
-    }
-
-    const realEnd = subOps.length ? subOps[subOps.length-1].end_dt : new Date(planStart);
-    const { delayH, delayDays } = calcDelay(realEnd, zp.due_date);
-
-    result.push(...subOps.map(s => ({ ...s, realEnd, delayH, delayDays })));
-  }
-
-  return result;
-}
-
-
 // ─── DELAY HELPER ─────────────────────────────────────────────────────────────
 // [ZMIANA] Obliczenie opóźnienia było zduplikowane w forwardSchedule i hybridzie
 // → wyciągnięte do jednej funkcji
@@ -524,40 +224,6 @@ export function computeLoads(routingByProduct, zpList, wcSchedule, date) {
     w.util = w.cap > 0 ? w.load / w.cap : 999;
   }
   return wcMap;
-}
-
-
-// ─── BILANS BRYGAD ────────────────────────────────────────────────────────────
-// [NOWE] Podejście 3: dostępność brygady vs suma obciążeń jej maszyn per dzień
-// brigadeToWC:  { 'Brygada_A': ['M1','M2'], 'Brygada_B': ['M3'] }
-// brigadeAvail: { 'Brygada_A': { '2026-06-01': 8, ... }, ... }
-// scheduledOps: wynik forwardSchedule() lub backSchedule()
-// days:         ['2026-06-01', '2026-06-02', ...]
-export function calcBrigadeBalance(brigadeToWC, brigadeAvail, scheduledOps, days) {
-  const result = {};
-
-  for (const [brigade, wcs] of Object.entries(brigadeToWC)) {
-    const wcSet = new Set(wcs); // O(1) lookup zamiast includes()
-    result[brigade] = {};
-
-    for (const day of days) {
-      const available = brigadeAvail[brigade]?.[day] ?? 0;
-      const totalLoad = scheduledOps
-        .filter(op => wcSet.has(op.workcenter))
-        .flatMap(op => op.segments || [])
-        .filter(seg => localDateStr(seg.segStart) === day)
-        .reduce((sum, seg) => sum + seg.durH, 0);
-
-      const delta = available - totalLoad;
-      result[brigade][day] = {
-        available,
-        totalLoad: +totalLoad.toFixed(2),
-        delta:     +delta.toFixed(2),
-        overloaded: delta < 0,
-      };
-    }
-  }
-  return result;
 }
 
 
