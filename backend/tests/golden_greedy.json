@@ -1,0 +1,1114 @@
+{
+ "greedy": [
+  [
+   {
+    "zp_id": "Z0/001",
+    "parent_zp": "Z0",
+    "zs_id": "",
+    "klient": "",
+    "product": "PA",
+    "workcenter": "20001",
+    "operation": "",
+    "sequence": 1,
+    "volume": 10,
+    "durH": 1.0,
+    "start_dt": "2026-08-17T00:00:00",
+    "end_dt": "2026-08-17T01:00:00",
+    "segments": [
+     {
+      "segStart": "2026-08-17T00:00:00",
+      "segEnd": "2026-08-17T01:00:00",
+      "durH": 1.0
+     }
+    ],
+    "due_date": "2026-08-18",
+    "priority": 1,
+    "realEnd": "2026-08-17T06:00:00"
+   },
+   {
+    "zp_id": "Z0/002",
+    "parent_zp": "Z0",
+    "zs_id": "",
+    "klient": "",
+    "product": "PA",
+    "workcenter": "20002",
+    "operation": "",
+    "sequence": 2,
+    "volume": 10,
+    "durH": 5,
+    "start_dt": "2026-08-17T01:00:00",
+    "end_dt": "2026-08-17T06:00:00",
+    "segments": [
+     {
+      "segStart": "2026-08-17T01:00:00",
+      "segEnd": "2026-08-17T06:00:00",
+      "durH": 5
+     }
+    ],
+    "due_date": "2026-08-18",
+    "priority": 1,
+    "realEnd": "2026-08-17T06:00:00"
+   },
+   {
+    "zp_id": "Z5/001",
+    "parent_zp": "Z5",
+    "zs_id": "",
+    "klient": "",
+    "product": "PB",
+    "workcenter": "20002",
+    "operation": "",
+    "sequence": 1,
+    "volume": 45,
+    "durH": 6.75,
+    "start_dt": "2026-08-17T00:00:00",
+    "end_dt": "2026-08-18T03:45:00",
+    "segments": [
+     {
+      "segStart": "2026-08-17T00:00:00",
+      "segEnd": "2026-08-17T01:00:00",
+      "durH": 1.0
+     },
+     {
+      "segStart": "2026-08-17T06:00:00",
+      "segEnd": "2026-08-17T08:00:00",
+      "durH": 2.0
+     },
+     {
+      "segStart": "2026-08-18T00:00:00",
+      "segEnd": "2026-08-18T03:45:00",
+      "durH": 3.75
+     }
+    ],
+    "due_date": "2026-08-18",
+    "priority": 2,
+    "realEnd": "2026-08-18T06:45:00"
+   },
+   {
+    "zp_id": "Z5/002",
+    "parent_zp": "Z5",
+    "zs_id": "",
+    "klient": "",
+    "product": "PB",
+    "workcenter": "20003",
+    "operation": "",
+    "sequence": 2,
+    "volume": 45,
+    "durH": 3.0,
+    "start_dt": "2026-08-18T03:45:00",
+    "end_dt": "2026-08-18T06:45:00",
+    "segments": [
+     {
+      "segStart": "2026-08-18T03:45:00",
+      "segEnd": "2026-08-18T06:45:00",
+      "durH": 3.0
+     }
+    ],
+    "due_date": "2026-08-18",
+    "priority": 2,
+    "realEnd": "2026-08-18T06:45:00"
+   },
+   {
+    "zp_id": "Z6/001",
+    "parent_zp": "Z6",
+    "zs_id": "",
+    "klient": "",
+    "product": "PA",
+    "workcenter": "20001",
+    "operation": "",
+    "sequence": 1,
+    "volume": 52,
+    "durH": 5.2,
+    "start_dt": "2026-08-17T01:00:00",
+    "end_dt": "2026-08-17T06:12:00",
+    "segments": [
+     {
+      "segStart": "2026-08-17T01:00:00",
+      "segEnd": "2026-08-17T06:12:00",
+      "durH": 5.2
+     }
+    ],
+    "due_date": "2026-08-19",
+    "priority": 1,
+    "realEnd": "2026-08-19T00:45:00"
+   },
+   {
+    "zp_id": "Z6/002",
+    "parent_zp": "Z6",
+    "zs_id": "",
+    "klient": "",
+    "product": "PA",
+    "workcenter": "20002",
+    "operation": "",
+    "sequence": 2,
+    "volume": 52,
+    "durH": 5,
+    "start_dt": "2026-08-18T03:45:00",
+    "end_dt": "2026-08-19T00:45:00",
+    "segments": [
+     {
+      "segStart": "2026-08-18T03:45:00",
+      "segEnd": "2026-08-18T08:00:00",
+      "durH": 4.25
+     },
+     {
+      "segStart": "2026-08-19T00:00:00",
+      "segEnd": "2026-08-19T00:45:00",
+      "durH": 0.75
+     }
+    ],
+    "due_date": "2026-08-19",
+    "priority": 1,
+    "realEnd": "2026-08-19T00:45:00"
+   },
+   {
+    "zp_id": "Z1/001",
+    "parent_zp": "Z1",
+    "zs_id": "",
+    "klient": "",
+    "product": "PB",
+    "workcenter": "20002",
+    "operation": "",
+    "sequence": 1,
+    "volume": 17,
+    "durH": 2.55,
+    "start_dt": "2026-08-19T00:45:00",
+    "end_dt": "2026-08-19T03:18:00",
+    "segments": [
+     {
+      "segStart": "2026-08-19T00:45:00",
+      "segEnd": "2026-08-19T03:18:00",
+      "durH": 2.55
+     }
+    ],
+    "due_date": "2026-08-19",
+    "priority": 2,
+    "realEnd": "2026-08-19T04:26:00"
+   },
+   {
+    "zp_id": "Z1/002",
+    "parent_zp": "Z1",
+    "zs_id": "",
+    "klient": "",
+    "product": "PB",
+    "workcenter": "20003",
+    "operation": "",
+    "sequence": 2,
+    "volume": 17,
+    "durH": 1.1333333333333333,
+    "start_dt": "2026-08-19T03:18:00",
+    "end_dt": "2026-08-19T04:26:00",
+    "segments": [
+     {
+      "segStart": "2026-08-19T03:18:00",
+      "segEnd": "2026-08-19T04:26:00",
+      "durH": 1.1333333333333333
+     }
+    ],
+    "due_date": "2026-08-19",
+    "priority": 2,
+    "realEnd": "2026-08-19T04:26:00"
+   },
+   {
+    "zp_id": "Z2/001",
+    "parent_zp": "Z2",
+    "zs_id": "",
+    "klient": "",
+    "product": "PA",
+    "workcenter": "20001",
+    "operation": "",
+    "sequence": 1,
+    "volume": 24,
+    "durH": 2.4,
+    "start_dt": "2026-08-17T06:12:00",
+    "end_dt": "2026-08-17T08:36:00",
+    "segments": [
+     {
+      "segStart": "2026-08-17T06:12:00",
+      "segEnd": "2026-08-17T08:36:00",
+      "durH": 2.4
+     }
+    ],
+    "due_date": "2026-08-20",
+    "priority": 2,
+    "realEnd": "2026-08-20T00:18:00"
+   },
+   {
+    "zp_id": "Z2/002",
+    "parent_zp": "Z2",
+    "zs_id": "",
+    "klient": "",
+    "product": "PA",
+    "workcenter": "20002",
+    "operation": "",
+    "sequence": 2,
+    "volume": 24,
+    "durH": 5,
+    "start_dt": "2026-08-19T03:18:00",
+    "end_dt": "2026-08-20T00:18:00",
+    "segments": [
+     {
+      "segStart": "2026-08-19T03:18:00",
+      "segEnd": "2026-08-19T08:00:00",
+      "durH": 4.7
+     },
+     {
+      "segStart": "2026-08-20T00:00:00",
+      "segEnd": "2026-08-20T00:18:00",
+      "durH": 0.2999999999999998
+     }
+    ],
+    "due_date": "2026-08-20",
+    "priority": 2,
+    "realEnd": "2026-08-20T00:18:00"
+   },
+   {
+    "zp_id": "Z7/001",
+    "parent_zp": "Z7",
+    "zs_id": "",
+    "klient": "",
+    "product": "PB",
+    "workcenter": "20002",
+    "operation": "",
+    "sequence": 1,
+    "volume": 59,
+    "durH": 8.85,
+    "start_dt": "2026-08-20T00:18:00",
+    "end_dt": "2026-08-21T01:09:00",
+    "segments": [
+     {
+      "segStart": "2026-08-20T00:18:00",
+      "segEnd": "2026-08-20T08:00:00",
+      "durH": 7.7
+     },
+     {
+      "segStart": "2026-08-21T00:00:00",
+      "segEnd": "2026-08-21T01:09:00",
+      "durH": 1.1499999999999995
+     }
+    ],
+    "due_date": "2026-08-20",
+    "priority": 2,
+    "realEnd": "2026-08-21T05:05:00"
+   },
+   {
+    "zp_id": "Z7/002",
+    "parent_zp": "Z7",
+    "zs_id": "",
+    "klient": "",
+    "product": "PB",
+    "workcenter": "20003",
+    "operation": "",
+    "sequence": 2,
+    "volume": 59,
+    "durH": 3.933333333333333,
+    "start_dt": "2026-08-21T01:09:00",
+    "end_dt": "2026-08-21T05:05:00",
+    "segments": [
+     {
+      "segStart": "2026-08-21T01:09:00",
+      "segEnd": "2026-08-21T05:05:00",
+      "durH": 3.933333333333333
+     }
+    ],
+    "due_date": "2026-08-20",
+    "priority": 2,
+    "realEnd": "2026-08-21T05:05:00"
+   },
+   {
+    "zp_id": "Z3/001",
+    "parent_zp": "Z3",
+    "zs_id": "",
+    "klient": "",
+    "product": "PB",
+    "workcenter": "20002",
+    "operation": "",
+    "sequence": 1,
+    "volume": 31,
+    "durH": 4.65,
+    "start_dt": "2026-08-21T01:09:00",
+    "end_dt": "2026-08-21T05:48:00",
+    "segments": [
+     {
+      "segStart": "2026-08-21T01:09:00",
+      "segEnd": "2026-08-21T05:48:00",
+      "durH": 4.65
+     }
+    ],
+    "due_date": "2026-08-21",
+    "priority": 1,
+    "realEnd": "2026-08-21T07:52:00"
+   },
+   {
+    "zp_id": "Z3/002",
+    "parent_zp": "Z3",
+    "zs_id": "",
+    "klient": "",
+    "product": "PB",
+    "workcenter": "20003",
+    "operation": "",
+    "sequence": 2,
+    "volume": 31,
+    "durH": 2.066666666666667,
+    "start_dt": "2026-08-21T05:48:00",
+    "end_dt": "2026-08-21T07:52:00",
+    "segments": [
+     {
+      "segStart": "2026-08-21T05:48:00",
+      "segEnd": "2026-08-21T07:52:00",
+      "durH": 2.066666666666667
+     }
+    ],
+    "due_date": "2026-08-21",
+    "priority": 1,
+    "realEnd": "2026-08-21T07:52:00"
+   },
+   {
+    "zp_id": "Z4/001",
+    "parent_zp": "Z4",
+    "zs_id": "",
+    "klient": "",
+    "product": "PA",
+    "workcenter": "20001",
+    "operation": "",
+    "sequence": 1,
+    "volume": 38,
+    "durH": 3.8,
+    "start_dt": "2026-08-17T08:36:00",
+    "end_dt": "2026-08-17T12:24:00",
+    "segments": [
+     {
+      "segStart": "2026-08-17T08:36:00",
+      "segEnd": "2026-08-17T12:24:00",
+      "durH": 3.8
+     }
+    ],
+    "due_date": "2026-08-22",
+    "priority": 2,
+    "realEnd": "2026-08-22T02:48:00"
+   },
+   {
+    "zp_id": "Z4/002",
+    "parent_zp": "Z4",
+    "zs_id": "",
+    "klient": "",
+    "product": "PA",
+    "workcenter": "20002",
+    "operation": "",
+    "sequence": 2,
+    "volume": 38,
+    "durH": 5,
+    "start_dt": "2026-08-21T05:48:00",
+    "end_dt": "2026-08-22T02:48:00",
+    "segments": [
+     {
+      "segStart": "2026-08-21T05:48:00",
+      "segEnd": "2026-08-21T08:00:00",
+      "durH": 2.2
+     },
+     {
+      "segStart": "2026-08-22T00:00:00",
+      "segEnd": "2026-08-22T02:48:00",
+      "durH": 2.8
+     }
+    ],
+    "due_date": "2026-08-22",
+    "priority": 2,
+    "realEnd": "2026-08-22T02:48:00"
+   }
+  ],
+  [
+   {
+    "zp_id": "Z0",
+    "zs_id": "",
+    "klient": "",
+    "product": "PA",
+    "due_date": "2026-08-18",
+    "priority": 1,
+    "realEnd": "2026-08-17T06:00:00",
+    "delayH": 0,
+    "delayDays": 0.0,
+    "late": false,
+    "toc": {
+     "zone": "green",
+     "label": "OK",
+     "consumed": 0.0
+    }
+   },
+   {
+    "zp_id": "Z5",
+    "zs_id": "",
+    "klient": "",
+    "product": "PB",
+    "due_date": "2026-08-18",
+    "priority": 2,
+    "realEnd": "2026-08-18T06:45:00",
+    "delayH": 0,
+    "delayDays": 0.0,
+    "late": false,
+    "toc": {
+     "zone": "green",
+     "label": "OK",
+     "consumed": 0.0
+    }
+   },
+   {
+    "zp_id": "Z6",
+    "zs_id": "",
+    "klient": "",
+    "product": "PA",
+    "due_date": "2026-08-19",
+    "priority": 1,
+    "realEnd": "2026-08-19T00:45:00",
+    "delayH": 0,
+    "delayDays": 0.0,
+    "late": false,
+    "toc": {
+     "zone": "green",
+     "label": "OK",
+     "consumed": 0.0
+    }
+   },
+   {
+    "zp_id": "Z1",
+    "zs_id": "",
+    "klient": "",
+    "product": "PB",
+    "due_date": "2026-08-19",
+    "priority": 2,
+    "realEnd": "2026-08-19T04:26:00",
+    "delayH": 0,
+    "delayDays": 0.0,
+    "late": false,
+    "toc": {
+     "zone": "green",
+     "label": "OK",
+     "consumed": 0.0
+    }
+   },
+   {
+    "zp_id": "Z2",
+    "zs_id": "",
+    "klient": "",
+    "product": "PA",
+    "due_date": "2026-08-20",
+    "priority": 2,
+    "realEnd": "2026-08-20T00:18:00",
+    "delayH": 0,
+    "delayDays": 0.0,
+    "late": false,
+    "toc": {
+     "zone": "green",
+     "label": "OK",
+     "consumed": 0.0
+    }
+   },
+   {
+    "zp_id": "Z7",
+    "zs_id": "",
+    "klient": "",
+    "product": "PB",
+    "due_date": "2026-08-20",
+    "priority": 2,
+    "realEnd": "2026-08-21T05:05:00",
+    "delayH": 5.083611111111111,
+    "delayDays": 0.3,
+    "late": true,
+    "toc": {
+     "zone": "black",
+     "label": "SPÓŹNIONE",
+     "consumed": 1.0
+    }
+   },
+   {
+    "zp_id": "Z3",
+    "zs_id": "",
+    "klient": "",
+    "product": "PB",
+    "due_date": "2026-08-21",
+    "priority": 1,
+    "realEnd": "2026-08-21T07:52:00",
+    "delayH": 0,
+    "delayDays": 0.0,
+    "late": false,
+    "toc": {
+     "zone": "green",
+     "label": "OK",
+     "consumed": 0.0
+    }
+   },
+   {
+    "zp_id": "Z4",
+    "zs_id": "",
+    "klient": "",
+    "product": "PA",
+    "due_date": "2026-08-22",
+    "priority": 2,
+    "realEnd": "2026-08-22T02:48:00",
+    "delayH": 0,
+    "delayDays": 0.0,
+    "late": false,
+    "toc": {
+     "zone": "green",
+     "label": "OK",
+     "consumed": 0.0
+    }
+   }
+  ]
+ ],
+ "final": [
+  [
+   {
+    "zp_id": "Z0/001",
+    "parent_zp": "Z0",
+    "zs_id": "",
+    "klient": "",
+    "product": "PA",
+    "workcenter": "20001",
+    "operation": "",
+    "sequence": 1,
+    "volume": 10,
+    "durH": 1.0,
+    "start_dt": "2026-08-17T00:00:00",
+    "end_dt": "2026-08-17T01:00:00",
+    "segments": [
+     {
+      "segStart": "2026-08-17T00:00:00",
+      "segEnd": "2026-08-17T01:00:00",
+      "durH": 1.0
+     }
+    ],
+    "due_date": "2026-08-18",
+    "priority": 1,
+    "realEnd": "2026-08-17T06:00:00"
+   },
+   {
+    "zp_id": "Z0/002",
+    "parent_zp": "Z0",
+    "zs_id": "",
+    "klient": "",
+    "product": "PA",
+    "workcenter": "20002",
+    "operation": "",
+    "sequence": 2,
+    "volume": 10,
+    "durH": 5,
+    "start_dt": "2026-08-17T01:00:00",
+    "end_dt": "2026-08-17T06:00:00",
+    "segments": [
+     {
+      "segStart": "2026-08-17T01:00:00",
+      "segEnd": "2026-08-17T06:00:00",
+      "durH": 5
+     }
+    ],
+    "due_date": "2026-08-18",
+    "priority": 1,
+    "realEnd": "2026-08-17T06:00:00"
+   },
+   {
+    "zp_id": "Z5/001",
+    "parent_zp": "Z5",
+    "zs_id": "",
+    "klient": "",
+    "product": "PB",
+    "workcenter": "20002",
+    "operation": "",
+    "sequence": 1,
+    "volume": 45,
+    "durH": 6.75,
+    "start_dt": "2026-08-17T00:00:00",
+    "end_dt": "2026-08-18T03:45:00",
+    "segments": [
+     {
+      "segStart": "2026-08-17T00:00:00",
+      "segEnd": "2026-08-17T01:00:00",
+      "durH": 1.0
+     },
+     {
+      "segStart": "2026-08-17T06:00:00",
+      "segEnd": "2026-08-17T08:00:00",
+      "durH": 2.0
+     },
+     {
+      "segStart": "2026-08-18T00:00:00",
+      "segEnd": "2026-08-18T03:45:00",
+      "durH": 3.75
+     }
+    ],
+    "due_date": "2026-08-18",
+    "priority": 2,
+    "realEnd": "2026-08-18T06:45:00"
+   },
+   {
+    "zp_id": "Z5/002",
+    "parent_zp": "Z5",
+    "zs_id": "",
+    "klient": "",
+    "product": "PB",
+    "workcenter": "20003",
+    "operation": "",
+    "sequence": 2,
+    "volume": 45,
+    "durH": 3.0,
+    "start_dt": "2026-08-18T03:45:00",
+    "end_dt": "2026-08-18T06:45:00",
+    "segments": [
+     {
+      "segStart": "2026-08-18T03:45:00",
+      "segEnd": "2026-08-18T06:45:00",
+      "durH": 3.0
+     }
+    ],
+    "due_date": "2026-08-18",
+    "priority": 2,
+    "realEnd": "2026-08-18T06:45:00"
+   },
+   {
+    "zp_id": "Z1/001",
+    "parent_zp": "Z1",
+    "zs_id": "",
+    "klient": "",
+    "product": "PB",
+    "workcenter": "20002",
+    "operation": "",
+    "sequence": 1,
+    "volume": 17,
+    "durH": 2.55,
+    "start_dt": "2026-08-18T03:45:00",
+    "end_dt": "2026-08-18T06:18:00",
+    "segments": [
+     {
+      "segStart": "2026-08-18T03:45:00",
+      "segEnd": "2026-08-18T06:18:00",
+      "durH": 2.55
+     }
+    ],
+    "due_date": "2026-08-19",
+    "priority": 2,
+    "realEnd": "2026-08-18T07:53:00"
+   },
+   {
+    "zp_id": "Z1/002",
+    "parent_zp": "Z1",
+    "zs_id": "",
+    "klient": "",
+    "product": "PB",
+    "workcenter": "20003",
+    "operation": "",
+    "sequence": 2,
+    "volume": 17,
+    "durH": 1.1333333333333333,
+    "start_dt": "2026-08-18T06:45:00",
+    "end_dt": "2026-08-18T07:53:00",
+    "segments": [
+     {
+      "segStart": "2026-08-18T06:45:00",
+      "segEnd": "2026-08-18T07:53:00",
+      "durH": 1.1333333333333333
+     }
+    ],
+    "due_date": "2026-08-19",
+    "priority": 2,
+    "realEnd": "2026-08-18T07:53:00"
+   },
+   {
+    "zp_id": "Z6/001",
+    "parent_zp": "Z6",
+    "zs_id": "",
+    "klient": "",
+    "product": "PA",
+    "workcenter": "20001",
+    "operation": "",
+    "sequence": 1,
+    "volume": 52,
+    "durH": 5.2,
+    "start_dt": "2026-08-17T01:00:00",
+    "end_dt": "2026-08-17T06:12:00",
+    "segments": [
+     {
+      "segStart": "2026-08-17T01:00:00",
+      "segEnd": "2026-08-17T06:12:00",
+      "durH": 5.2
+     }
+    ],
+    "due_date": "2026-08-19",
+    "priority": 1,
+    "realEnd": "2026-08-19T03:18:00"
+   },
+   {
+    "zp_id": "Z6/002",
+    "parent_zp": "Z6",
+    "zs_id": "",
+    "klient": "",
+    "product": "PA",
+    "workcenter": "20002",
+    "operation": "",
+    "sequence": 2,
+    "volume": 52,
+    "durH": 5,
+    "start_dt": "2026-08-18T06:18:00",
+    "end_dt": "2026-08-19T03:18:00",
+    "segments": [
+     {
+      "segStart": "2026-08-18T06:18:00",
+      "segEnd": "2026-08-18T08:00:00",
+      "durH": 1.7
+     },
+     {
+      "segStart": "2026-08-19T00:00:00",
+      "segEnd": "2026-08-19T03:18:00",
+      "durH": 3.3
+     }
+    ],
+    "due_date": "2026-08-19",
+    "priority": 1,
+    "realEnd": "2026-08-19T03:18:00"
+   },
+   {
+    "zp_id": "Z2/001",
+    "parent_zp": "Z2",
+    "zs_id": "",
+    "klient": "",
+    "product": "PA",
+    "workcenter": "20001",
+    "operation": "",
+    "sequence": 1,
+    "volume": 24,
+    "durH": 2.4,
+    "start_dt": "2026-08-17T06:12:00",
+    "end_dt": "2026-08-17T08:36:00",
+    "segments": [
+     {
+      "segStart": "2026-08-17T06:12:00",
+      "segEnd": "2026-08-17T08:36:00",
+      "durH": 2.4
+     }
+    ],
+    "due_date": "2026-08-20",
+    "priority": 2,
+    "realEnd": "2026-08-20T00:18:00"
+   },
+   {
+    "zp_id": "Z2/002",
+    "parent_zp": "Z2",
+    "zs_id": "",
+    "klient": "",
+    "product": "PA",
+    "workcenter": "20002",
+    "operation": "",
+    "sequence": 2,
+    "volume": 24,
+    "durH": 5,
+    "start_dt": "2026-08-19T03:18:00",
+    "end_dt": "2026-08-20T00:18:00",
+    "segments": [
+     {
+      "segStart": "2026-08-19T03:18:00",
+      "segEnd": "2026-08-19T08:00:00",
+      "durH": 4.7
+     },
+     {
+      "segStart": "2026-08-20T00:00:00",
+      "segEnd": "2026-08-20T00:18:00",
+      "durH": 0.2999999999999998
+     }
+    ],
+    "due_date": "2026-08-20",
+    "priority": 2,
+    "realEnd": "2026-08-20T00:18:00"
+   },
+   {
+    "zp_id": "Z7/001",
+    "parent_zp": "Z7",
+    "zs_id": "",
+    "klient": "",
+    "product": "PB",
+    "workcenter": "20002",
+    "operation": "",
+    "sequence": 1,
+    "volume": 59,
+    "durH": 8.85,
+    "start_dt": "2026-08-20T00:18:00",
+    "end_dt": "2026-08-21T01:09:00",
+    "segments": [
+     {
+      "segStart": "2026-08-20T00:18:00",
+      "segEnd": "2026-08-20T08:00:00",
+      "durH": 7.7
+     },
+     {
+      "segStart": "2026-08-21T00:00:00",
+      "segEnd": "2026-08-21T01:09:00",
+      "durH": 1.1499999999999995
+     }
+    ],
+    "due_date": "2026-08-20",
+    "priority": 2,
+    "realEnd": "2026-08-21T05:05:00"
+   },
+   {
+    "zp_id": "Z7/002",
+    "parent_zp": "Z7",
+    "zs_id": "",
+    "klient": "",
+    "product": "PB",
+    "workcenter": "20003",
+    "operation": "",
+    "sequence": 2,
+    "volume": 59,
+    "durH": 3.933333333333333,
+    "start_dt": "2026-08-21T01:09:00",
+    "end_dt": "2026-08-21T05:05:00",
+    "segments": [
+     {
+      "segStart": "2026-08-21T01:09:00",
+      "segEnd": "2026-08-21T05:05:00",
+      "durH": 3.933333333333333
+     }
+    ],
+    "due_date": "2026-08-20",
+    "priority": 2,
+    "realEnd": "2026-08-21T05:05:00"
+   },
+   {
+    "zp_id": "Z3/001",
+    "parent_zp": "Z3",
+    "zs_id": "",
+    "klient": "",
+    "product": "PB",
+    "workcenter": "20002",
+    "operation": "",
+    "sequence": 1,
+    "volume": 31,
+    "durH": 4.65,
+    "start_dt": "2026-08-21T01:09:00",
+    "end_dt": "2026-08-21T05:48:00",
+    "segments": [
+     {
+      "segStart": "2026-08-21T01:09:00",
+      "segEnd": "2026-08-21T05:48:00",
+      "durH": 4.65
+     }
+    ],
+    "due_date": "2026-08-21",
+    "priority": 1,
+    "realEnd": "2026-08-21T07:52:00"
+   },
+   {
+    "zp_id": "Z3/002",
+    "parent_zp": "Z3",
+    "zs_id": "",
+    "klient": "",
+    "product": "PB",
+    "workcenter": "20003",
+    "operation": "",
+    "sequence": 2,
+    "volume": 31,
+    "durH": 2.066666666666667,
+    "start_dt": "2026-08-21T05:48:00",
+    "end_dt": "2026-08-21T07:52:00",
+    "segments": [
+     {
+      "segStart": "2026-08-21T05:48:00",
+      "segEnd": "2026-08-21T07:52:00",
+      "durH": 2.066666666666667
+     }
+    ],
+    "due_date": "2026-08-21",
+    "priority": 1,
+    "realEnd": "2026-08-21T07:52:00"
+   },
+   {
+    "zp_id": "Z4/001",
+    "parent_zp": "Z4",
+    "zs_id": "",
+    "klient": "",
+    "product": "PA",
+    "workcenter": "20001",
+    "operation": "",
+    "sequence": 1,
+    "volume": 38,
+    "durH": 3.8,
+    "start_dt": "2026-08-17T08:36:00",
+    "end_dt": "2026-08-17T12:24:00",
+    "segments": [
+     {
+      "segStart": "2026-08-17T08:36:00",
+      "segEnd": "2026-08-17T12:24:00",
+      "durH": 3.8
+     }
+    ],
+    "due_date": "2026-08-22",
+    "priority": 2,
+    "realEnd": "2026-08-22T02:48:00"
+   },
+   {
+    "zp_id": "Z4/002",
+    "parent_zp": "Z4",
+    "zs_id": "",
+    "klient": "",
+    "product": "PA",
+    "workcenter": "20002",
+    "operation": "",
+    "sequence": 2,
+    "volume": 38,
+    "durH": 5,
+    "start_dt": "2026-08-21T05:48:00",
+    "end_dt": "2026-08-22T02:48:00",
+    "segments": [
+     {
+      "segStart": "2026-08-21T05:48:00",
+      "segEnd": "2026-08-21T08:00:00",
+      "durH": 2.2
+     },
+     {
+      "segStart": "2026-08-22T00:00:00",
+      "segEnd": "2026-08-22T02:48:00",
+      "durH": 2.8
+     }
+    ],
+    "due_date": "2026-08-22",
+    "priority": 2,
+    "realEnd": "2026-08-22T02:48:00"
+   }
+  ],
+  [
+   {
+    "zp_id": "Z0",
+    "zs_id": "",
+    "klient": "",
+    "product": "PA",
+    "due_date": "2026-08-18",
+    "priority": 1,
+    "realEnd": "2026-08-17T06:00:00",
+    "delayH": 0,
+    "delayDays": 0.0,
+    "late": false,
+    "toc": {
+     "zone": "green",
+     "label": "OK",
+     "consumed": 0.0
+    }
+   },
+   {
+    "zp_id": "Z5",
+    "zs_id": "",
+    "klient": "",
+    "product": "PB",
+    "due_date": "2026-08-18",
+    "priority": 2,
+    "realEnd": "2026-08-18T06:45:00",
+    "delayH": 0,
+    "delayDays": 0.0,
+    "late": false,
+    "toc": {
+     "zone": "green",
+     "label": "OK",
+     "consumed": 0.0
+    }
+   },
+   {
+    "zp_id": "Z1",
+    "zs_id": "",
+    "klient": "",
+    "product": "PB",
+    "due_date": "2026-08-19",
+    "priority": 2,
+    "realEnd": "2026-08-18T07:53:00",
+    "delayH": 0,
+    "delayDays": 0.0,
+    "late": false,
+    "toc": {
+     "zone": "green",
+     "label": "OK",
+     "consumed": 0.0
+    }
+   },
+   {
+    "zp_id": "Z6",
+    "zs_id": "",
+    "klient": "",
+    "product": "PA",
+    "due_date": "2026-08-19",
+    "priority": 1,
+    "realEnd": "2026-08-19T03:18:00",
+    "delayH": 0,
+    "delayDays": 0.0,
+    "late": false,
+    "toc": {
+     "zone": "green",
+     "label": "OK",
+     "consumed": 0.0
+    }
+   },
+   {
+    "zp_id": "Z2",
+    "zs_id": "",
+    "klient": "",
+    "product": "PA",
+    "due_date": "2026-08-20",
+    "priority": 2,
+    "realEnd": "2026-08-20T00:18:00",
+    "delayH": 0,
+    "delayDays": 0.0,
+    "late": false,
+    "toc": {
+     "zone": "green",
+     "label": "OK",
+     "consumed": 0.0
+    }
+   },
+   {
+    "zp_id": "Z7",
+    "zs_id": "",
+    "klient": "",
+    "product": "PB",
+    "due_date": "2026-08-20",
+    "priority": 2,
+    "realEnd": "2026-08-21T05:05:00",
+    "delayH": 5.083611111111111,
+    "delayDays": 0.3,
+    "late": true,
+    "toc": {
+     "zone": "black",
+     "label": "SPÓŹNIONE",
+     "consumed": 1.0
+    }
+   },
+   {
+    "zp_id": "Z3",
+    "zs_id": "",
+    "klient": "",
+    "product": "PB",
+    "due_date": "2026-08-21",
+    "priority": 1,
+    "realEnd": "2026-08-21T07:52:00",
+    "delayH": 0,
+    "delayDays": 0.0,
+    "late": false,
+    "toc": {
+     "zone": "green",
+     "label": "OK",
+     "consumed": 0.0
+    }
+   },
+   {
+    "zp_id": "Z4",
+    "zs_id": "",
+    "klient": "",
+    "product": "PA",
+    "due_date": "2026-08-22",
+    "priority": 2,
+    "realEnd": "2026-08-22T02:48:00",
+    "delayH": 0,
+    "delayDays": 0.0,
+    "late": false,
+    "toc": {
+     "zone": "green",
+     "label": "OK",
+     "consumed": 0.0
+    }
+   }
+  ]
+ ]
+}

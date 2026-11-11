@@ -1,26 +1,46 @@
 """
 server.py — FastAPI server dla PlanProd/FlowOps optimizer
-Uruchomienie: py server.py
+Uruchomienie: py server.py   (http://localhost:8765)
 
-Endpoint: POST /optimize
+Endpointy (POST): /optimize, /optimize/greedy, /optimize/sa, /optimize/cpsat-tardiness
 Input:  { zpList, routingByProduct, wcSchedule, planStart, config }
-Output: { fwdZP, zpStatus, cpStatus, elapsed, lateCount, totalDelay, maxDelay }
+Output: { fwdZP, zpStatus, lateCount, totalDelay, maxDelay, elapsed, method, warnings, ... }
+
+Błędy: 422 (złe dane wejściowe wg modeli), 400 (niewykonalny model / dane,
+które przeszły walidację, ale solver ich nie przyjął), 500 (nieoczekiwany błąd).
+
+Greedy i SA to uproszczenia: nie obsługują puli brygadowej (gniazda 3xxxx)
+ani grafu `predecessors` (fan-out/fan-in) — wtedy odpowiedź ma ostrzeżenie w `warnings`.
+Pełny model (pula, graf) ma tylko /optimize/cpsat-tardiness.
 """
-import json, math, sys, bisect
+import logging, math, os, sys, bisect, time
 from datetime import datetime, timedelta
-from fastapi import FastAPI
-from fastapi.middleware.cors import CORSMiddleware
-from pydantic import BaseModel
-from typing import Any
+from typing import Any, Optional, Union
+
 import uvicorn
+from fastapi import FastAPI, HTTPException
+from fastapi.middleware.cors import CORSMiddleware
+from pydantic import BaseModel, ConfigDict, Field, field_validator
 from ortools.sat.python import cp_model
 from cpsat_tardiness import solve_tardiness
 
+log = logging.getLogger('planprod.server')
+
 app = FastAPI()
-print(">>> LOADED server.py v2")
+
+# ── CORS ─────────────────────────────────────────────────────────────────────
+DEFAULT_CORS_PORTS = (5173, 5174, 3000)
+
+def cors_origins():
+    """Lista dozwolonych originów: PLANPROD_CORS_ORIGINS (po przecinku) lub localhost."""
+    env = os.environ.get('PLANPROD_CORS_ORIGINS')
+    if env:
+        return [o.strip() for o in env.split(',') if o.strip()]
+    return [f'http://{h}:{p}' for h in ('localhost', '127.0.0.1') for p in DEFAULT_CORS_PORTS]
+
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["http://localhost:5173", "http://localhost:3000"],
+    allow_origins=cors_origins(),
     allow_methods=["*"],
     allow_headers=["*"],
 )
@@ -28,7 +48,38 @@ app.add_middleware(
 # ── STAŁE ────────────────────────────────────────────────────────────────────
 SLOT_MIN  = 15
 S_PER_DAY = 24 * 60 // SLOT_MIN  # 96
+# Domyślna dostępność (h) dnia roboczego bez grafiku — zgodna z frontendową WORK_DAY_H = 16
+# (frontend/src/constants/schedule.js); delayDays = delayH / DEFAULT_H liczy "dni robocze".
 DEFAULT_H = 16
+
+# Górne granice parametrów od klienta (ochrona przed zablokowaniem serwera)
+MAX_TIME_LIMIT_S  = 120   # s — limit czasu solverów
+MAX_HORIZON_DAYS  = 120   # dni — horizonDays
+MAX_JOBS_LIMIT    = 8000  # cpSatMaxJobs (tyle samo co MAX_JOBS w cpsat_tardiness)
+_CFG_LIMITS = {           # klucz config -> (min, max)
+    'cpSatTimeLimitSeconds': (1, MAX_TIME_LIMIT_S),
+    'horizonDays':           (1, MAX_HORIZON_DAYS),
+    'cpSatMaxJobs':          (1, MAX_JOBS_LIMIT),
+    'vipBufferDays':         (0, 30),
+    'vipWeight':             (0, 1000),
+    'normalWeight':          (0, 1000),
+}
+
+def clamp_config(cfg):
+    """Kopia config z parametrami liczbowymi obciętymi do rozsądnych granic.
+    Wartość None = brak (solver użyje domyślnej). Nie-liczba -> ValueError (422)."""
+    out = dict(cfg or {})
+    for key, (lo, hi) in _CFG_LIMITS.items():
+        if key not in out:
+            continue
+        v = out[key]
+        if v is None:
+            del out[key]
+            continue
+        if isinstance(v, bool) or not isinstance(v, (int, float)) or not math.isfinite(v):
+            raise ValueError(f'config.{key} musi być liczbą (otrzymano: {v!r})')
+        out[key] = max(lo, min(hi, v))
+    return out
 
 # ── HELPERS ──────────────────────────────────────────────────────────────────
 def date_str(dt): return dt.strftime('%Y-%m-%d')
@@ -39,7 +90,11 @@ def get_avail(wc, ds, wc_sched):
         dt = datetime.strptime(ds, '%Y-%m-%d')
         return 0.0 if dt.weekday() >= 5 else DEFAULT_H
     if isinstance(sc, dict):
-        return float(sc.get(ds, 0))
+        # jak frontendowy getAvail: brak klucza daty = domyślnie (weekend 0, dzień roboczy DEFAULT_H)
+        if ds in sc:
+            return float(sc[ds])
+        dt = datetime.strptime(ds, '%Y-%m-%d')
+        return 0.0 if dt.weekday() >= 5 else DEFAULT_H
     if isinstance(sc, list):
         idx = datetime.strptime(ds, '%Y-%m-%d').weekday()
         return float(sc[idx]) if idx < len(sc) else 0.0
@@ -227,60 +282,158 @@ def solve(zp_list, routing, wc_sched, plan_start, cfg):
 
     return {'fwdZP': fwd_zp, 'zpStatus': zp_status, 'cpStatus': status_name}, status_name, solver.wall_time
 
-# ── ENDPOINT ─────────────────────────────────────────────────────────────────
+# ── MODELE WEJŚCIA ───────────────────────────────────────────────────────────
+Num = Union[int, float]
+
+def _norm_date(v):
+    if not isinstance(v, str):
+        raise ValueError('data musi być tekstem YYYY-MM-DD')
+    s = v.strip()[:10]
+    datetime.strptime(s, '%Y-%m-%d')  # ValueError -> 422
+    return s
+
+class ZPModel(BaseModel):
+    model_config = ConfigDict(extra='allow')
+    zp_id:    Union[str, int]
+    product:  str
+    volume:   Optional[Num] = 1
+    due_date: str
+    priority: Optional[int] = 0
+
+    @field_validator('due_date', mode='before')
+    @classmethod
+    def _due(cls, v): return _norm_date(v)
+
+class OpModel(BaseModel):
+    model_config = ConfigDict(extra='allow', populate_by_name=True)
+    workcenter:   Union[str, int]
+    sequence:     Optional[Num] = 0
+    ct_min:       Optional[Num] = 0
+    dur_h:        Optional[Num] = Field(None, alias='_durH')
+    predecessors: Optional[list[Any]] = None
+
 class OptimizeRequest(BaseModel):
-    zpList: list
-    routingByProduct: dict
-    wcSchedule: dict
+    zpList: list[ZPModel]
+    routingByProduct: dict[str, list[OpModel]]
+    wcSchedule: dict[str, Optional[Union[list[Any], dict[str, Any]]]]
     planStart: str
-    config: dict = {}
+    config: dict[str, Any] = {}
 
-@app.post('/optimize')
-async def optimize(req: OptimizeRequest):
+    @field_validator('planStart', mode='before')
+    @classmethod
+    def _ps(cls, v): return _norm_date(v)
+
+    @field_validator('config', mode='before')
+    @classmethod
+    def _cfg(cls, v):
+        if v is None:
+            return {}
+        if not isinstance(v, dict):
+            raise ValueError('config musi być obiektem')
+        return clamp_config(v)
+
+    def plain(self):
+        """(zp_list, routing, wc_sched, plan_start, cfg) jako zwykłe dict/list dla solverów."""
+        zps = [z.model_dump(exclude_none=True) for z in self.zpList]
+        routing = {k: [o.model_dump(exclude_none=True, by_alias=True) for o in ops]
+                   for k, ops in self.routingByProduct.items()}
+        wc = {k: v for k, v in self.wcSchedule.items() if v is not None}
+        return zps, routing, wc, datetime.strptime(self.planStart, '%Y-%m-%d'), dict(self.config)
+
+# ── OSTRZEŻENIA O UPROSZCZENIACH ─────────────────────────────────────────────
+def simplification_warnings(zp_list, routing):
+    """Ostrzeżenia dla metod bez grafu predecessors i puli brygadowej (greedy/SA)."""
+    products = {z.get('product', '') for z in zp_list}
+    fan, brig = set(), set()
+    for p in products:
+        ops = sorted(routing.get(p, []), key=lambda o: o.get('sequence', 999))
+        prev_seq = None
+        for op in ops:
+            wc = str(op['workcenter'])
+            if wc.startswith('3'):
+                brig.add(wc)
+            preds = op.get('predecessors') or []
+            expected = set() if prev_seq is None else {prev_seq}
+            if preds and set(preds) != expected:
+                fan.add(p)
+            prev_seq = op.get('sequence', 999)
+    out = []
+    if fan:
+        out.append(f'Metoda uproszczona: {len(fan)} produkt(ów) ma `predecessors` inne niż prosty łańcuch '
+                   f'(fan-out/fan-in) — operacje planowane sekwencyjnie wg `sequence`, wynik nieporównywalny 1:1 z CP-SAT.')
+    if brig:
+        out.append(f'Metoda uproszczona: gniazda brygadowe/pula ({", ".join(sorted(brig))}) '
+                   f'traktowane jak zwykłe maszyny 1:1 (bez puli) — wynik nieporównywalny 1:1 z CP-SAT.')
+    return out
+
+# ── WSPÓLNA OBSŁUGA BŁĘDÓW ───────────────────────────────────────────────────
+def _guard(label, func):
+    """Uruchamia func(); błędy -> HTTPException (z logowaniem traceback)."""
     try:
-        plan_start = datetime.strptime(req.planStart, '%Y-%m-%d')
+        return func()
+    except HTTPException:
+        raise
+    except (ValueError, KeyError, TypeError) as ex:
+        log.exception('%s: błędne dane wejściowe', label)
+        raise HTTPException(status_code=400, detail=f'Nieprawidłowe dane wejściowe ({label}): {ex!r}')
+    except Exception as ex:
+        log.exception('%s: nieoczekiwany błąd', label)
+        raise HTTPException(status_code=500, detail=f'Błąd wewnętrzny ({label}): {ex}')
+
+def _stats(status_list):
+    return (sum(1 for z in status_list if z['late']),
+            sum(z['delayH'] for z in status_list),
+            max((z['delayH'] for z in status_list), default=0))
+
+def _heuristic_response(method, req):
+    zps, routing, wc, plan_start, cfg = req.plain()
+    t0 = time.time()
+    if method == 'greedy':
+        fwd, status_list = schedule_greedy(zps, routing, wc, plan_start, cfg)
+    else:
+        time_limit = cfg.get('cpSatTimeLimitSeconds', 30)
+        fwd, status_list = _sa_run(zps, routing, wc, plan_start, cfg, time_limit)
+    late, total, mx = _stats(status_list)
+    return {'fwdZP': fwd, 'zpStatus': status_list, 'lateCount': late, 'totalDelay': total,
+            'maxDelay': mx, 'method': method, 'elapsed': round(time.time() - t0, 2),
+            'warnings': simplification_warnings(zps, routing)}
+
+def _cpsat_failure(status, hint=None):
+    detail = f'Brak rozwiązania CP-SAT: {status}.'
+    if hint:
+        detail += ' ' + hint
+    raise HTTPException(status_code=400, detail=detail)
+
+# ── API ────────────────────────────────────────────────────────────────
+# Zwykłe `def` (nie async) — FastAPI uruchamia je w puli wątków, więc długi solver
+# nie blokuje pętli zdarzeń (/health odpowiada w trakcie liczenia).
+@app.post('/optimize')
+def optimize(req: OptimizeRequest):
+    def run():
         method = req.config.get('method', 'cpsat')
-
-        if method == 'greedy':
-            fwd, status_list = schedule_greedy(req.zpList, req.routingByProduct, req.wcSchedule, plan_start, req.config)
-            late  = sum(1 for z in status_list if z['late'])
-            total = sum(z['delayH'] for z in status_list)
-            mx    = max((z['delayH'] for z in status_list), default=0)
-            return {'fwdZP': fwd, 'zpStatus': status_list, 'lateCount': late, 'totalDelay': total, 'maxDelay': mx, 'method': 'greedy', 'elapsed': 0}
-
-        if method == 'sa':
-            time_limit = req.config.get('cpSatTimeLimitSeconds', 30)
-            fwd, status_list = _sa_run(req.zpList, req.routingByProduct, req.wcSchedule, plan_start, req.config, time_limit)
-            late  = sum(1 for z in status_list if z['late'])
-            total = sum(z['delayH'] for z in status_list)
-            mx    = max((z['delayH'] for z in status_list), default=0)
-            return {'fwdZP': fwd, 'zpStatus': status_list, 'lateCount': late, 'totalDelay': total, 'maxDelay': mx, 'method': 'sa', 'elapsed': 0}
+        if method in ('greedy', 'sa'):
+            return _heuristic_response(method, req)
 
         # Domyślnie CP-SAT
-        result, status, elapsed = solve_tardiness(
-            req.zpList, req.routingByProduct, req.wcSchedule, plan_start, req.config
-        )
+        zps_in, routing, wc, plan_start, cfg = req.plain()
+        result, status, elapsed = solve_tardiness(zps_in, routing, wc, plan_start, cfg)
         if result is None:
-            return {'error': f'Brak rozwiązania: {status}', 'cpStatus': status}
+            _cpsat_failure(status)
 
         zps = result['zpStatus']
-        late_count  = sum(1 for z in zps if z['late'])
-        total_delay = sum(z['delayH'] for z in zps)
-        max_delay   = max((z['delayH'] for z in zps), default=0)
-
+        late_count, total_delay, max_delay = _stats(zps)
         return {
             **result,
+            'warnings':   list(result.get('warnings') or []),
             'elapsed':    elapsed,
             'lateCount':  late_count,
             'totalDelay': total_delay,
             'maxDelay':   max_delay,
         }
-    except Exception as ex:
-        import traceback; traceback.print_exc()
-        return {'error': str(ex)}
+    return _guard('optimize', run)
 
 @app.get('/health')
-async def health():
+def health():
     return {'status': 'ok'}
 
 
@@ -322,7 +475,7 @@ def schedule_greedy(zp_list, routing, wc_sched, plan_start, cfg, initial_order=N
             # Przesuń za zajęte sloty
             wc_slots = occ.get(wc, [])
             window_start = cursor
-            for (fs, te) in sorted(wc_slots):
+            for (fs, te) in wc_slots:  # occ trzymane posortowane (bisect.insort)
                 if fs <= window_start.timestamp() * 1000:
                     if te > window_start.timestamp() * 1000:
                         window_start = datetime.fromtimestamp(te / 1000)
@@ -335,7 +488,7 @@ def schedule_greedy(zp_list, routing, wc_sched, plan_start, cfg, initial_order=N
 
             # Znajdź koniec okna
             window_end = day_end
-            for (fs, te) in sorted(wc_slots):
+            for (fs, te) in wc_slots:
                 fs_dt = datetime.fromtimestamp(fs / 1000)
                 if fs_dt > window_start:
                     window_end = min(window_end, fs_dt)
@@ -531,6 +684,9 @@ def schedule_sa(zp_list, routing, wc_sched, plan_start, cfg, time_limit=30):
 
     # Start od EDD
     current = sorted(zp_list, key=lambda z: z.get('due_date', ''))
+    if len(current) < 2:
+        # nie ma czego zamieniać
+        return _final_schedule(current, routing, wc_sched, plan_start)
     best = current[:]
     best_late, best_total = eval_order(best)
     current_late, current_total = best_late, best_total
@@ -543,7 +699,9 @@ def schedule_sa(zp_list, routing, wc_sched, plan_start, cfg, time_limit=30):
     t0 = time.time()
     iters = 0
 
-    while T > T_min and (time.time() - t0) < time_limit:
+    # Pętla do wyczerpania time_limit; po wystygnięciu (T <= T_min) odgrzanie od najlepszego
+    # rozwiązania. Wcześniej kończy się tylko gdy nie ma już spóźnień (nic do poprawy).
+    while (time.time() - t0) < time_limit and best_late > 0:
         # Losowa zamiana dwóch ZP
         i, j = random.sample(range(len(current)), 2)
         current[i], current[j] = current[j], current[i]
@@ -561,6 +719,10 @@ def schedule_sa(zp_list, routing, wc_sched, plan_start, cfg, time_limit=30):
             current[i], current[j] = current[j], current[i]  # cofnij
 
         T *= alpha
+        if T <= T_min:
+            T = 1.0
+            current = best[:]
+            current_late, current_total = best_late, best_total
         iters += 1
 
     elapsed = time.time() - t0
@@ -609,7 +771,7 @@ def _final_schedule(order, routing, wc_sched, plan_start):
                 if c >= day_end:
                     c = (c + timedelta(days=1)).replace(hour=0, minute=0, second=0, microsecond=0)
                     continue
-                slots = sorted(occ.get(wc, []))
+                slots = occ.get(wc, [])  # posortowane (bisect.insort)
                 ws = c
                 for fs, te in slots:
                     if fs <= ws:
@@ -683,38 +845,19 @@ def _final_schedule(order, routing, wc_sched, plan_start):
 
 # ── ENDPOINTY ─────────────────────────────────────────────────────────────────
 @app.post('/optimize/greedy')
-async def optimize_greedy(req: OptimizeRequest):
-    try:
-        plan_start = datetime.strptime(req.planStart, '%Y-%m-%d')
-        fwd, status_list = schedule_greedy(req.zpList, req.routingByProduct, req.wcSchedule, plan_start, req.config)
-        late = sum(1 for z in status_list if z['late'])
-        total = sum(z['delayH'] for z in status_list)
-        mx = max((z['delayH'] for z in status_list), default=0)
-        return {'fwdZP': fwd, 'zpStatus': status_list, 'lateCount': late, 'totalDelay': total, 'maxDelay': mx, 'method': 'greedy'}
-    except Exception as ex:
-        import traceback; traceback.print_exc()
-        return {'error': str(ex)}
+def optimize_greedy(req: OptimizeRequest):
+    return _guard('greedy', lambda: _heuristic_response('greedy', req))
 
 @app.post('/optimize/sa')
-async def optimize_sa(req: OptimizeRequest):
-    try:
-        plan_start = datetime.strptime(req.planStart, '%Y-%m-%d')
-        time_limit = req.config.get('cpSatTimeLimitSeconds', 60)
-        fwd, status_list = _sa_run(req.zpList, req.routingByProduct, req.wcSchedule, plan_start, req.config, time_limit)
-        late = sum(1 for z in status_list if z['late'])
-        total = sum(z['delayH'] for z in status_list)
-        mx = max((z['delayH'] for z in status_list), default=0)
-        return {'fwdZP': fwd, 'zpStatus': status_list, 'lateCount': late, 'totalDelay': total, 'maxDelay': mx, 'method': 'sa'}
-    except Exception as ex:
-        import traceback; traceback.print_exc()
-        return {'error': str(ex)}
+def optimize_sa(req: OptimizeRequest):
+    return _guard('sa', lambda: _heuristic_response('sa', req))
 
 def _sa_run(zp_list, routing, wc_sched, plan_start, cfg, time_limit):
     fwd, status_list = schedule_sa(zp_list, routing, wc_sched, plan_start, cfg, time_limit)
     return fwd, status_list
 
 @app.post('/optimize/cpsat-tardiness')
-async def optimize_cpsat_tardiness(req: OptimizeRequest):
+def optimize_cpsat_tardiness(req: OptimizeRequest):
     """
     CP-SAT z ważonym kosztem spóźnienia jako funkcją celu.
 
@@ -726,26 +869,18 @@ async def optimize_cpsat_tardiness(req: OptimizeRequest):
       - zwraca wcUtilization per gniazdo
 
     Dodatkowe parametry w config:
-      cpSatTimeLimitSeconds — domyślnie 60
+      cpSatTimeLimitSeconds — domyślnie 60 (max MAX_TIME_LIMIT_S)
       cpSatMaxJobs          — domyślnie 800
       cpSatDebug            — True = pełny log solvera
       vipWeight             — waga VIP (domyślnie 5)
       normalWeight          — waga normalnych (domyślnie 1)
     """
-    try:
-        plan_start = datetime.strptime(req.planStart, '%Y-%m-%d')
-        result, status, elapsed = solve_tardiness(
-            req.zpList, req.routingByProduct, req.wcSchedule, plan_start, req.config
-        )
+    def run():
+        zps_in, routing, wc, plan_start, cfg = req.plain()
+        result, status, elapsed = solve_tardiness(zps_in, routing, wc, plan_start, cfg)
         if result is None:
-            return {
-                'error':    f'Brak rozwiązania: {status}',
-                'cpStatus': status,
-                'hint':     (
-                    'INFEASIBLE przy miękkich terminach oznacza sprzecznosc '
-                    'w sekwencji operacji (cykl w routingu?) lub brak danych.'
-                ),
-            }
+            _cpsat_failure(status, 'INFEASIBLE przy miękkich terminach oznacza sprzeczność '
+                                   'w sekwencji operacji (cykl w routingu?) lub brak danych.')
 
         zps         = result['zpStatus']
         late_count  = sum(1 for z in zps if z['late'])
@@ -755,6 +890,7 @@ async def optimize_cpsat_tardiness(req: OptimizeRequest):
 
         return {
             **result,
+            'warnings':   list(result.get('warnings') or []),
             'elapsed':    round(elapsed, 2),
             'lateCount':  late_count,
             'vipLate':    vip_late,
@@ -762,10 +898,7 @@ async def optimize_cpsat_tardiness(req: OptimizeRequest):
             'maxDelay':   max_delay,
             'method':     'cpsat-tardiness',
         }
-    except Exception as ex:
-        import traceback
-        traceback.print_exc()
-        return {'error': str(ex)}
+    return _guard('cpsat-tardiness', run)
 
 if __name__ == '__main__':
     print('FlowOps Optimizer — http://localhost:8765')

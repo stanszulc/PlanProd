@@ -128,7 +128,15 @@ pip install -r requirements.txt
 python server.py
 ```
 
-API dostępne pod `http://localhost:8765`.
+API dostępne pod `http://localhost:8765`. Dozwolone originy (CORS) ustawia zmienna `PLANPROD_CORS_ORIGINS` (lista po przecinku; domyślnie `localhost`/`127.0.0.1` na portach 5173, 5174, 3000). Błędy zwracają kody HTTP 400/422/500 z opisem w polu `detail`.
+
+Testy backendu:
+
+```bash
+cd backend
+pip install -r requirements-dev.txt
+python -m pytest tests -q
+```
 
 ---
 

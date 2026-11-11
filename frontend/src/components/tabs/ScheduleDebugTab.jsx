@@ -19,6 +19,8 @@ export function ScheduleDebugTab({ fwdZP = [], zpStatus = [], planStart, schedul
   const [tardyRunning,    setTardyRunning]    = useState(false);
   const [orToolsAvailable, setOrToolsAvailable] = useState(null);
   const [compareResults,  setCompareResults]  = useState(null);
+  // Komunikaty serwera per metoda: { [key]: { label, error?, warnings? } }
+  const [methodNotes,     setMethodNotes]     = useState({});
   const workersRef = useRef([]);
 
   function runComparison() {
@@ -99,9 +101,21 @@ export function ScheduleDebugTab({ fwdZP = [], zpStatus = [], planStart, schedul
     'cpsat':           '/optimize',
   };
 
+  // detail z FastAPI: tekst (400/500) albo lista błędów walidacji (422)
+  function formatDetail(detail, status) {
+    if (typeof detail === 'string') return detail;
+    if (Array.isArray(detail)) {
+      return 'Nieprawidłowe dane: ' + detail.map(d =>
+        `${(d.loc || []).filter(x => x !== 'body').join('.')}: ${d.msg}`).slice(0, 3).join('; ');
+    }
+    return `Błąd serwera (HTTP ${status})`;
+  }
+
   async function runPythonMethod(method, key, setRunning, label) {
     if (!zpList.length || !Object.keys(routingByProduct).length) return;
     setRunning(true);
+    setMethodNotes(prev => { const n = { ...prev }; delete n[key]; return n; });
+    const setNote = (note) => setMethodNotes(prev => ({ ...prev, [key]: { label, ...note } }));
 
     const url      = `http://localhost:8765${ENDPOINT_MAP[method] || '/optimize'}`;
     // /optimize (stary) potrzebuje method w config; pozostałe mają własne ścieżki
@@ -119,10 +133,22 @@ export function ScheduleDebugTab({ fwdZP = [], zpStatus = [], planStart, schedul
           config: { ...scheduleConfig, cpSatTimeLimitSeconds: 60, ...cfgExtra },
         }),
       });
-      const data = await res.json();
+      let data = null;
+      try { data = await res.json(); } catch { /* odpowiedź nie-JSON */ }
       console.log(`${label} response:`, data);
-      if (data.error || data.detail) { console.error(`${label} error:`, data.error || data.detail); return; }
-      if (data.lateCount === undefined) { console.error(`${label}: brak lateCount`, data); return; }
+      if (!res.ok || !data || data.error || data.detail) {
+        const msg = !data ? `Błąd serwera (HTTP ${res.status})`
+          : formatDetail(data.error || data.detail, res.status);
+        console.error(`${label} error:`, msg);
+        setNote({ error: msg });
+        return;
+      }
+      if (data.lateCount === undefined) {
+        console.error(`${label}: brak lateCount`, data);
+        setNote({ error: 'Serwer zwrócił odpowiedź bez wyniku (brak lateCount)' });
+        return;
+      }
+      if (Array.isArray(data.warnings) && data.warnings.length > 0) setNote({ warnings: data.warnings });
       setCompareResults(prev => ({
         ...(prev || {}),
         [key]: {
@@ -137,6 +163,7 @@ export function ScheduleDebugTab({ fwdZP = [], zpStatus = [], planStart, schedul
       }));
     } catch (e) {
       console.error(`${label} fetch error:`, e);
+      setNote({ error: 'Brak połączenia z serwerem optymalizacji (localhost:8765)' });
     } finally {
       setRunning(false);
     }
@@ -379,6 +406,16 @@ export function ScheduleDebugTab({ fwdZP = [], zpStatus = [], planStart, schedul
           </button>
         </div>
       </div>
+
+      {/* ── KOMUNIKATY METOD (błędy / ostrzeżenia serwera) ── */}
+      {Object.entries(methodNotes).map(([k, n]) => (
+        <div key={k} style={{ fontSize: 12, padding: '6px 12px', borderRadius: 6,
+          border: `1px solid ${n.error ? T.bn : T.warn}`,
+          background: n.error ? 'rgba(239,68,68,0.08)' : 'rgba(234,179,8,0.10)',
+          color: n.error ? T.bn : T.warn }}>
+          <b>{n.label}:</b> {n.error ? `błąd — ${n.error}` : n.warnings.join(' · ')}
+        </div>
+      ))}
 
       {/* ── TABELA PORÓWNAWCZA ── */}
       {compareResults && (
