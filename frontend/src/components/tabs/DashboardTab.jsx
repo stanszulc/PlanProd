@@ -1,10 +1,14 @@
-import { useMemo } from 'react';
+import { useMemo, useState } from 'react';
 import { T, s, tocColor, uStatus } from '../../constants/theme.js';
 import { computeLoads } from '../../utils/scheduler.js';
 import { calcBottlenecks } from '../../utils/bottleneck.js';
 
 // Wersja aplikacji — ręcznie podbijana (V1.1 -> V1.2 -> ...), bez powiązania z commitami.
 const APP_VERSION = 'V1.2';
+const ALERTS_LIMIT = 50;   // Alert Center: tyle wierszy naraz (reszta po kliknięciu)
+const WATCH_TOP = 8;       // Capacity Watch: tyle brygad na liście
+const NO_CAP_RATIO = 9.99; // calcBottlenecks: zdolność 0 przy popycie
+const ratioTxt = (r) => (r >= NO_CAP_RATIO ? 'brak zdolności' : `${Math.round(r * 100)}%`);
 
 function tocZone(toc) {
   if (!toc) return 'green';
@@ -13,6 +17,7 @@ function tocZone(toc) {
 }
 
 export function DashboardTab({ routing, zp, zpStatus, wcSchedule, historyData, globalLookups, onTabChange, hybridMode, fwdZP, wcToBrygada }) {
+  const [showAllAlerts, setShowAllAlerts] = useState(false);
 
   // ── KPI ────────────────────────────────────────────────────────────────────
   const kpi = useMemo(() => {
@@ -69,12 +74,12 @@ export function DashboardTab({ routing, zp, zpStatus, wcSchedule, historyData, g
   const demandAvg = measured.length
     ? Math.round(measured.reduce((s, w) => s + w.util, 0) / measured.length)
     : 0;
-  // Wg planu: Σload / Σcap po wszystkich brygadach na dniach cap>0 (nie średnia z procentów).
+  // Wg planu: suma popytu do terminów / suma zdolności do terminów po wszystkich brygadach.
   const planAvg = useMemo(() => {
     if (!planBn) return 0;
-    let load = 0, cap = 0;
-    planBn.groups.forEach(g => g.days.forEach(d => { if (d.cap > 0) { load += d.load; cap += d.cap; } }));
-    return cap > 0 ? Math.round(load / cap * 100) : 0;
+    let demand = 0, cap = 0;
+    planBn.groups.forEach(g => { demand += g.due.demandH; cap += g.due.capH; });
+    return cap > 0 ? Math.round(demand / cap * 100) : 0;
   }, [planBn]);
   const avgUtil = planBn ? planAvg : demandAvg;
   const basisLabel = planBn ? 'wg planu' : 'wg terminów';
@@ -165,9 +170,9 @@ export function DashboardTab({ routing, zp, zpStatus, wcSchedule, historyData, g
           icon="🎯"
         />
         <KpiCard
-          label="Avg utilization"
+          label={planBn ? 'Obciążenie do terminów' : 'Avg utilization'}
           value={`${avgUtil}%`}
-          sub={planBn ? `${planBn.groups.length} brygad · ${basisLabel}` : `${wcLoads.length} gniazd · ${basisLabel}`}
+          sub={planBn ? `${basisLabel} · ${planBn.groups.length} brygad` : `${wcLoads.length} gniazd · ${basisLabel}`}
           color={avgUtil <= 85 ? T.ok : avgUtil <= 100 ? T.warn : T.bn}
           icon="⚙️"
           onClick={() => onTabChange('heatmap')}
@@ -203,7 +208,7 @@ export function DashboardTab({ routing, zp, zpStatus, wcSchedule, historyData, g
                 <span key={h} style={{ fontSize: 10, fontWeight: 600, textTransform: 'uppercase', letterSpacing: '0.07em', color: T.text3 }}>{h}</span>
               ))}
             </div>
-            {alerts.map(z => {
+            {(showAllAlerts ? alerts : alerts.slice(0, ALERTS_LIMIT)).map(z => {
               const tc       = tocColor(tocZone(z.toc));
               const delayTxt = z.delayDays > 0 ? `+${z.delayDays}d` : tocZone(z.toc) === 'black' ? 'po term.' : '—';
               return (
@@ -224,6 +229,12 @@ export function DashboardTab({ routing, zp, zpStatus, wcSchedule, historyData, g
                 </div>
               );
             })}
+            {!showAllAlerts && alerts.length > ALERTS_LIMIT && (
+              <button onClick={() => setShowAllAlerts(true)}
+                style={{ alignSelf: 'center', marginTop: 6, padding: '6px 16px', fontSize: 12, fontWeight: 600, borderRadius: 8, border: `1px solid ${T.border}`, background: 'transparent', color: T.accent, cursor: 'pointer' }}>
+                Pokaż wszystkie ({alerts.length})
+              </button>
+            )}
           </div>
         )}
       </div>
@@ -233,19 +244,19 @@ export function DashboardTab({ routing, zp, zpStatus, wcSchedule, historyData, g
 
         {/* Capacity Watch */}
         <div style={s.card}>
-          <div style={s.cardTitle}>⚙️ Capacity Watch <span style={{ textTransform: 'none', letterSpacing: 0, fontWeight: 400 }}>· {basisLabel}</span></div>
+          <div style={s.cardTitle}>⚙️ Capacity Watch <span style={{ textTransform: 'none', letterSpacing: 0, fontWeight: 400 }}>· {basisLabel}{planBn ? ' · obciążenie do terminów' : ''}</span></div>
           {planBn ? (
             <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
               {planBn.primary ? (
-                <div style={{ fontSize: 12, fontWeight: 600, color: uStatus(planBn.primary.peakUtil).text }}>
-                  Wąskie gardło: {planBn.primary.name} — nadwyżka {planBn.primary.excessH.toFixed(1)} h w {planBn.primary.overloadDays} dniach
+                <div style={{ fontSize: 12, fontWeight: 600, color: uStatus(planBn.primary.due.worstRatio).text }}>
+                  Wąskie gardło: {planBn.primary.name} — brakuje {planBn.primary.due.shortfallH.toFixed(1)} h do terminów
                 </div>
               ) : (
                 <div style={{ fontSize: 12, fontWeight: 600, color: T.ok }}>brak przeciążeń</div>
               )}
-              {planBn.groups.map(g => {
-                const st = uStatus(g.peakUtil);
-                const pct = Math.round(g.avgUtil * 100);
+              {planBn.groups.slice(0, WATCH_TOP).map(g => {
+                const st = uStatus(g.due.worstRatio);
+                const r = g.due.worstRatio;
                 return (
                   <div key={g.name}>
                     <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 4 }}>
@@ -253,15 +264,18 @@ export function DashboardTab({ routing, zp, zpStatus, wcSchedule, historyData, g
                       <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
                         <span style={{ ...s.badge(st), fontSize: 10 }}>{g.status}</span>
                         <span style={{ fontSize: 12, fontWeight: 600, color: st.text, fontFamily: 'monospace' }}
-                          title={`Szczyt ${Math.round(g.peakUtil * 100)}% (${g.peakDate})`}>{pct}%</span>
+                          title={`Obciążenie do terminów: najgorszy termin ${g.due.worstDate || '–'}, brakuje ${g.due.shortfallH.toFixed(1)} h`}>{ratioTxt(r)}</span>
                       </div>
                     </div>
                     <div style={{ background: T.surface3, borderRadius: 4, height: 8, overflow: 'hidden' }}>
-                      <div style={{ width: `${Math.min(pct, 130)}%`, height: '100%', background: st.dot, borderRadius: 4 }} />
+                      <div style={{ width: `${Math.min(Math.round(r * 100), 130)}%`, height: '100%', background: st.dot, borderRadius: 4 }} />
                     </div>
                   </div>
                 );
               })}
+              {planBn.groups.length > WATCH_TOP && (
+                <div style={{ fontSize: 11, color: T.text3 }}>+{planBn.groups.length - WATCH_TOP} pozostałych</div>
+              )}
               <div style={{ display: 'flex', gap: 14, marginTop: 6 }}>
                 <LegendDot color={T.ok}   label="≤ 85% OK" />
                 <LegendDot color={T.warn} label="86–100% Uwaga" />
@@ -408,4 +422,4 @@ function LegendDot({ color, label }) {
       <span style={{ fontSize: 10, color: T.text3 }}>{label}</span>
     </div>
   );
-}
+}

@@ -9,6 +9,8 @@ import { EmptyState } from '../common/EmptyState.jsx';
 const TH = { fontSize: 10, fontWeight: 600, letterSpacing: '0.08em', textTransform: 'uppercase', color: T.text3, padding: '0 10px 10px', textAlign: 'left', borderBottom: `1px solid ${T.border}` };
 const TD = { padding: '9px 10px', borderBottom: `1px solid ${T.border}` };
 const pct = (u) => `${Math.round(u * 100)}%`;
+const NO_CAP_RATIO = 9.99; // calcBottlenecks: zdolność 0 przy popycie
+const ratioTxt = (r) => (r >= NO_CAP_RATIO ? 'brak zdolności' : pct(r));
 
 function ModeSwitch({ mode, onChange, hasPlan }) {
   const btn = (id, label) => {
@@ -31,7 +33,7 @@ function ModeSwitch({ mode, onChange, hasPlan }) {
   );
 }
 
-// Wąskie gardło wg planu: ranking brygad z calcBottlenecks (pula godzin brygady).
+// Wąskie gardło wg planu: ranking brygad z calcBottlenecks (obciążenie narastające do terminów).
 function PlanView({ fwdZP, wcSchedule, wcToBrygada }) {
   const res = useMemo(() => calcBottlenecks({ fwdZP, wcSchedule, wcToBrygada: wcToBrygada || {} }),
     [fwdZP, wcSchedule, wcToBrygada]);
@@ -57,16 +59,16 @@ function PlanView({ fwdZP, wcSchedule, wcToBrygada }) {
   }, [fwdZP, dates]);
 
   if (!groups.length) return <EmptyState icon="📊" title="Brak danych" sub="Plan nie zawiera zaplanowanych segmentów" />;
-  const pst = primary ? uStatus(primary.peakUtil) : null;
+  const pst = primary ? uStatus(primary.due.worstRatio) : null;
 
   return (
     <div>
       <div style={{ fontSize: 11, color: T.text3, marginBottom: 12 }}>
-        Obciążenie z zaplanowanych segmentów, per brygada (pula godzin maszyn i gniazd) · "Gdzie plan się nie mieści?"
+        Ile godzin ZP wymaga zrobić do terminu vs ile godzin brygada ma do tego terminu; plan jest skończony, więc przeciążenie widać względem terminów, nie w pojedynczym dniu · "Gdzie plan się nie mieści?"
       </div>
       <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit,minmax(140px,1fr))', gap: 12, marginBottom: 20 }}>
         <KpiCard label="Główne wąskie gardło" value={primary ? primary.name : 'brak'}
-          sub={primary ? `nadwyżka ${primary.excessH.toFixed(1)} h w ${primary.overloadDays} dniach` : 'plan mieści się w dostępności'}
+          sub={primary ? `brakuje ${primary.due.shortfallH.toFixed(1)} h do terminów (najgorszy: ${primary.due.worstDate}, ${ratioTxt(primary.due.worstRatio)})` : 'plan mieści się w dostępności'}
           color={primary ? pst.text : T.text3} />
         <KpiCard label="Brygad" value={groups.length} sub="w planie" />
         <KpiCard label="ZP w planie" value={zpCount} sub="zaplanowane" />
@@ -74,25 +76,25 @@ function PlanView({ fwdZP, wcSchedule, wcToBrygada }) {
       </div>
 
       <div style={{ ...s.card, marginBottom: 16 }}>
-        <div style={s.cardTitle}>Ranking brygad wg nadwyżki godzin</div>
+        <div style={s.cardTitle}>Ranking brygad wg obciążenia do terminów</div>
         <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 13 }}>
           <thead>
-            <tr>{['Brygada', 'Obciążenie (h)', 'Pojemność (h)', 'Śr. obciążenie %', 'Szczyt % (data)', 'Dni >100%', 'Nadwyżka (h)', 'Status'].map(h => <th key={h} style={TH}>{h}</th>)}</tr>
+            <tr>{['Brygada', 'Popyt do terminów (h)', 'Zdolność do terminów (h)', 'Obciążenie do terminów %', 'Najgorszy termin', 'Terminy przeciążone', 'Brakuje (h)', 'Status'].map(h => <th key={h} style={TH}>{h}</th>)}</tr>
           </thead>
           <tbody>
             {groups.map(g => {
-              const st = uStatus(g.peakUtil);
+              const st = uStatus(g.due.worstRatio);
               const isOpen = open === g.name;
               return [
                 <tr key={g.name} data-testid={`grp-${g.name}`} onClick={() => { setOpen(isOpen ? null : g.name); setSelGrp(g.name); }}
-                  style={{ cursor: 'pointer', background: g.excessH > 0 ? 'rgba(239,68,68,0.03)' : 'transparent' }}>
+                  style={{ cursor: 'pointer', background: g.due.shortfallH > 0 ? 'rgba(239,68,68,0.03)' : 'transparent' }}>
                   <td style={{ ...TD, fontWeight: 700, color: T.text }}>{isOpen ? '▾' : '▸'} {g.name}</td>
-                  <td style={{ ...TD, fontFamily: 'monospace', color: T.text2 }}>{g.totalLoad.toFixed(1)}</td>
-                  <td style={{ ...TD, fontFamily: 'monospace', color: T.text3 }}>{g.totalCap.toFixed(1)}</td>
-                  <td style={{ ...TD, fontFamily: 'monospace', color: T.text2 }}>{pct(g.avgUtil)}</td>
-                  <td style={{ ...TD, fontFamily: 'monospace', color: st.text }}>{pct(g.peakUtil)} <span style={{ color: T.text3 }}>({g.peakDate.slice(5)})</span></td>
-                  <td style={{ ...TD, fontFamily: 'monospace', color: T.text2 }}>{g.overloadDays}</td>
-                  <td style={{ ...TD, fontFamily: 'monospace', color: g.excessH > 0 ? T.bn : T.text3 }}>{g.excessH.toFixed(1)}</td>
+                  <td style={{ ...TD, fontFamily: 'monospace', color: T.text2 }}>{g.due.demandH.toFixed(1)}</td>
+                  <td style={{ ...TD, fontFamily: 'monospace', color: T.text3 }}>{g.due.capH.toFixed(1)}</td>
+                  <td style={{ ...TD, fontFamily: 'monospace', color: st.text }}>{ratioTxt(g.due.worstRatio)}</td>
+                  <td style={{ ...TD, fontFamily: 'monospace', color: T.text2 }}>{g.due.worstDate || '–'}</td>
+                  <td style={{ ...TD, fontFamily: 'monospace', color: T.text2 }}>{g.due.overDates}</td>
+                  <td style={{ ...TD, fontFamily: 'monospace', color: g.due.shortfallH > 0 ? T.bn : T.text3 }}>{g.due.shortfallH.toFixed(1)}</td>
                   <td style={TD}><span style={s.badge(st)}><Dot color={st.dot} size={6} />{g.status}</span></td>
                 </tr>,
                 ...(isOpen ? g.members.map(wc => {
@@ -115,21 +117,58 @@ function PlanView({ fwdZP, wcSchedule, wcToBrygada }) {
       </div>
 
       {sel && (
+        <div style={{ ...s.card, marginBottom: 16 }}>
+          <div style={s.cardTitle}>Terminy brygady {sel.name} — popyt vs zdolność narastająco</div>
+          {sel.due.points.length === 0 ? (
+            <div style={{ fontSize: 12, color: T.text3 }}>Brak operacji z terminami dla tej brygady</div>
+          ) : (
+            <table data-testid="due-points" style={{ width: '100%', borderCollapse: 'collapse', fontSize: 13 }}>
+              <thead>
+                <tr>{['Termin', 'Popyt narastająco (h)', 'Zdolność narastająco (h)', 'Obciążenie %', 'Brakuje (h)'].map(h => <th key={h} style={TH}>{h}</th>)}</tr>
+              </thead>
+              <tbody>
+                {sel.due.points.map(p => {
+                  const pst2 = uStatus(p.ratio);
+                  return (
+                    <tr key={p.date} style={{ background: p.shortfall > 0 ? 'rgba(239,68,68,0.03)' : 'transparent' }}>
+                      <td style={{ ...TD, fontFamily: 'monospace', color: T.text }}>{p.date}</td>
+                      <td style={{ ...TD, fontFamily: 'monospace', color: T.text2 }}>{p.demand.toFixed(1)}</td>
+                      <td style={{ ...TD, fontFamily: 'monospace', color: T.text3 }}>{p.cap.toFixed(1)}</td>
+                      <td style={TD}>
+                        <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                          <Bar value={Math.min(p.ratio, 1.3)} max={1.3} color={pst2.dot} />
+                          <span style={{ fontFamily: 'monospace', fontSize: 12, color: pst2.text }}>{ratioTxt(p.ratio)}</span>
+                        </div>
+                      </td>
+                      <td style={{ ...TD, fontFamily: 'monospace', color: p.shortfall > 0 ? T.bn : T.text3 }}>{p.shortfall.toFixed(1)}</td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
+          )}
+        </div>
+      )}
+
+      {sel && (
         <div style={s.card}>
-          <div style={s.cardTitle}>Dni brygady {sel.name} — obciążenie / dostępność</div>
-          <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
+          <div style={s.cardTitle}>Obłożenie dni w planie — {sel.name}</div>
+          <div style={{ fontSize: 11, color: T.text3, marginBottom: 10 }}>
+            Plan jest ograniczony zdolnością, więc dzień rzadko przekracza 100% — przeciążenie widać w tabeli terminów powyżej.
+          </div>
+          <div style={{ display: 'flex', gap: 4, flexWrap: 'wrap' }}>
             {sel.days.map(d => {
               const noCap = d.cap <= 0 && d.load > 0;
               const band = noCap ? heatBand(Infinity) : (d.load > 0 || d.cap > 0) ? heatBand(d.util || 0) : null;
               return (
                 <div key={d.date} title={`${d.date}: ${d.load.toFixed(1)} h / ${d.cap.toFixed(1)} h`}
-                  style={{ minWidth: 62, padding: '6px 6px', borderRadius: 6, textAlign: 'center',
+                  style={{ minWidth: 52, padding: '4px 4px', borderRadius: 6, textAlign: 'center',
                     background: band ? band.bg : 'transparent', border: `1px solid ${T.border}` }}>
-                  <div style={{ fontSize: 10, color: T.text3 }}>{d.date.slice(5)}</div>
-                  <div style={{ fontSize: 13, fontWeight: 700, fontFamily: 'monospace', color: band ? band.color : T.text3 }}>
+                  <div style={{ fontSize: 9, color: T.text3 }}>{d.date.slice(5)}</div>
+                  <div style={{ fontSize: 12, fontWeight: 700, fontFamily: 'monospace', color: band ? band.color : T.text3 }}>
                     {noCap ? '!' : d.cap > 0 ? pct(d.util) : '–'}
                   </div>
-                  <div style={{ fontSize: 10, color: T.text3, fontFamily: 'monospace' }}>{d.load.toFixed(1)}/{d.cap.toFixed(1)} h</div>
+                  <div style={{ fontSize: 9, color: T.text3, fontFamily: 'monospace' }}>{d.load.toFixed(1)}/{d.cap.toFixed(1)} h</div>
                 </div>
               );
             })}
