@@ -22,6 +22,10 @@
 import JSZip from 'jszip';
 
 const MACHINE_CEILING_H      = 24; // maszyna: jeden operator, fizyczny sufit kalendarzowy
+// Godziny w grafiku to PULA OSOBOGODZIN BRYGADY na dobę (np. 107 h = kilkanaście osób),
+// a nie godziny jednej maszyny — nie wolno ich ograniczać do 24 h. Górna granica to tylko
+// zabezpieczenie przed literówką (np. 1080 zamiast 10,8).
+const MAX_BRYGADA_H          = 2000;
 const DEFAULT_MACHINE_CLAIM_H = 16; // fallback gdy brak wcCapacity dla nowego kodu maszyny
 
 function isMachineWc(wc) {
@@ -167,7 +171,7 @@ function cellValue(cellEl, sharedStrings) {
 
 // Zwraca [{brygada, data, godziny}, ...] — jedna tablica na cały arkusz, z dodatkową
 // własnością `warnings` (string[]) na samej tablicy (kształt tablicy bez zmian, więc
-// App.jsx działa jak dotąd). Wiersze z pustymi/błędnymi/ujemnymi/>24 godzinami albo
+// App.jsx działa jak dotąd). Wiersze z pustymi/błędnymi/ujemnymi/absurdalnymi (>2000 h) godzinami albo
 // nieparsowalną datą są POMIJANE z ostrzeżeniem (nie zamieniane w 0 = "zamknięta").
 // Duplikat brygada+data: wygrywa OSTATNI wiersz w arkuszu, z ostrzeżeniem.
 export async function parseGrafikGodzinXlsx(arrayBuffer) {
@@ -219,8 +223,8 @@ export async function parseGrafikGodzinXlsx(arrayBuffer) {
       return;
     }
     const godziny = parseHours(cells[colGodziny]);
-    if (!Number.isFinite(godziny) || godziny < 0 || godziny > 24) {
-      warnings.push(`Wiersz ${lineNo}: nieprawidłowe godziny "${String(cells[colGodziny] ?? '').trim()}" (brygada "${brygada}", ${data}) — dozwolone 0–24, pominięto.`);
+    if (!Number.isFinite(godziny) || godziny < 0 || godziny > MAX_BRYGADA_H) {
+      warnings.push(`Wiersz ${lineNo}: nieprawidłowe godziny "${String(cells[colGodziny] ?? '').trim()}" (brygada "${brygada}", ${data}) — dozwolone 0–${MAX_BRYGADA_H} h na dobę, pominięto.`);
       return;
     }
     const key = `${brygada}\u0000${data}`;

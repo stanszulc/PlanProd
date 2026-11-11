@@ -34,9 +34,9 @@ describe('parseExcelDateToIso', () => {
 
 describe('parseGrafikGodzinXlsx — odporność', () => {
   test('puste/błędne/ujemne godziny są pomijane z ostrzeżeniem, nie zamieniane w 0', async () => {
-    const buf = await makeXlsx([HDR, ['A', '2026-08-17', 8], ['A', '2026-08-18', null], ['A', '2026-08-19', 'abc'], ['A', '2026-08-20', -1], ['A', '2026-08-21', 30], ['A', '2026-08-22', 0]]);
+    const buf = await makeXlsx([HDR, ['A', '2026-08-17', 8], ['A', '2026-08-18', null], ['A', '2026-08-19', 'abc'], ['A', '2026-08-20', -1], ['A', '2026-08-21', 5000], ['A', '2026-08-22', 0], ['A', '2026-08-23', 107.25]]);
     const rows = await parseGrafikGodzinXlsx(buf);
-    expect(rows.map(r => r.data)).toEqual(['2026-08-17', '2026-08-22']);
+    expect(rows.map(r => r.data)).toEqual(['2026-08-17', '2026-08-22', '2026-08-23']); // 107,25 h = pula brygady, poprawne
     expect(rows[1].godziny).toBe(0);
     expect(rows.warnings).toHaveLength(4);
   });
