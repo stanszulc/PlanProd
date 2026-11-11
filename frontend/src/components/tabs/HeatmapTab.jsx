@@ -7,6 +7,7 @@ import { EmptyState } from '../common/EmptyState.jsx';
 export function HeatmapTab({ routing, zp, globalLookups, wcSchedule, fwdZP = [], planStart, horizonDays = 14 }) {
   const [groupBy, setGroupBy] = useState('due'); // 'due' (wg terminu) | 'plan' (wg planu)
   const [expanded, setExpanded] = useState(new Set());
+  const [mode, setMode] = useState('h'); // 'h' (godz.) | 'pct' (%) — jak w Heatmapie planu
 
   const allWC = useMemo(() => [...new Set(routing.map(r => r.workcenter))].sort(), [routing.length]);
 
@@ -109,30 +110,28 @@ export function HeatmapTab({ routing, zp, globalLookups, wcSchedule, fwdZP = [],
     return cap > 0 ? load / cap : (load > 0 ? 999 : 0);
   }
 
-  function utilFor(wc, d) {
-    const { load, cap } = loadCapFor(wc, d);
-    return utilFrom(load, cap);
-  }
-
   if (!dates.length) return <EmptyState icon="🌡️" title="Brak danych" sub="Wgraj pliki CSV" />;
 
-  function hmStyle(u) {
-    if (u <= 0)   return { bg: T.surface2, color: T.text3 };
-    if (u <= .85) return { bg: 'rgba(34,197,94,0.12)',  color: '#22c55e' };
-    if (u <= 1.0) return { bg: 'rgba(245,158,11,0.15)', color: '#f59e0b' };
-    if (u <= 1.1) return { bg: 'rgba(249,115,22,0.15)', color: '#f97316' };
-    if (u <= 1.3) return { bg: 'rgba(239,68,68,0.15)',  color: '#ef4444' };
-    return               { bg: 'rgba(220,38,38,0.25)',  color: '#fca5a5' };
+  function hmStyle(u, load) {
+    const band =
+      u <= 0   ? { bg: T.surface2, color: T.text3 } :
+      u <= .85 ? { bg: 'rgba(34,197,94,0.12)',  color: '#22c55e' } :
+      u <= 1.0 ? { bg: 'rgba(245,158,11,0.15)', color: '#f59e0b' } :
+      u <= 1.1 ? { bg: 'rgba(249,115,22,0.15)', color: '#f97316' } :
+      u <= 1.3 ? { bg: 'rgba(239,68,68,0.15)',  color: '#ef4444' } :
+                 { bg: 'rgba(220,38,38,0.25)',  color: '#fca5a5' };
+    const text = u <= 0 ? '–' : mode === 'h' ? `${load.toFixed(1)}h` : `${Math.round(u * 100)}%`;
+    return { ...band, text };
   }
 
-  function Cell({ u, height = 28 }) {
-    const hs = hmStyle(u);
+  function Cell({ u, load, height = 28 }) {
+    const hs = hmStyle(u, load);
     return (
       <div style={{ display: 'inline-flex', alignItems: 'center',
         justifyContent: 'center', width: 68, height,
         borderRadius: 6, background: hs.bg, color: hs.color,
         fontSize: 11, fontWeight: 600, fontFamily: 'monospace' }}>
-        {u > 0 ? `${Math.round(u * 100)}%` : '–'}
+        {hs.text}
       </div>
     );
   }
@@ -148,6 +147,12 @@ export function HeatmapTab({ routing, zp, globalLookups, wcSchedule, fwdZP = [],
           <button type="button" style={{ ...s.btn(groupBy === 'plan'), fontSize: 12 }} onClick={() => setGroupBy('plan')}>
             wg planu
           </button>
+          <select value={mode} onChange={e => setMode(e.target.value)}
+            style={{ fontSize: 11, padding: '3px 8px', borderRadius: 6,
+              border: `1px solid ${T.border2}`, background: T.surface2, color: T.text }}>
+            <option value="pct">%</option>
+            <option value="h">godz.</option>
+          </select>
         </div>
       </div>
       <div style={{ overflowX: 'auto' }}>
@@ -181,7 +186,7 @@ export function HeatmapTab({ routing, zp, globalLookups, wcSchedule, fwdZP = [],
                   </td>
                   {agg.map(({ load, cap }, i) => (
                     <td key={dates[i]} style={{ padding: 4 }}>
-                      <Cell u={utilFrom(load, cap)} />
+                      <Cell u={utilFrom(load, cap)} load={load} />
                     </td>
                   ))}
                 </tr>,
@@ -194,11 +199,14 @@ export function HeatmapTab({ routing, zp, globalLookups, wcSchedule, fwdZP = [],
                         <span style={{ color: T.text3, marginLeft: 6, fontSize: 10 }}>{wcMeta[wc].name}</span>
                       )}
                     </td>
-                    {dates.map(d => (
-                      <td key={d} style={{ padding: 4 }}>
-                        <Cell u={utilFor(wc, d)} height={24} />
-                      </td>
-                    ))}
+                    {dates.map(d => {
+                      const { load, cap } = loadCapFor(wc, d);
+                      return (
+                        <td key={d} style={{ padding: 4 }}>
+                          <Cell u={utilFrom(load, cap)} load={load} height={24} />
+                        </td>
+                      );
+                    })}
                   </tr>
                 )) : []),
               ];

@@ -46,6 +46,7 @@ describe('HeatmapTab — przełącznik wg terminu / wg planu', () => {
       />
     );
     // volume=8 x ct_min=60 => 8h load / 8h capacity = 100%
+    fireEvent.change(screen.getByRole('combobox'), { target: { value: 'pct' } });
     expect(screen.getByText('100%')).toBeInTheDocument();
   });
 
@@ -69,10 +70,51 @@ describe('HeatmapTab — przełącznik wg terminu / wg planu', () => {
     );
 
     fireEvent.click(screen.getByText('wg planu'));
+    fireEvent.change(screen.getByRole('combobox'), { target: { value: 'pct' } });
 
     // Segment zaplanowany na 08-18 (4h / 4h cap = 100%), NIE na due_date 08-24.
     const cellsWithHundred = screen.getAllByText('100%');
     expect(cellsWithHundred.length).toBeGreaterThan(0);
+  });
+});
+
+describe('HeatmapTab — przełącznik %/godz.', () => {
+  test('domyślnie pokazuje godziny, nie procent', () => {
+    const zp = [{ product: 'P1', volume: 8, due_date: '2026-08-20', zp_id: 'ZP1' }];
+    render(
+      <HeatmapTab
+        routing={routing}
+        zp={zp}
+        globalLookups={globalLookups}
+        wcSchedule={{ WC1: { '2026-08-20': 8 } }}
+        fwdZP={[]}
+        planStart="2026-08-17"
+        horizonDays={7}
+      />
+    );
+    // 8h load, domyślny mode='h' — jak w Heatmapie planu.
+    expect(screen.getByText('8.0h')).toBeInTheDocument();
+    expect(screen.queryByText('100%')).not.toBeInTheDocument();
+  });
+
+  test('przełączenie na % zmienia format wyświetlania na wszystkich komórkach', () => {
+    const zp = [{ product: 'P1', volume: 8, due_date: '2026-08-20', zp_id: 'ZP1' }];
+    render(
+      <HeatmapTab
+        routing={routing}
+        zp={zp}
+        globalLookups={globalLookups}
+        wcSchedule={{ WC1: { '2026-08-20': 8 } }}
+        fwdZP={[]}
+        planStart="2026-08-17"
+        horizonDays={7}
+      />
+    );
+
+    expect(screen.getByText('8.0h')).toBeInTheDocument();
+    fireEvent.change(screen.getByRole('combobox'), { target: { value: 'pct' } });
+    expect(screen.queryByText('8.0h')).not.toBeInTheDocument();
+    expect(screen.getByText('100%')).toBeInTheDocument();
   });
 });
 
@@ -130,6 +172,7 @@ describe('HeatmapTab — grupowanie wierszy po brygadzie (WC3)', () => {
       />
     );
 
+    fireEvent.change(screen.getByRole('combobox'), { target: { value: 'pct' } });
     expect(screen.getByText('50%')).toBeInTheDocument();
 
     fireEvent.click(screen.getByText('Kanały'));
