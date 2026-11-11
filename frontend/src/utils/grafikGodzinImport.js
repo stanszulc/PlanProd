@@ -70,12 +70,65 @@ function splitBrigadeHours(machines, godziny, wcCapacity) {
   return perWc;
 }
 
-function parseXml(text) {
-  return new DOMParser().parseFromString(text, 'application/xml');
+const MAX_ENTRY_BYTES = 50 * 1024 * 1024; // limit rozmiaru wpisu xlsx po rozpakowaniu (ochrona przed zip-bombą)
+
+// DOMParser nie rzuca przy złym XML — zwraca dokument z <parsererror>.
+function parseXml(text, label = 'xlsx') {
+  const doc = new DOMParser().parseFromString(text, 'application/xml');
+  if (doc.getElementsByTagName('parsererror').length) {
+    throw new Error(`Plik xlsx jest uszkodzony — nieprawidłowy XML w ${label}.`);
+  }
+  return doc;
+}
+
+async function readEntryText(zipFile, name) {
+  const tooBig = () => new Error(
+    `Plik xlsx jest zbyt duży po rozpakowaniu (${name}, limit ${MAX_ENTRY_BYTES / 1024 / 1024} MB).`
+  );
+  const declared = zipFile?._data?.uncompressedSize;
+  if (typeof declared === 'number' && declared > MAX_ENTRY_BYTES) throw tooBig();
+  const text = await zipFile.async('text');
+  if (text.length > MAX_ENTRY_BYTES) throw tooBig();
+  return text;
 }
 
 function colLetterFromRef(ref) {
-  return ref.match(/^[A-Z]+/)[0];
+  const m = typeof ref === 'string' ? ref.match(/^[A-Z]+/) : null;
+  return m ? m[0] : null;
+}
+
+// Excel: serial dni od 1899-12-30 -> 'YYYY-MM-DD' (UTC, bez przesunięć strefowych).
+function serialToIso(n) {
+  return new Date(Date.UTC(1899, 11, 30) + Math.floor(n) * 86400000).toISOString().slice(0, 10);
+}
+
+function isoIfValid(y, mo, d) {
+  const dt = new Date(Date.UTC(y, mo - 1, d));
+  if (dt.getUTCFullYear() !== y || dt.getUTCMonth() !== mo - 1 || dt.getUTCDate() !== d) return null;
+  return dt.toISOString().slice(0, 10);
+}
+
+// Normalizuje komórkę daty do 'YYYY-MM-DD': ISO (z opcjonalną godziną), DD.MM.YYYY,
+// DD/MM/YYYY albo serial Excela. Nieparsowalne/nieistniejące (31.02) -> null.
+export function parseExcelDateToIso(raw) {
+  const s = String(raw ?? '').trim();
+  if (!s) return null;
+  let m = s.match(/^(\d{4})-(\d{1,2})-(\d{1,2})(?:[T ].*)?$/);
+  if (m) return isoIfValid(+m[1], +m[2], +m[3]);
+  m = s.match(/^(\d{1,2})[./](\d{1,2})[./](\d{4})(?:[T ].*)?$/);
+  if (m) return isoIfValid(+m[3], +m[2], +m[1]);
+  if (/^\d+(\.\d+)?$/.test(s)) {
+    const n = parseFloat(s);
+    if (n >= 1 && n < 2958466) return serialToIso(n); // do 9999-12-31
+  }
+  return null;
+}
+
+// Godziny: przecinek dziesiętny i spacje tolerowane; puste/nieliczbowe -> NaN.
+function parseHours(raw) {
+  const s = String(raw ?? '').replace(/[\s\u00a0]/g, '').replace(',', '.');
+  if (!/^[+-]?(\d+\.?\d*|\.\d+)$/.test(s)) return NaN;
+  return parseFloat(s);
 }
 
 function colIndexFromLetter(letter) {
@@ -87,8 +140,8 @@ function colIndexFromLetter(letter) {
 function readSharedStrings(zip) {
   const file = zip.file('xl/sharedStrings.xml');
   if (!file) return [];
-  return file.async('text').then(xml => {
-    const doc = parseXml(xml);
+  return readEntryText(file, 'xl/sharedStrings.xml').then(xml => {
+    const doc = parseXml(xml, 'sharedStrings.xml');
     return [...doc.getElementsByTagName('si')].map(si => {
       const tNodes = si.getElementsByTagName('t');
       return [...tNodes].map(t => t.textContent).join('');
@@ -112,7 +165,11 @@ function cellValue(cellEl, sharedStrings) {
   return raw; // liczba (albo "str" — wynik formuły jako tekst) — parsowane dalej wg kolumny
 }
 
-// Zwraca [{brygada, data, godziny}, ...] — jedna tablica na cały arkusz.
+// Zwraca [{brygada, data, godziny}, ...] — jedna tablica na cały arkusz, z dodatkową
+// własnością `warnings` (string[]) na samej tablicy (kształt tablicy bez zmian, więc
+// App.jsx działa jak dotąd). Wiersze z pustymi/błędnymi/ujemnymi/>24 godzinami albo
+// nieparsowalną datą są POMIJANE z ostrzeżeniem (nie zamieniane w 0 = "zamknięta").
+// Duplikat brygada+data: wygrywa OSTATNI wiersz w arkuszu, z ostrzeżeniem.
 export async function parseGrafikGodzinXlsx(arrayBuffer) {
   const zip = await JSZip.loadAsync(arrayBuffer);
   const sharedStrings = await readSharedStrings(zip);
@@ -123,16 +180,19 @@ export async function parseGrafikGodzinXlsx(arrayBuffer) {
     throw new Error('Nie znaleziono arkusza w tym pliku xlsx.');
   }
 
-  const doc = parseXml(await zip.file(sheetPath).async('text'));
+  const doc = parseXml(await readEntryText(zip.file(sheetPath), sheetPath), sheetPath);
   const rowEls = [...doc.getElementsByTagName('row')];
-  if (rowEls.length < 2) return [];
+  const warnings = [];
+  if (rowEls.length < 2) { const empty = []; empty.warnings = warnings; return empty; }
 
   function readRow(rowEl) {
     const cells = [];
+    let next = 0; // komórka bez atrybutu r -> kolumna następna po poprzedniej
     for (const cellEl of rowEl.getElementsByTagName('c')) {
-      const ref = cellEl.getAttribute('r');
-      const idx = colIndexFromLetter(colLetterFromRef(ref));
+      const letter = colLetterFromRef(cellEl.getAttribute('r'));
+      const idx = letter ? colIndexFromLetter(letter) : next;
       cells[idx] = cellValue(cellEl, sharedStrings);
+      next = idx + 1;
     }
     return cells;
   }
@@ -145,14 +205,35 @@ export async function parseGrafikGodzinXlsx(arrayBuffer) {
     throw new Error('Oczekiwano kolumn Brygada, Data, GodzinyDostepne w arkuszu grafiku godzin.');
   }
 
-  return rowEls.slice(1).map(rowEl => {
+  const out = [];
+  const indexByKey = new Map();
+  rowEls.slice(1).forEach((rowEl, i) => {
     const cells = readRow(rowEl);
-    return {
-      brygada: String(cells[colBrygada] ?? '').trim(),
-      data: String(cells[colData] ?? '').trim(),
-      godziny: parseFloat(cells[colGodziny]) || 0,
-    };
-  }).filter(r => r.brygada && r.data);
+    const lineNo = i + 2;
+    const brygada = String(cells[colBrygada] ?? '').trim();
+    const dataRaw = String(cells[colData] ?? '').trim();
+    if (!brygada || !dataRaw) return; // pusty wiersz — pomijany cicho jak dotąd
+    const data = parseExcelDateToIso(dataRaw);
+    if (!data) {
+      warnings.push(`Wiersz ${lineNo}: nieprawidłowa data "${dataRaw}" (brygada "${brygada}") — pominięto.`);
+      return;
+    }
+    const godziny = parseHours(cells[colGodziny]);
+    if (!Number.isFinite(godziny) || godziny < 0 || godziny > 24) {
+      warnings.push(`Wiersz ${lineNo}: nieprawidłowe godziny "${String(cells[colGodziny] ?? '').trim()}" (brygada "${brygada}", ${data}) — dozwolone 0–24, pominięto.`);
+      return;
+    }
+    const key = `${brygada}\u0000${data}`;
+    if (indexByKey.has(key)) {
+      warnings.push(`Wiersz ${lineNo}: duplikat brygada "${brygada}" + data ${data} — użyto ostatniej wartości (${godziny} h).`);
+      out[indexByKey.get(key)] = { brygada, data, godziny };
+      return;
+    }
+    indexByKey.set(key, out.length);
+    out.push({ brygada, data, godziny });
+  });
+  out.warnings = warnings;
+  return out;
 }
 
 // Rozdziela godziny każdej brygady równo na jej maszyny (wg wcToBrygada — { machine_id

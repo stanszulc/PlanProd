@@ -49,6 +49,84 @@ ZP-001/01/03,ZP-001/01,ZS-001,1,Kowalski,P-KOD,Spawanie,G-03,3,30,0,PLAN,2026-05
   },
 };
 
+// Dozwolone rozszerzenia per typ pliku (accept działa tylko dla pickera — przy drop sprawdzamy sami).
+const ACCEPT_EXT = {
+  erp_zp:            ['csv', 'tsv', 'txt', 'xlsx'],
+  wc_schedule:       ['xlsx'],
+  zp_status:         ['csv', 'tsv', 'txt'],
+  parallel_machines: ['csv', 'tsv', 'txt'],
+  bom_formatek:      ['csv', 'tsv', 'txt'],
+};
+
+const EMPTY_WARNING = 'Nie znaleziono rekordów – sprawdź format/kodowanie pliku.';
+
+// Pliki tekstowe czytamy jako UTF-8; jeśli w wyniku są znaki zastępcze U+FFFD
+// (typowy objaw CSV z Excela w windows-1250), próbujemy ponownie jako windows-1250.
+function decodeText(arrayBuffer) {
+  const utf8 = new TextDecoder('utf-8').decode(arrayBuffer);
+  if (!utf8.includes('�')) return utf8;
+  try {
+    return new TextDecoder('windows-1250').decode(arrayBuffer);
+  } catch {
+    return utf8; // środowisko bez obsługi windows-1250
+  }
+}
+
+// DropBox — obsługuje drag & drop i click. Na poziomie modułu (nie w renderze rodzica),
+// żeby nie był tworzony od nowa przy każdym renderze.
+function DropBox({ type, loaded, label, icon, desc, cols, info, infoText, warning, onFile }) {
+  const borderColor = warning ? T.warn : loaded ? T.ok : T.border2;
+  return (
+    <div
+      style={{
+        border: `1.5px dashed ${borderColor}`,
+        borderRadius: 12, padding: 24, textAlign: 'center',
+        background: warning ? 'rgba(251,191,36,0.05)' : loaded ? 'rgba(34,197,94,0.05)' : T.surface,
+        cursor: 'pointer', transition: 'all 0.2s',
+      }}
+      onClick={() => document.getElementById(`file_${type}`).click()}
+      onDragOver={e => e.preventDefault()}
+      onDrop={e => { e.preventDefault(); const f = e.dataTransfer.files[0]; if (f) onFile(f, type); }}
+    >
+      <div style={{ fontSize: 28, marginBottom: 8 }}>{icon}</div>
+      <div style={{ fontSize: 13, fontWeight: 600, color: T.text, marginBottom: 4 }}>{label}</div>
+      <div style={{ fontSize: 11, color: T.text2, marginBottom: 10, lineHeight: 1.5 }}>{desc}</div>
+      {warning ? (
+        <div style={{ fontSize: 12, color: T.warn, fontWeight: 600, lineHeight: 1.5 }}>⚠ {warning}</div>
+      ) : loaded ? (
+        <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 4 }}>
+          <div style={{ fontSize: 12, color: T.ok, fontWeight: 600 }}>✓ Załadowano</div>
+          {info && (
+            <div style={{ fontSize: 10, color: T.text3, lineHeight: 1.6 }}>
+              {info.zpCount} ZP · {info.opCount} operacji · {info.machineCount} maszyn
+            </div>
+          )}
+          {infoText && (
+            <div style={{ fontSize: 10, color: T.text3, lineHeight: 1.6 }}>{infoText}</div>
+          )}
+        </div>
+      ) : (
+        <div style={{ display: 'flex', gap: 5, justifyContent: 'center', flexWrap: 'wrap' }}>
+          {cols.map(c => (
+            <span key={c.n} style={{ ...s.tag(c.req ? T.accent : T.text3), fontSize: 10 }}>{c.n}</span>
+          ))}
+        </div>
+      )}
+      <input
+        id={`file_${type}`} type="file"
+        accept={type === 'erp_zp' ? '.csv,.tsv,.txt,.xlsx' : type === 'wc_schedule' ? '.xlsx' : '.csv,.tsv,.txt'}
+        style={{ display: 'none' }}
+        onChange={e => {
+          const input = e.target;
+          const f = input.files[0];
+          input.value = ''; // pozwala ponownie wybrać ten sam plik (inaczej onChange się nie odpali)
+          if (f) onFile(f, type);
+        }}
+      />
+    </div>
+  );
+}
+
 // [ZMIANA] Props: usunięto `routing` (zastąpione przez erpZp),
 // dodano `erpZp` — lista ZP sparsowana z parseZPFromERP
 export function ImportTab({
@@ -74,9 +152,26 @@ export function ImportTab({
   const [wcScheduleLoaded, setWcScheduleLoaded] = useState(false);
   const [wcScheduleInfo, setWcScheduleInfo] = useState(null); // { count }
   const [wcScheduleWarnings, setWcScheduleWarnings] = useState([]);
+  const [fileWarnings, setFileWarnings] = useState({}); // { [type]: tekst } — pusty wynik / zły typ pliku
+
+  function setFileWarning(type, msg) {
+    setFileWarnings(prev => {
+      if (!msg && !prev[type]) return prev;
+      const next = { ...prev };
+      if (msg) next[type] = msg; else delete next[type];
+      return next;
+    });
+  }
 
   function applyErpTsv(tsvText) {
     const result = onLoad(tsvText, 'erp_zp');
+    if (Array.isArray(result?.zpList) && result.zpList.length === 0) {
+      setErpLoaded(false);
+      setErpInfo(null);
+      setFileWarning('erp_zp', EMPTY_WARNING);
+      return false;
+    }
+    setFileWarning('erp_zp', null);
     setErpLoaded(true);
     if (result?.zpList) {
       const machines = new Set(
@@ -88,9 +183,19 @@ export function ImportTab({
         opCount:      result.zpList.reduce((s, z) => s + (z.ops?.length || 0), 0),
       });
     }
+    return true;
   }
 
   function readFile(file, type) {
+    // Rozszerzenie sprawdzamy tu (atrybut accept działa tylko dla pickera, nie dla drop).
+    const ext = (file.name.match(/\.([^.]+)$/)?.[1] || '').toLowerCase();
+    const allowed = ACCEPT_EXT[type] || [];
+    if (!allowed.includes(ext)) {
+      setFileWarning(type, `Nieobsługiwany typ pliku „${file.name}” — oczekiwano: ${allowed.map(e => '.' + e).join(', ')}.`);
+      return;
+    }
+    setFileWarning(type, null);
+
     // Eksport ZP można też podać jako xlsx (skoroszyt "Pulpit produkcji") —
     // czytamy wtedy cache tabeli przestawnej OBCIĄŻENIE zamiast ręcznie
     // eksportowanego TSV, żeby dane zawsze odzwierciedlały ostatnie
@@ -101,10 +206,18 @@ export function ImportTab({
       reader.onload = async e => {
         try {
           const rows = await parseGrafikGodzinXlsx(e.target.result);
+          const parseWarnings = rows.warnings || [];
+          if (rows.length === 0) {
+            setWcScheduleLoaded(false);
+            setWcScheduleInfo(null);
+            setWcScheduleWarnings(parseWarnings);
+            setFileWarning('wc_schedule', EMPTY_WARNING);
+            return;
+          }
           const result = onLoad(rows, 'wc_schedule');
           setWcScheduleLoaded(true);
           setWcScheduleInfo({ count: result?.count ?? rows.length });
-          setWcScheduleWarnings(result?.warnings || []);
+          setWcScheduleWarnings([...parseWarnings, ...(result?.warnings || [])]);
         } catch (err) {
           setImportError(err.message);
         }
@@ -114,14 +227,14 @@ export function ImportTab({
       return;
     }
 
-    if (type === 'erp_zp' && /\.xlsx$/i.test(file.name)) {
+    if (type === 'erp_zp' && ext === 'xlsx') {
       setXlsxError(null);
       const reader = new FileReader();
       reader.onload = async e => {
         try {
           const { tsv, rowCount } = await xlsxPivotCacheToZpTsv(e.target.result);
-          applyErpTsv(tsv);
-          setXlsxSourceInfo({ rowCount });
+          if (applyErpTsv(tsv)) setXlsxSourceInfo({ rowCount });
+          else setXlsxSourceInfo(null);
         } catch (err) {
           setXlsxError(err.message);
         }
@@ -135,33 +248,42 @@ export function ImportTab({
     const reader = new FileReader();
     reader.onload = e => {
       try {
+        const text = decodeText(e.target.result);
         if (type === 'erp_zp') {
-          applyErpTsv(e.target.result);
+          setXlsxSourceInfo(null); // "Źródło: cache pivota xlsx" dotyczy tylko ostatniego importu z xlsx
+          applyErpTsv(text);
           return;
         }
-        const result = onLoad(e.target.result, type);
+        const result = onLoad(text, type);
+        let empty = false;
         if (type === 'zp_status') {
-          setZpLoaded(true);
-          if (result?.rejected?.length) setRejectLog(result.rejected);
-          else setRejectLog([]);
+          const dataLines = text.split(/\r?\n/).filter(l => l.trim()).length - 1;
+          const rejected = result?.rejected?.length || 0;
+          empty = dataLines <= 0 || rejected >= dataLines;
+          setZpLoaded(!empty);
+          setRejectLog(rejected ? result.rejected : []);
         }
         if (type === 'parallel_machines') {
-          setParallelLoaded(true);
+          empty = (result?.count ?? 0) === 0;
+          setParallelLoaded(!empty);
           setParallelCount(result?.count ?? 0);
         }
         if (type === 'bom_formatek') {
-          setBomLoaded(true);
+          empty = (result?.count ?? 0) === 0;
+          setBomLoaded(!empty);
           setBomCount(result?.count ?? 0);
           setNestingResults(null);
           if (result?.rejected?.length) setRejectLog(result.rejected);
         }
+        setFileWarning(type, empty ? EMPTY_WARNING : null);
       } catch (err) {
         setImportError(err.message);
       }
     };
     reader.onerror = () => setImportError('Nie udało się odczytać pliku.');
-    reader.readAsText(file, 'UTF-8');
+    reader.readAsArrayBuffer(file);
   }
+
 
   // BETA: rozkrój — liczone lokalnie w tej zakładce, na żądanie (przycisk),
   // nigdy automatycznie — patrz nesting.js. Błąd nie psuje reszty aplikacji.
@@ -181,50 +303,6 @@ export function ImportTab({
     }
   }
 
-  // [ZMIANA] DropBox — uproszczony, obsługuje drag & drop i click
-  const DropBox = ({ type, loaded, label, icon, desc, cols, info, infoText }) => (
-    <div
-      style={{
-        border: `1.5px dashed ${loaded ? T.ok : T.border2}`,
-        borderRadius: 12, padding: 24, textAlign: 'center',
-        background: loaded ? 'rgba(34,197,94,0.05)' : T.surface,
-        cursor: 'pointer', transition: 'all 0.2s',
-      }}
-      onClick={() => document.getElementById(`file_${type}`).click()}
-      onDragOver={e => e.preventDefault()}
-      onDrop={e => { e.preventDefault(); const f = e.dataTransfer.files[0]; if (f) readFile(f, type); }}
-    >
-      <div style={{ fontSize: 28, marginBottom: 8 }}>{icon}</div>
-      <div style={{ fontSize: 13, fontWeight: 600, color: T.text, marginBottom: 4 }}>{label}</div>
-      <div style={{ fontSize: 11, color: T.text2, marginBottom: 10, lineHeight: 1.5 }}>{desc}</div>
-      {loaded ? (
-        <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 4 }}>
-          <div style={{ fontSize: 12, color: T.ok, fontWeight: 600 }}>✓ Załadowano</div>
-          {info && (
-            <div style={{ fontSize: 10, color: T.text3, lineHeight: 1.6 }}>
-              {info.zpCount} ZP · {info.opCount} operacji · {info.machineCount} maszyn
-            </div>
-          )}
-          {infoText && (
-            <div style={{ fontSize: 10, color: T.text3, lineHeight: 1.6 }}>{infoText}</div>
-          )}
-        </div>
-      ) : (
-        <div style={{ display: 'flex', gap: 5, justifyContent: 'center', flexWrap: 'wrap' }}>
-          {cols.map(c => (
-            <span key={c.n} style={{ ...s.tag(c.req ? T.accent : T.text3), fontSize: 10 }}>{c.n}</span>
-          ))}
-        </div>
-      )}
-      <input
-        id={`file_${type}`} type="file"
-        accept={type === 'erp_zp' ? '.csv,.tsv,.txt,.xlsx' : type === 'wc_schedule' ? '.xlsx' : '.csv,.tsv,.txt'}
-        style={{ display: 'none' }}
-        onChange={e => { const f = e.target.files[0]; if (f) readFile(f, type); }}
-      />
-    </div>
-  );
-
   const hasErpData    = erpZp?.length > 0;
   const hasStatusData = zpStatusData?.length > 0;
 
@@ -237,6 +315,8 @@ export function ImportTab({
         <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr 1fr 1fr', gap: 16 }}>
           <DropBox
             type="erp_zp"
+            warning={fileWarnings.erp_zp}
+            onFile={readFile}
             loaded={erpLoaded || hasErpData}
             label="Eksport ZP z ERP"
             icon="🏭"
@@ -258,6 +338,8 @@ export function ImportTab({
           />
           <DropBox
             type="zp_status"
+            warning={fileWarnings.zp_status}
+            onFile={readFile}
             loaded={zpLoaded || hasStatusData}
             label="zp_status.csv"
             icon="📋"
@@ -273,6 +355,8 @@ export function ImportTab({
           />
           <DropBox
             type="parallel_machines"
+            warning={fileWarnings.parallel_machines}
+            onFile={readFile}
             loaded={parallelLoaded || parallelMachines?.length > 0}
             label="Maszyny równoległe"
             icon="🔀"
@@ -284,6 +368,8 @@ export function ImportTab({
           />
           <DropBox
             type="bom_formatek"
+            warning={fileWarnings.bom_formatek}
+            onFile={readFile}
             loaded={bomLoaded || bomFormatki?.length > 0}
             label="Formatki do rozkroju"
             icon="✂️"
@@ -300,6 +386,8 @@ export function ImportTab({
           />
           <DropBox
             type="wc_schedule"
+            warning={fileWarnings.wc_schedule}
+            onFile={readFile}
             loaded={wcScheduleLoaded}
             label="Grafik godzin (loadplanner)"
             icon="🕒"

@@ -207,8 +207,57 @@ export function calcReasonPareto(records, filterWc = null) {
 
 // ─── PARSER ZP_STATUS ────────────────────────────────────────────────────────
 
+// Liczba w formacie PL: przecinek dziesiętny, spacje (też NBSP) jako separator tysięcy.
+// Zwraca NaN gdy nie da się sparsować (puste -> NaN; wołający decyduje o domyślnej).
+export function parseNum(v) {
+  if (typeof v === 'number') return v;
+  const s = String(v ?? '').replace(/[\s\u00a0]/g, '').replace(',', '.');
+  if (!/^[+-]?(\d+\.?\d*|\.\d+)$/.test(s)) return NaN;
+  return parseFloat(s);
+}
+
+function validLocalDate(y, mo, d, h, mi, s) {
+  const dt = new Date(y, mo - 1, d, h, mi, s);
+  return (dt.getFullYear() === y && dt.getMonth() === mo - 1 && dt.getDate() === d &&
+          dt.getHours() === h && dt.getMinutes() === mi) ? dt : null;
+}
+
+// Rozbiera datę do { y, mo, d, h, mi, s, hasTime } albo null. Obsługiwane:
+// YYYY-MM-DD[ T]HH:MM[:SS], DD.MM.YYYY[ HH:MM[:SS]], DD/MM/YYYY[ HH:MM[:SS]].
+function splitDateFlexible(str) {
+  const s = String(str ?? '').trim();
+  let m = s.match(/^(\d{4})-(\d{1,2})-(\d{1,2})(?:[T ]+(\d{1,2}):(\d{2})(?::(\d{2}))?)?$/);
+  let y, mo, d, tm;
+  if (m) { [, y, mo, d] = m; tm = m.slice(4); }
+  else {
+    m = s.match(/^(\d{1,2})[./](\d{1,2})[./](\d{4})(?:[T ]+(\d{1,2}):(\d{2})(?::(\d{2}))?)?$/);
+    if (!m) return null;
+    [, d, mo, y] = m; tm = m.slice(4);
+  }
+  return { y: +y, mo: +mo, d: +d, h: +(tm[0] ?? 0), mi: +(tm[1] ?? 0), s: +(tm[2] ?? 0), hasTime: tm[0] !== undefined };
+}
+
+// Data lokalna (bez przesunięć UTC). Bez godziny: 00:00:00, a z { endOfDay: true }
+// 23:59:59 (spójnie z need_date). Nieparsowalne/nieistniejące (31.02) -> null.
+export function parseDateFlexible(str, { endOfDay = false } = {}) {
+  const p = splitDateFlexible(str);
+  if (!p) return null;
+  if (!p.hasTime && endOfDay) return validLocalDate(p.y, p.mo, p.d, 23, 59, 59);
+  return validLocalDate(p.y, p.mo, p.d, p.h, p.mi, p.s);
+}
+
+// Normalizacja tekstu daty do ISO ('YYYY-MM-DD' albo 'YYYY-MM-DD HH:MM[:SS]') albo null.
+function normalizeDateText(str) {
+  const p = splitDateFlexible(str);
+  if (!p || !validLocalDate(p.y, p.mo, p.d, p.h, p.mi, p.s)) return null;
+  const z = (n, l = 2) => String(n).padStart(l, '0');
+  const date = `${z(p.y, 4)}-${z(p.mo)}-${z(p.d)}`;
+  if (!p.hasTime) return date;
+  return `${date} ${z(p.h)}:${z(p.mi)}${p.s ? ':' + z(p.s) : ''}`;
+}
+
 export function parseZpStatus(text) {
-  const clean = text.replace(/^﻿/, '');
+  const clean = text.replace(/^\uFEFF/, '');
   const lines = clean.trim().split('\n').map(l => l.trim()).filter(Boolean);
   if (lines.length < 2) return { records: [], rejected: [] };
   const sep     = lines[0].includes(';') ? ';' : ',';
@@ -216,6 +265,9 @@ export function parseZpStatus(text) {
 
   const records  = [];
   const rejected = [];
+
+  // puste pole -> 0; niepuste nieparsowalne -> NaN (odrzucane w walidacji)
+  const numOr0 = v => (v === undefined || v === null || String(v).trim() === '') ? 0 : parseNum(v);
 
   lines.slice(1).forEach((line, idx) => {
     const vals = safeSplitCSV(line, sep);
@@ -232,8 +284,8 @@ export function parseZpStatus(text) {
       operation:     r.operation || r.op || '',
       workcenter:    (r.workcenter || r.wc || '').toUpperCase(),
       sequence:      parseInt(r.sequence || r.seq || 1),
-      volume_plan:   Math.max(0, parseFloat(r.volume_plan || r.volume || 0)),
-      volume_actual: Math.max(0, parseFloat(r.volume_actual || 0)),
+      volume_plan:   Math.max(0, numOr0(r.volume_plan || r.volume)),
+      volume_actual: Math.max(0, numOr0(r.volume_actual)),
       status:        (r.status || 'PLAN').toUpperCase(),
       need_date:     r.need_date || r.due_date || '',
       planned_start: r.planned_start || '',
@@ -248,9 +300,10 @@ export function parseZpStatus(text) {
     if (err) {
       rejected.push({ line: idx + 2, data: raw, reason: err });
     } else {
-      const toDate = s => s ? new Date(s) : null;
+      const toDate = s => s ? parseDateFlexible(s) : null;
       records.push({
         ...raw,
+        need_date:     normalizeDateText(raw.need_date), // ISO — inne zakładki parsują przez new Date()
         planned_start: toDate(raw.planned_start),
         planned_end:   toDate(raw.planned_end),
         actual_start:  toDate(raw.actual_start),
@@ -268,6 +321,14 @@ function validateZpStatus(r) {
   if (!r.product)    return 'brak product';
   if (!r.workcenter) return 'brak workcenter';
   if (!r.need_date)  return 'brak need_date';
+  if (!splitDateFlexible(r.need_date) || !parseDateFlexible(r.need_date))
+    return `nieprawidłowa data need_date: ${r.need_date}`;
+  for (const f of ['planned_start', 'planned_end', 'actual_start', 'actual_end']) {
+    if (r[f] && !parseDateFlexible(r[f])) return `nieprawidłowa data ${f}: ${r[f]}`;
+  }
+  for (const f of ['volume_plan', 'volume_actual', 'pozycja', 'sequence', 'priority']) {
+    if (!Number.isFinite(r[f])) return `nieprawidłowa liczba ${f}`;
+  }
   if (!['PLAN', 'WIP', 'CNF', 'CNC'].includes(r.status))
     return `nieznany status: ${r.status}`;
   return null;
@@ -299,7 +360,7 @@ export function calcZpHeaderStatus(records) {
     else if (cnfOps > 0 || wipOps > 0 || anyStarted)      status = 'WIP';
 
     const progress_pct = Math.round((cnfOps / totalOps) * 100);
-    const need         = first.need_date ? new Date(first.need_date + 'T23:59:59') : null;
+    const need         = first.need_date ? parseDateFlexible(first.need_date, { endOfDay: true }) : null;
     const isLate       = need && lastActual && lastActual > need;
     const isAtRisk     = need && status !== 'CNF' && new Date() > need;
     const volume_actual = Math.min(...ops.map(o => o.volume_actual));
@@ -328,6 +389,11 @@ export function calcZpHeaderStatus(records) {
 
 // ─── EKSPORT ZP_STATUS CSV ────────────────────────────────────────────────────
 
+function csvField(v) {
+  const s = String(v ?? '').replace(/[\r\n]+/g, ' '); // parser jest liniowy — nowe linie spłaszczamy
+  return /[",;]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s;
+}
+
 export function exportZpStatusCsv(zp, fwdZP, routing) {
   const routingByProduct = {};
   routing.forEach(r => {
@@ -355,7 +421,13 @@ export function exportZpStatusCsv(zp, fwdZP, routing) {
         f.sequence   === op.sequence
       );
       const zpOpId = `${zpItem.zp_id}/${String(idx + 1).padStart(2, '0')}`;
-      const fmtDt  = dt => dt ? new Date(dt).toISOString().slice(0, 16).replace('T', ' ') : '';
+      const fmtDt  = dt => {
+        if (!dt) return '';
+        const d = new Date(dt);
+        if (isNaN(d)) return '';
+        const z = n => String(n).padStart(2, '0'); // czas LOKALNY — parseDateFlexible czyta lokalnie
+        return `${d.getFullYear()}-${z(d.getMonth() + 1)}-${z(d.getDate())} ${z(d.getHours())}:${z(d.getMinutes())}`;
+      };
 
       rows.push([
         zpOpId, zpItem.zp_id, zpItem.zs_id || '', zpItem.pozycja || 1,
@@ -368,7 +440,7 @@ export function exportZpStatusCsv(zp, fwdZP, routing) {
   });
 
   const csv = rows.map(r =>
-    r.map(v => String(v).includes(',') ? `"${v}"` : v).join(',')
+    r.map(csvField).join(',')
   ).join('\n');
 
   const a   = document.createElement('a');
