@@ -479,10 +479,15 @@ export function tocBuffer(backStartDt, planStartDt, dueDateDt, realEndDt) {
   if (realEndDt && realEndDt > dueDateDt) {
     return { zone: 'black', consumed: 1, label: 'SPÓŹNIONE', overH: (realEndDt - dueDateDt) / MS_PER_HOUR };
   }
-  const bufferTotal = dueDateDt - backStartDt;
-  if (bufferTotal <= 0) return { zone: 'black', consumed: 1, label: 'PRZEKROCZONY' };
+  const windowMs = dueDateDt - planStartDt;
+  if (windowMs <= 0) return { zone: 'black', consumed: 1, label: 'PRZEKROCZONY' };
 
-  const consumed = 1 - (dueDateDt - planStartDt) / bufferTotal;
+  // Zużycie okna planowania: jaka część czasu od planStart do terminu jest zajęta
+  // przez plan (planStart → realEnd). Ten sam model co ratio w Buforze TOC
+  // (potrzebne / dostępne). Wcześniejszy wzór używał backStart = najwcześniejszy
+  // start zaplanowanej operacji (>= planStart), przez co consumed <= 0 i strefy
+  // yellow/red były nieosiągalne.
+  const consumed = Math.max(0, ((realEndDt ?? planStartDt) - planStartDt) / windowMs);
   if (consumed < TOC_YELLOW) return { zone: 'green',  consumed, label: 'OK' };
   if (consumed < TOC_RED)    return { zone: 'yellow', consumed, label: 'UWAGA' };
   if (consumed < 1.0)        return { zone: 'red',    consumed, label: 'ZAGROŻONE' };
