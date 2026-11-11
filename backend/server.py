@@ -6,7 +6,7 @@ Endpoint: POST /optimize
 Input:  { zpList, routingByProduct, wcSchedule, planStart, config }
 Output: { fwdZP, zpStatus, cpStatus, elapsed, lateCount, totalDelay, maxDelay }
 """
-import json, math, sys
+import json, math, sys, bisect
 from datetime import datetime, timedelta
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
@@ -17,7 +17,7 @@ from ortools.sat.python import cp_model
 from cpsat_tardiness import solve_tardiness
 
 app = FastAPI()
-print(">>> LOADED server.py v2 — cpsat-tardiness registered")
+print(">>> LOADED server.py v2")
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["http://localhost:5173", "http://localhost:3000"],
@@ -713,11 +713,6 @@ def _sa_run(zp_list, routing, wc_sched, plan_start, cfg, time_limit):
     fwd, status_list = schedule_sa(zp_list, routing, wc_sched, plan_start, cfg, time_limit)
     return fwd, status_list
 
-if __name__ == '__main__':
-    
-    print('FlowOps Optimizer — http://localhost:8765')
-    uvicorn.run(app, host='127.0.0.1', port=8765)
-
 @app.post('/optimize/cpsat-tardiness')
 async def optimize_cpsat_tardiness(req: OptimizeRequest):
     """
@@ -771,3 +766,7 @@ async def optimize_cpsat_tardiness(req: OptimizeRequest):
         import traceback
         traceback.print_exc()
         return {'error': str(ex)}
+
+if __name__ == '__main__':
+    print('FlowOps Optimizer — http://localhost:8765')
+    uvicorn.run(app, host='127.0.0.1', port=8765)
