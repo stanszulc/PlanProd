@@ -192,8 +192,9 @@ function buildBrygadaPool(wcToBrygada, wcSchedule) {
 // operatorze. Sufit dzienny liczy się jednak ze wspólnej puli brygady, gdy istnieje.
 // Pool   3xxxx: capacity-based (poolUsed {dateStr→{total,byWc}})
 function findSlotForward(fromDt, needH, wc, wcSchedule, occ, getOccKey, getPoolAvail, poolUsed, shiftStart = 0, getSharedPoolKey, opKey) {
-  const occKey    = getOccKey    ? getOccKey(wc)         : wc;
-  const isPool    = occKey !== wc;                      // 3xxxx: POOL_<brygada> ≠ wc
+  const wcStr     = String(wc);                         // kod bywa liczbą — porównujemy jako tekst
+  const occKey    = getOccKey    ? getOccKey(wc)         : wcStr;
+  const isPool    = occKey !== wcStr;                   // 3xxxx: POOL_<brygada> ≠ wc
   const sharedKey = getSharedPoolKey ? getSharedPoolKey(wc) : null; // maszyna w brygadzie mieszanej
   const availFn   = getPoolAvail ? (dt) => getPoolAvail(wc, dt) : (dt) => getAvail(wc, dt, wcSchedule);
 
@@ -305,6 +306,8 @@ function findSlotForward(fromDt, needH, wc, wcSchedule, occ, getOccKey, getPoolA
     startDt: segs.length ? segs[0].segStart           : new Date(fromDt),
     endDt:   segs.length ? segs[segs.length-1].segEnd  : new Date(fromDt),
     segs,
+    // true gdy nie udało się zaplanować całości (grafik z zerami / wyczerpany SAFETY_LIMIT)
+    incomplete: remaining > EPSILON,
   };
 }
 
@@ -502,6 +505,11 @@ function scheduleAll(zpList, routingByProduct, wcSchedule, planStartDt, onProgre
       priority: zp.priority, backStart, realEnd, delayH, delayDays, toc,
       bottleneck, late: delayH > 0, backDelay: 0,
     });
+    const unplanned = sorted.filter(o => o.incomplete);
+    if (unplanned.length) {
+      zpStatus[zpStatus.length - 1].planWarning =
+        `Brak dostępnej zdolności (grafik z zerami lub przekroczony horyzont): ${unplanned.length} operacji nie zaplanowano w całości`;
+    }
   }
 
   // Operacje per ZP (>0h); ZP bez żadnej operacji dostają status od razu.
@@ -575,11 +583,11 @@ function scheduleAll(zpList, routingByProduct, wcSchedule, planStartDt, onProgre
       const op   = ops[opIdx];
       const durH = op.ct_min > 0 ? zp.volume * op.ct_min / 60 : (op._durH ?? 0);
 
-      const { startDt, endDt, segs } = findSlotForward(
+      const { startDt, endDt, segs, incomplete } = findSlotForward(
         cursor, durH, op.workcenter, wcSchedule, occ, getOccKey, getPoolAvail, poolUsed, SHIFT_START, getSharedPoolKey
       );
 
-      state.opResults.push({ op, startDt, endDt, segs, durH });
+      state.opResults.push({ op, startDt, endDt, segs, durH, incomplete });
       state.opIdx++;
       const nextOp = ops[state.opIdx];
       const transferMs = (nextOp && nextOp.workcenter !== op.workcenter) ? TRANSFER_TIME_H * MS : 0;
@@ -627,11 +635,11 @@ function scheduleAll(zpList, routingByProduct, wcSchedule, planStartDt, onProgre
     }
 
     const durH = op.ct_min > 0 ? zp.volume * op.ct_min / 60 : (op._durH ?? 0);
-    const { startDt, endDt, segs } = findSlotForward(
+    const { startDt, endDt, segs, incomplete } = findSlotForward(
       cursor, durH, op.workcenter, wcSchedule, occ, getOccKey, getPoolAvail, poolUsed, SHIFT_START, getSharedPoolKey
     );
 
-    zpCtx.opResults.push({ op, startDt, endDt, segs, durH });
+    zpCtx.opResults.push({ op, startDt, endDt, segs, durH, incomplete });
     const opKey = op._opUid ?? op.sequence;
     zpCtx.doneEnds[opKey] = endDt;
     zpCtx.remaining--;
@@ -675,10 +683,10 @@ function scheduleAll(zpList, routingByProduct, wcSchedule, planStartDt, onProgre
     let cursor = zpCtx.opResults.reduce((m, r) => (r.endDt > m ? r.endDt : m), zpCtx.initialCursor);
     for (const op of stuck) {
       const durH = op.ct_min > 0 ? zp.volume * op.ct_min / 60 : (op._durH ?? 0);
-      const { startDt, endDt, segs } = findSlotForward(
+      const { startDt, endDt, segs, incomplete } = findSlotForward(
         cursor, durH, op.workcenter, wcSchedule, occ, getOccKey, getPoolAvail, poolUsed, SHIFT_START, getSharedPoolKey
       );
-      zpCtx.opResults.push({ op, startDt, endDt, segs, durH });
+      zpCtx.opResults.push({ op, startDt, endDt, segs, durH, incomplete });
       cursor = endDt;
     }
     zpCtx.remaining = 0;
@@ -736,6 +744,11 @@ self.onmessage = function(e) {
 
       const lateStart = lateList.length;
 
+      // Ta sama definicja puli co w findSlotForward: pool = gniazdo, którego klucz
+      // zajętości to POOL_<brygada> (gniazdo 3xxxx w poolowalnej brygadzie). Gniazdo
+      // 3xxxx bez brygady jest w SCHEDULE zwykłą maszyną ze slotami.
+      const isPoolWc = (wc) => localGetOccKey(String(wc)) !== String(wc);
+
       // buildOcc — ujednolicony format: {from,to} dla maszyn, poolUsed dla 3xxxx
       // (oraz dla maszyny 2xxxx w brygadzie mieszanej, przez sharedKey).
       function buildOcc(ops) {
@@ -743,7 +756,7 @@ self.onmessage = function(e) {
         const poolUsed = makePoolUsed();
         for (const op of ops) {
           const wc        = String(op.workcenter);
-          const isPool    = wc.startsWith('3');
+          const isPool    = isPoolWc(wc);
           const sharedKey = isPool ? null : localGetSharedPoolKey(wc);
           for (const seg of (op.segments || [])) {
             if (!seg.segStart || !seg.segEnd) continue;
@@ -791,7 +804,7 @@ self.onmessage = function(e) {
       function rollbackReservations(slots) {
         for (const { op, slot } of slots) {
           const wc        = String(op.workcenter);
-          const isPool    = wc.startsWith('3');
+          const isPool    = isPoolWc(wc);
           const sharedKey = isPool ? null : localGetSharedPoolKey(wc);
           if (!isPool) {
             const list = occ[wc];
@@ -816,6 +829,57 @@ self.onmessage = function(e) {
       let iterations = 0;
       const MAX_ITER = 20;
       const planStartDt = new Date(planStart + 'T00:00:00');
+
+      const TRANSFER_MS = (config?.transferTimeH ?? 2) * MS;
+      const USE_GRAPH   = (config?.schedulingGraphMode ?? 'graph') === 'graph';
+
+      // Układa operacje jednego ZP. Operacja 0h nie rezerwuje nic (slot długości 0),
+      // zamiast zwracać null i blokować przesunięcie całego ZP.
+      function planZpOps(zpOps) {
+        const newSlots = [];
+        const place = (op, from) => {
+          if ((op.durH || 0) <= EPSILON) return { start: new Date(from), end: new Date(from), segs: [] };
+          return findEarliestSlot(op.workcenter, from, op.durH, occ, poolUsed, op.zp_id);
+        };
+        const keyOf = (o) => o._opUid ?? o.sequence;
+        const useGraph = USE_GRAPH && zpOps.some(o => o.predecessors && o.predecessors.length);
+
+        if (!useGraph) {
+          let cursor = new Date(planStartDt);
+          for (let i = 0; i < zpOps.length; i++) {
+            const op = zpOps[i];
+            const slot = place(op, cursor);
+            if (!slot) return { ok: false, newSlots };
+            newSlots.push({ op, slot });
+            const next = zpOps[i + 1];
+            const tr = next && String(next.workcenter) !== String(op.workcenter) ? TRANSFER_MS : 0;
+            cursor = new Date(slot.end.getTime() + tr);
+          }
+          return { ok: true, newSlots };
+        }
+
+        const byKey   = new Map(zpOps.map(o => [keyOf(o), o]));
+        const ends    = new Map();
+        const pending = [...zpOps];
+        while (pending.length) {
+          // pierwsza gotowa operacja (wg sequence); przy cyklu wymuś pierwszą z kolejki
+          let idx = pending.findIndex(o => (o.predecessors || []).every(p => ends.has(p) || !byKey.has(p)));
+          if (idx < 0) idx = 0;
+          const op = pending.splice(idx, 1)[0];
+          let from = planStartDt.getTime();
+          for (const p of (op.predecessors || [])) {
+            if (!ends.has(p)) continue;
+            const po = byKey.get(p);
+            const tr = String(po.workcenter) !== String(op.workcenter) ? TRANSFER_MS : 0;
+            from = Math.max(from, ends.get(p) + tr);
+          }
+          const slot = place(op, new Date(from));
+          if (!slot) return { ok: false, newSlots };
+          newSlots.push({ op, slot });
+          ends.set(keyOf(op), slot.end.getTime());
+        }
+        return { ok: true, newSlots };
+      }
 
       let improved = true;
       while (improved && iterations < MAX_ITER) {
@@ -846,7 +910,7 @@ self.onmessage = function(e) {
         // Usuń occupancy tego ZP
         for (const op of zpOps) {
           const wc        = String(op.workcenter);
-          const isPool    = wc.startsWith('3');
+          const isPool    = isPoolWc(wc);
           const sharedKey = isPool ? null : localGetSharedPoolKey(wc);
           if (isPool) {
             for (const seg of (op.segments || [])) {
@@ -877,20 +941,16 @@ self.onmessage = function(e) {
           }
         }
 
-        // Planuj operacje ZP od planStart sekwencyjnie
-        let cursor = new Date(planStartDt);
-        let ok = true;
-        const newSlots = [];
-
-        for (const op of zpOps) {
-          const slot = findEarliestSlot(op.workcenter, cursor, op.durH, occ, poolUsed, op.zp_id);
-          if (!slot) { ok = false; break; }
-          newSlots.push({ op, slot });
-          cursor = slot.end;
-        }
+        // Planuj operacje ZP od planStart, z grafem (predecessors) i transferem
+        // między gniazdami tak jak scheduleAll — wcześniej: łańcuch po sequence.
+        const planned    = planZpOps(zpOps);
+        const ok         = planned.ok;
+        const newSlots   = planned.newSlots;
 
         const oldStatus  = workStatus.find(z => z.zp_id === zpId);
-        const newRealEnd = ok ? newSlots[newSlots.length - 1].slot.end : null;
+        const newRealEnd = ok
+          ? new Date(Math.max(...newSlots.map(ns => ns.slot.end.getTime())))
+          : null;
         const oldRealEnd = oldStatus ? new Date(oldStatus.realEnd) : null;
 
         if (!ok || (oldRealEnd && newRealEnd >= oldRealEnd)) {
@@ -901,7 +961,7 @@ self.onmessage = function(e) {
           // Przywróć occupancy
           for (const op of zpOps) {
             const wc        = String(op.workcenter);
-            const isPool    = wc.startsWith('3');
+            const isPool    = isPoolWc(wc);
             const sharedKey = isPool ? null : localGetSharedPoolKey(wc);
             for (const seg of (op.segments || [])) {
               if (!seg.segStart) continue;
