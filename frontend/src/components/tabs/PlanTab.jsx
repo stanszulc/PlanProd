@@ -25,6 +25,9 @@ export function PlanTab({ routing, zp, globalLookups, wcSchedule, subZP, fwdZP, 
     flexShrink: 0,
   };
 
+  const warnText = (st) => [st.graphWarning, st.planWarning].filter(Boolean).join('; ');
+  const warnCount = (zpStatus || []).filter(st => warnText(st)).length;
+
   return (
     <div style={{ display:'flex', flexDirection:'column', gap:8, padding:'0 0 8px' }}>
 
@@ -49,6 +52,11 @@ export function PlanTab({ routing, zp, globalLookups, wcSchedule, subZP, fwdZP, 
       {zpStatus && zpStatus.length > 0 && (
         <div style={{ ...panelStyle, maxHeight: '35vh', minHeight: 120 }}>
           <div style={headerStyle}>📋 Status ZP — TOC Buffer Management</div>
+          {warnCount > 0 && (
+            <div style={{ fontSize:11, fontWeight:600, color:T.warn, background:T.warnBg, padding:'4px 14px' }}>
+              ⚠ {warnCount} ZP z ostrzeżeniami planu
+            </div>
+          )}
           <div style={{ overflowY:'auto', overflowX:'auto' }}>
             <table style={{ width:'100%', borderCollapse:'collapse', fontSize:12 }}>
               <thead><tr>
@@ -102,6 +110,10 @@ export function PlanTab({ routing, zp, globalLookups, wcSchedule, subZP, fwdZP, 
                                 <span style={{ display:'flex', alignItems:'center', gap:4 }}>
                                   <Dot color={col} size={7}/>
                                   <code style={{ fontSize:11, color:T.accent, background:T.accentBg, padding:'1px 5px', borderRadius:4 }}>{st.zp_id}</code>
+                                  {warnText(st) && (
+                                    <span title={warnText(st)} style={{ fontSize:10, fontWeight:700, color:T.warn,
+                                      background:T.warnBg, padding:'0 5px', borderRadius:4, cursor:'help' }}>⚠</span>
+                                  )}
                                 </span>
                               </td>
                               <td style={{ padding:'6px 8px', borderBottom:`1px solid ${T.border}`, color:T.text2, fontSize:11 }}>{st.product}</td>

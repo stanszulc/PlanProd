@@ -1,5 +1,5 @@
 import { useState, useMemo, useEffect, useRef } from 'react';
-import { T } from '../../constants/theme.js';
+import { T, s } from '../../constants/theme.js';
 import { fmtDt } from '../../utils/scheduler.js';
 
 export function ScheduleDebugTab({ fwdZP = [], zpStatus = [], planStart, scheduleConfig = {},
@@ -233,10 +233,42 @@ export function ScheduleDebugTab({ fwdZP = [], zpStatus = [], planStart, schedul
   const tdStyle = { padding: '4px 8px', borderBottom: `1px solid ${T.border}`, fontSize: 11, whiteSpace: 'nowrap' };
   const mono = { fontFamily: 'monospace' };
 
+  const warnRows = [];
+  zpStatus.forEach(z => {
+    if (z.graphWarning) warnRows.push({ zp: z.zp_id, typ: 'Graf', opis: z.graphWarning });
+    if (z.planWarning) warnRows.push({ zp: z.zp_id, typ: 'Zdolność', opis: z.planWarning });
+  });
+  const warnCard = warnRows.length > 0 && (
+    <div style={s.card}>
+      <div style={s.cardTitle}>Ostrzeżenia planu</div>
+      <table style={{ width: '100%', borderCollapse: 'collapse' }}>
+        <thead><tr>
+          {['ZP', 'Typ', 'Opis'].map(h => (
+            <th key={h} style={{ padding: '6px 8px', textAlign: 'left', fontSize: 10, fontWeight: 600,
+              letterSpacing: '.06em', textTransform: 'uppercase', color: T.text3,
+              borderBottom: `1px solid ${T.border}` }}>{h}</th>
+          ))}
+        </tr></thead>
+        <tbody>
+          {warnRows.map((r, i) => (
+            <tr key={`${r.zp}-${r.typ}-${i}`}>
+              <td style={{ padding: '4px 8px', borderBottom: `1px solid ${T.border}`, fontSize: 11, fontFamily: 'monospace' }}>{r.zp}</td>
+              <td style={{ padding: '4px 8px', borderBottom: `1px solid ${T.border}`, fontSize: 11, color: T.warn, fontWeight: 600 }}>{r.typ}</td>
+              <td style={{ padding: '4px 8px', borderBottom: `1px solid ${T.border}`, fontSize: 11, color: T.text2 }}>{r.opis}</td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </div>
+  );
+
   if (!fwdZP.length) return (
+    <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
+    {warnCard}
     <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', padding: 48, color: T.text3, gap: 12 }}>
       <div style={{ fontSize: 32 }}>📋</div>
       <div style={{ fontSize: 14, fontWeight: 500, color: T.text2 }}>Brak danych harmonogramu</div>
+    </div>
     </div>
   );
 
@@ -260,6 +292,8 @@ export function ScheduleDebugTab({ fwdZP = [], zpStatus = [], planStart, schedul
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: 12, padding: '0 0 16px' }}>
+
+      {warnCard}
 
       {/* ── PANEL USTAWIEŃ ── */}
       <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', padding: '10px 14px',
