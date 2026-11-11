@@ -1,24 +1,8 @@
 import { useState, useMemo } from 'react';
 import { T, s, tocColor } from '../../constants/theme.js';
+import { parseDt, fmtIsoDate, calcOtif, aggregateZsOtif } from '../../utils/otif.js';
 
 // ─── HELPERS ─────────────────────────────────────────────────────────────────
-
-function parseDt(str) {
-  if (!str) return null;
-  if (str instanceof Date) return isNaN(str) ? null : str;
-  if (typeof str !== 'string') return new Date(str) || null;
-  return new Date(str.includes('T') ? str : str.replace(' ', 'T'));
-}
-
-function fmtDt(dt) {
-  if (!dt) return '—';
-  const d = parseDt(dt);
-  if (!d) return '—';
-  return String(d.getMonth()+1).padStart(2,'0') + '.' +
-    String(d.getDate()).padStart(2,'0') + ' ' +
-    String(d.getHours()).padStart(2,'0') + ':' +
-    String(d.getMinutes()).padStart(2,'0');
-}
 
 function fmtH(h) {
   if (h == null || isNaN(h)) return '—';
@@ -28,7 +12,7 @@ function fmtH(h) {
 /**
  * Dla pozycji ZP (grupowane po parent_zp):
  * - On Time: actual_end(ostatnia CNF op) <= need_date
- * - In Full: suma volume_actual >= suma volume_plan (tylko nie-CNC)
+ * - In Full: volume_actual >= volume_plan operacji końcowej (patrz utils/otif.js)
  * - LT: actual_end(last) - actual_start(first)
  * - Touch time: suma (actual_end - actual_start) dla CNF
  * - Queue time: LT - touch time
@@ -40,30 +24,7 @@ function calcPozycja(ops) {
   const nonCnc   = ops.filter(o => o.status !== 'CNC');
   const cnfOps   = ops.filter(o => o.status === 'CNF');
   const allCnc   = nonCnc.length === 0;
-  const need_date = parseDt(ops[ops.length - 1]?.need_date || ops[0]?.need_date);
-
-  // OTIF
-  let onTime = null, inFull = null, otif = null;
-
-  if (allCnc) {
-    onTime = false; inFull = false; otif = false;
-  } else {
-    const volPlan   = nonCnc.reduce((s, o) => s + (o.volume_plan   || 0), 0);
-    const volActual = nonCnc.reduce((s, o) => s + (o.volume_actual || 0), 0);
-    inFull = volActual >= volPlan && volPlan > 0;
-
-    const lastCnf = cnfOps.length ? cnfOps[cnfOps.length - 1] : null;
-    const actualEnd = lastCnf ? parseDt(lastCnf.actual_end) : null;
-    if (actualEnd && need_date) {
-      onTime = actualEnd <= need_date;
-    } else if (cnfOps.length < nonCnc.length) {
-      onTime = null; // jeszcze w toku
-    }
-
-    otif = onTime === true && inFull === true ? true
-         : onTime === false || inFull === false ? false
-         : null;
-  }
+  const { need_date, onTime, inFull, otif, volPlan, volActual } = calcOtif(ops);
 
   // LT technologiczny
   const firstOp = nonCnc.find(o => o.actual_start);
@@ -103,8 +64,7 @@ function calcPozycja(ops) {
     onTime, inFull, otif,
     ltH, touchH, queueH, effPct,
     bottleneck,
-    volPlan:   nonCnc.reduce((s, o) => s + (o.volume_plan   || 0), 0),
-    volActual: nonCnc.reduce((s, o) => s + (o.volume_actual || 0), 0),
+    volPlan, volActual,
     lastEnd,
     allCnc,
   };
@@ -129,10 +89,7 @@ function buildZsTree(zpStatusData) {
 
   return Object.values(byZs).map(zs => {
     zs.positions.sort((a, b) => String(a.pozycja).localeCompare(String(b.pozycja)));
-    const nonCncPos = zs.positions.filter(p => !p.allCnc);
-    const otifFail  = zs.positions.some(p => p.otif === false);
-    const otifOk    = nonCncPos.length > 0 && nonCncPos.every(p => p.otif === true);
-    const otif      = otifFail ? false : otifOk ? true : null;
+    const otif      = aggregateZsOtif(zs.positions);
     const lastDue   = zs.positions.reduce((d, p) => (!d || (p.need_date && p.need_date > d)) ? p.need_date : d, null);
     const avgLt     = (() => {
       const lts = zs.positions.filter(p => p.ltH != null).map(p => p.ltH);
@@ -179,7 +136,7 @@ function PozycjaRow({ pos }) {
   const delayH = pos.lastEnd && pos.need_date
     ? Math.max(0, (pos.lastEnd - pos.need_date) / 3600000)
     : null;
-  const delayD = delayH != null ? (delayH / 16).toFixed(1) : null;
+  const delayD = delayH != null ? (delayH / 24).toFixed(1) : null;
 
   return (
     <tr style={{ background: pos.allCnc ? 'rgba(100,100,100,0.05)' : 'transparent' }}>
@@ -191,7 +148,7 @@ function PozycjaRow({ pos }) {
       </td>
       <td style={{ ...tdStyle, fontSize: 11, color: T.text2 }}>{pos.product}</td>
       <td style={{ ...tdStyle, fontFamily: 'monospace', fontSize: 11, color: T.text2 }}>
-        {pos.need_date?.toISOString().slice(0, 10)}
+        {fmtIsoDate(pos.need_date)}
       </td>
       <td style={{ ...tdStyle, fontSize: 11 }}>
         <StatusBadge status={pos.status} />
@@ -256,10 +213,11 @@ function ZsRow({ zs, expanded, onToggle }) {
         {/* OT + IF osobno, najgorszy z pozycji */}
         <div style={{ display: 'flex', gap: 6 }}>
           {(() => {
-            const otFail = zs.positions.some(p => p.onTime === false);
-            const otOk   = zs.positions.filter(p => !p.allCnc).every(p => p.onTime === true);
-            const ifFail = zs.positions.some(p => p.inFull === false);
-            const ifOk   = zs.positions.filter(p => !p.allCnc).every(p => p.inFull === true);
+            const act    = zs.positions.filter(p => !p.allCnc);
+            const otFail = act.some(p => p.onTime === false);
+            const otOk   = act.length > 0 && act.every(p => p.onTime === true);
+            const ifFail = act.some(p => p.inFull === false);
+            const ifOk   = act.length > 0 && act.every(p => p.inFull === true);
             return (
               <>
                 <span style={{ fontSize: 11, fontWeight: 600, color: otFail ? T.bn : otOk ? T.ok : T.text3 }}>
@@ -278,7 +236,7 @@ function ZsRow({ zs, expanded, onToggle }) {
         </div>
         <div style={{ fontSize: 12, color: T.text2 }}>{zs.klient}</div>
         <span style={{ fontSize: 11, color: T.text2, fontFamily: 'monospace' }}>
-          {zs.lastDue?.toISOString().slice(0, 10)}
+          {fmtIsoDate(zs.lastDue)}
         </span>
         <div style={{ textAlign: 'right' }}>
           <div style={{ fontSize: 12, fontWeight: 600, color: T.text2, fontFamily: 'monospace' }}>{fmtH(zs.totalTouch)}</div>
@@ -337,7 +295,7 @@ export function RealizacjaTab({ zpStatusData }) {
     const worstDel = zsTree.reduce((best, z) => {
       const maxDel = z.positions.reduce((m, p) => {
         if (!p.lastEnd || !p.need_date) return m;
-        const d = (p.lastEnd - p.need_date) / 3600000 / 16;
+        const d = (p.lastEnd - p.need_date) / 3600000 / 24;
         return d > m ? d : m;
       }, 0);
       return maxDel > (best.del || 0) ? { del: maxDel, zs: z.zs_id } : best;
@@ -456,4 +414,4 @@ const thStyle = {
 const tdStyle = {
   padding: '7px 10px', borderBottom: `1px solid ${T.border}`,
   color: T.text, whiteSpace: 'nowrap',
-};
+};

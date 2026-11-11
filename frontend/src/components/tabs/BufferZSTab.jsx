@@ -1,15 +1,9 @@
 import { useMemo, useState } from 'react';
 import { T, s, tocColor } from '../../constants/theme.js';
 import { EmptyState } from '../common/EmptyState.jsx';
+import { parseDt, parseDueDate } from '../../utils/otif.js';
 
 // ─── HELPERS ─────────────────────────────────────────────────────────────────
-
-function parseDt(str) {
-  if (!str) return null;
-  if (str instanceof Date) return isNaN(str) ? null : str;
-  if (typeof str !== 'string') return new Date(str) || null;
-  return new Date(str.includes('T') ? str : str.replace(' ', 'T'));
-}
 
 function opStatus(op, now) {
   if (op.status === 'CNF') return 'cnf';
@@ -25,7 +19,7 @@ function calcBufferRatio(ops, now) {
   if (!nonCnc.length) return null;
 
   const last       = nonCnc[nonCnc.length - 1];
-  const need_date  = parseDt(last.need_date || nonCnc[0].need_date);
+  const need_date  = parseDueDate(last.need_date || nonCnc[0].need_date);
   const plan_start = parseDt(nonCnc[0].planned_start);
   if (!need_date || !plan_start) return null;
 
@@ -98,7 +92,7 @@ function buildZsTree(zpStatusData, now) {
       pozycja: first.pozycja || '',
       klient:  first.klient  || '',
       product: first.product || '',
-      need_date: parseDt(ops[ops.length - 1].need_date || first.need_date),
+      need_date: parseDueDate(ops[ops.length - 1].need_date || first.need_date),
       cnfOps, totalOps,
       ops: ops.filter(o => o.status !== 'CNC').map(o => ({
         ...o,
@@ -444,4 +438,4 @@ export function BufferZSTab({ zpStatusData }) {
       )}
     </div>
   );
-}
+}

@@ -1,11 +1,6 @@
 import { useMemo, useState } from 'react';
 import { T, s, tocColor } from '../../constants/theme.js';
-
-function tocZone(toc) {
-  if (!toc) return 'green';
-  if (typeof toc === 'string') return toc;
-  return toc.zone || 'green';
-}
+import { tocZone } from '../../utils/otif.js';
 
 function fmtDate(dt) {
   if (!dt) return '—';
@@ -30,7 +25,7 @@ export function LateZSTab({ zpStatus }) {
 
     return Object.values(byZS).map(group => {
       // Posortuj pozycje po due_date
-      const items = [...group.items].sort((a, b) => a.due_date?.localeCompare(b.due_date));
+      const items = [...group.items].sort((a, b) => (a.due_date ?? '').localeCompare(b.due_date ?? ''));
 
       const totalDelay  = items.reduce((s, z) => s + (z.delayDays || 0), 0);
       const lateCount   = items.filter(z => tocZone(z.toc) === 'black').length;
@@ -246,4 +241,4 @@ function KpiCard({ icon, label, value, sub, color }) {
       <div style={{ fontSize: 11, color: T.text3 }}>{sub}</div>
     </div>
   );
-}
+}
