@@ -6,9 +6,11 @@
 //   - OPTIMIZE_INSERT: buildOcc ujednolicony, wcToBrygada przekazywane z App.jsx
 // ─────────────────────────────────────────────────────────────────────────────
 
+import { WORK_DAY_H } from '../constants/schedule.js';
+
 const MS               = 3_600_000;
 const DEFAULT_AVAIL    = 16;
-const DEFAULT_CAP      = 8;         // h/dzień fallback capacity — używane do przeliczania delayH -> delayDays
+// delayH -> delayDays: dzień roboczy = WORK_DAY_H (constants/schedule.js)
 const EPSILON          = 0.0001;
 const SAFETY_LIMIT     = 50_000;
 const TOC_YELLOW       = 0.33;
@@ -490,7 +492,7 @@ function scheduleAll(zpList, routingByProduct, wcSchedule, planStartDt, onProgre
 
     const delayMs   = Math.max(0, realEnd - dueDate);
     const delayH    = delayMs / MS;
-    const delayDays = +(delayH / DEFAULT_CAP).toFixed(1);
+    const delayDays = +(delayH / WORK_DAY_H).toFixed(1);
     const toc       = tocBuffer(backStart, planStartDt, dueDate, realEnd);
     const bottleneck = sorted.reduce((b, o) => (o.durH > b.durH ? o : b), sorted[0]).op.workcenter;
 
@@ -942,7 +944,7 @@ self.onmessage = function(e) {
               backStart: newBackStart,
               realEnd:   newRealEnd,
               delayH,
-              delayDays: +(delayH / DEFAULT_CAP).toFixed(1),
+              delayDays: +(delayH / WORK_DAY_H).toFixed(1),
               late:      delayH > 0,
               toc:       tocBuffer(newBackStart, planStartDt, dueDate, newRealEnd),
             };

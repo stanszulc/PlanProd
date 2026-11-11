@@ -204,3 +204,20 @@ describe('#4 Insert LS: odrzucona próba nie zostawia rezerwacji', () => {
     expect(new Date(w.segments[0].segStart).getDate()).toBe(18);
   });
 });
+
+describe('dni opóźnienia: dzień roboczy = WORK_DAY_H (16 h)', () => {
+  test('delayDays = delayH / 16, spójnie z backendem (DEFAULT_H = 16)', async () => {
+    const routingByProduct = {
+      P1: [{ workcenter: '20999', sequence: 1, ct_min: 0, _durH: 20, predecessors: [] }],
+    };
+    // termin w dniu planStart: ZP kończy się po terminie
+    const zpList = [{ zp_id: 'A', product: 'P1', volume: 1, due_date: '2026-08-17', priority: 2 }];
+    const { zpStatus } = await run('SCHEDULE', {
+      zpList, routingByProduct, wcSchedule: { '20999': [16, 16, 16, 16, 16, 16, 16] },
+      planStart: '2026-08-17', config: { schedulingMode: 'asap', shiftStart: 6 }, wcToBrygada: {},
+    });
+    const z = zpStatus[0];
+    expect(z.delayH).toBeGreaterThan(0);
+    expect(z.delayDays).toBeCloseTo(z.delayH / 16, 1);
+  });
+});

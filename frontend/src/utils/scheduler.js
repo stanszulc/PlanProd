@@ -4,6 +4,7 @@
 // ──────────────────────────────────────────────────────────────────────────────
 
 import { WC_DAILY_CAPACITY } from '../constants/demoData.js';
+import { WORK_DAY_H } from '../constants/schedule.js';
 
 
 // ─── STAŁE ────────────────────────────────────────────────────────────────────
@@ -467,7 +468,7 @@ function calcDelay(realEnd, dueDateStr) {
   const dueDate  = new Date(dueDateStr + 'T23:59:59');
   const delayMs  = Math.max(0, realEnd - dueDate);
   const delayH   = delayMs / MS_PER_HOUR;
-  const delayDays = +(delayH / DEFAULT_CAP).toFixed(1); // [FIX P0] DEFAULT_CAP=8h, nie DEFAULT_AVAIL=16h
+  const delayDays = +(delayH / WORK_DAY_H).toFixed(1);
   return { dueDate, delayH, delayDays };
 }
 

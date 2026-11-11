@@ -1,6 +1,7 @@
 import { useState, useMemo } from 'react';
 import { T, s, tocColor } from '../../constants/theme.js';
 import { parseDt, fmtIsoDate, calcOtif, aggregateZsOtif } from '../../utils/otif.js';
+import { WORK_DAY_H } from '../../constants/schedule.js';
 
 // ─── HELPERS ─────────────────────────────────────────────────────────────────
 
@@ -136,7 +137,7 @@ function PozycjaRow({ pos }) {
   const delayH = pos.lastEnd && pos.need_date
     ? Math.max(0, (pos.lastEnd - pos.need_date) / 3600000)
     : null;
-  const delayD = delayH != null ? (delayH / 24).toFixed(1) : null;
+  const delayD = delayH != null ? (delayH / WORK_DAY_H).toFixed(1) : null;
 
   return (
     <tr style={{ background: pos.allCnc ? 'rgba(100,100,100,0.05)' : 'transparent' }}>
@@ -295,7 +296,7 @@ export function RealizacjaTab({ zpStatusData }) {
     const worstDel = zsTree.reduce((best, z) => {
       const maxDel = z.positions.reduce((m, p) => {
         if (!p.lastEnd || !p.need_date) return m;
-        const d = (p.lastEnd - p.need_date) / 3600000 / 24;
+        const d = (p.lastEnd - p.need_date) / 3600000 / WORK_DAY_H;
         return d > m ? d : m;
       }, 0);
       return maxDel > (best.del || 0) ? { del: maxDel, zs: z.zs_id } : best;
