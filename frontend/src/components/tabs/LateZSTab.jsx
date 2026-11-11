@@ -1,5 +1,5 @@
 import { useMemo, useState } from 'react';
-import { T, s, tocColor } from '../../constants/theme.js';
+import { T, s } from '../../constants/theme.js';
 import { tocZone } from '../../utils/otif.js';
 
 function fmtDate(dt) {
@@ -129,7 +129,6 @@ export function LateZSTab({ zpStatus }) {
 // ─── GRUPA ZS ─────────────────────────────────────────────────────────────────
 
 function ZSGroup({ group }) {
-  const headerColor = group.isLate ? T.bn : T.ok;
 
   return (
     <div style={{ border: `1px solid ${group.isLate ? T.bn : T.border}`, borderRadius: 12, overflow: 'hidden' }}>
@@ -172,7 +171,6 @@ function ZSGroup({ group }) {
         {/* Wiersze */}
         {group.items.map(z => {
           const zone    = tocZone(z.toc);
-          const tc      = tocColor(zone);
           const isLate  = zone === 'black';
           const delayTxt = z.delayDays > 0 ? `+${z.delayDays}d` : '✓ OK';
 

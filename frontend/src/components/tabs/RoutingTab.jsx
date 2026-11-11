@@ -1,8 +1,7 @@
-import { useState, useMemo, useRef, useCallback } from 'react';
-import { T, PALETTE, s, tocColor, uStatus } from '../../constants/theme.js';
-import { localDateStr, fmtDt, computeLoads, getAvail } from '../../utils/scheduler.js';
+import { useState, useMemo, useRef } from 'react';
+import { T, PALETTE, s } from '../../constants/theme.js';
+import { computeLoads } from '../../utils/scheduler.js';
 import { planBottleneckView } from './bottleneckView.js';
-import { Dot } from '../common/Dot.jsx';
 import { EmptyState } from '../common/EmptyState.jsx';
 
 // Łamie nazwę maszyny na maks. 2 linijki (SVG <text> nie zawija tekstu samo) —
@@ -126,7 +125,7 @@ export function RoutingTab({ routing, zp, globalLookups, wcSchedule, fwdZP, wcTo
   }, [filteredRoutings]);
 
   const firstDateZP = useMemo(() => dates.length ? zp.filter(z => z.due_date === dates[0]) : [], [zp, dates]);
-  const wcLoads = useMemo(() => dates.length ? computeLoads(globalLookups.routingByProduct, firstDateZP, wcSchedule, dates[0]) : {}, [dates.join(','), firstDateZP.length, globalLookups, wcSchedule]);
+  const wcLoads = useMemo(() => dates.length ? computeLoads(globalLookups.routingByProduct, firstDateZP, wcSchedule, dates[0]) : {}, [dates, firstDateZP, globalLookups, wcSchedule]);
   const maxUtil = Object.values(wcLoads).length ? Math.max(...Object.values(wcLoads).map(v => v.util)) : 0;
   // Wąskie gardła z planu (utils/bottleneck.js) — gdy brak planu, zostaje fallback wg popytu (wcLoads).
   const bnView = useMemo(

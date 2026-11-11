@@ -6,7 +6,7 @@ import { DAY_NAMES } from '../../constants/theme.js';
 import { Dot } from '../common/Dot.jsx';
 import { EmptyState } from '../common/EmptyState.jsx';
 
-export function GanttTab({ routing, zp, globalLookups, wcSchedule, subZP, fwdZP, zpStatus, onRecalc, ganttDirty, onViewChange, slaveMode, planStart, onPlanStartChange, embedded, selectedWC: selectedWCProp, onWCSelect, selectedDate, onDateSelect, heatmapFilter, onHeatmapFilterChange, wcToBrygada }) {
+export function GanttTab({ routing, zp, globalLookups, wcSchedule, subZP, fwdZP, zpStatus, onRecalc, ganttDirty, onViewChange, planStart, onPlanStartChange, embedded, selectedWC: selectedWCProp, onWCSelect, selectedDate, onDateSelect, heatmapFilter, onHeatmapFilterChange, wcToBrygada }) {
 
   const wcNameMap = useMemo(() => { const m = {}; routing.forEach(r => { if (!m[r.workcenter]) m[r.workcenter] = r.operation; }); return m; }, [routing]);
   const allWCFull = useMemo(() => { const wcSeq = {}; routing.forEach(r => { const seq = parseInt(r.sequence)||999; if (wcSeq[r.workcenter]===undefined||seq<wcSeq[r.workcenter]) wcSeq[r.workcenter]=seq; }); return [...new Set(routing.map(r=>r.workcenter))].sort((a,b)=>(wcSeq[a]||999)-(wcSeq[b]||999)); }, [routing]);
@@ -42,9 +42,12 @@ export function GanttTab({ routing, zp, globalLookups, wcSchedule, subZP, fwdZP,
   const debPlanRef = useRef(null);
   useEffect(() => {
     if (planStart && planStart !== localPlanStart) {
+      // Synchronizacja stanu lokalnego z propem planStart (debounce inputu) — celowy setState w efekcie.
+      // eslint-disable-next-line react-hooks/set-state-in-effect -- sync z propem, bez pętli (warunek !==)
       setLocalPlanStart(planStart);
       setCommittedPlanStart(planStart);
     }
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- reakcja tylko na zmianę propa planStart
   }, [planStart]);
   const tooltipRef  = useRef(null);
   function showTooltip(e, op, isGhost) {
@@ -72,6 +75,9 @@ export function GanttTab({ routing, zp, globalLookups, wcSchedule, subZP, fwdZP,
   const svgRef       = useRef(null);
   const panRef       = useRef(null);
   const containerRef = useRef(null);
+  const panXRef = useRef(0); // aktualny panX podczas drag — bez re-renderu
+  const svgGroupRef = useRef(null); // ref na scrollowaną grupę SVG
+  const debouncePanRef = useRef(null); // debounce dla setPanX po scrollu kółkiem
 
   // Synchronizacja widoku z PlanTab
   useEffect(() => {
@@ -184,6 +190,8 @@ export function GanttTab({ routing, zp, globalLookups, wcSchedule, subZP, fwdZP,
   }, [dates, planBase, planStartDt, HOUR_W, allWC.length]);
 
   const { contentW, axisStart, axisEnd, allDues, svgH } = layout;
+  const axisStartMs = axisStart ? axisStart.getTime() : null;
+  const axisEndMs = axisEnd ? axisEnd.getTime() : null;
 
   // ── WHEEL ──────────────────────────────────────────────────────────────
   useEffect(() => {
@@ -278,13 +286,14 @@ export function GanttTab({ routing, zp, globalLookups, wcSchedule, subZP, fwdZP,
 
   // [PERF #3] Ticki memoizowane — nie tworzyć 180 Date objects przy każdym renderze
   const ticks = useMemo(() => {
-    if (!axisStart || !axisEnd) return [];
+    if (axisStartMs == null || axisEndMs == null) return [];
     const result = [];
-    for (let t = new Date(axisStart); t <= axisEnd; t.setHours(t.getHours() + scale.tick)) {
+    const endDt = new Date(axisEndMs);
+    for (let t = new Date(axisStartMs); t <= endDt; t.setHours(t.getHours() + scale.tick)) {
       result.push(new Date(t));
     }
     return result;
-  }, [axisStart?.getTime(), axisEnd?.getTime(), scale.tick]);
+  }, [axisStartMs, axisEndMs, scale.tick]);
 
   // Etykieta "wąskie gardło": jedna definicja z utils/bottleneck.js — brygada primary
   // liczona z całego planu (planBase), nie z widoku po filtrach. Źródło mapowania gniazdo→brygada:
@@ -297,8 +306,8 @@ export function GanttTab({ routing, zp, globalLookups, wcSchedule, subZP, fwdZP,
   // [PERF #4] Pre-compute segment pixel X positions — oblicza się raz z planBase, NIE z displayZP
   // Zmiana filtra nie wywołuje przeliczenia; wcSegments (lekkie) decyduje co pokazać
   const segmentPx = useMemo(() => {
-    if (!axisStart) return new Map();
-    const axisMs = axisStart.getTime();
+    if (axisStartMs == null) return new Map();
+    const axisMs = axisStartMs;
     const map = new Map();
     planBase.forEach(s2 => {
       (s2.segments || []).forEach((seg, si) => {
@@ -308,24 +317,24 @@ export function GanttTab({ routing, zp, globalLookups, wcSchedule, subZP, fwdZP,
       });
     });
     return map;
-  }, [planBase, axisStart?.getTime(), HOUR_W]);
+  }, [planBase, axisStartMs, HOUR_W]);
 
   // [PERF #5] Pre-compute tick pixel X — eliminuje xOf(t) per 180 ticków
   const ticksPx = useMemo(() => {
-    if (!axisStart) return [];
-    const axisMs = axisStart.getTime();
+    if (axisStartMs == null) return [];
+    const axisMs = axisStartMs;
     return ticks.map(t => ({
       t,
       x: LABEL_W + (t.getTime() - axisMs) / 3600000 * HOUR_W,
       isDay: t.getHours() === 0,
       dn: DAY_NAMES[t.getDay()],
     }));
-  }, [ticks, axisStart?.getTime(), HOUR_W]);
+  }, [ticks, axisStartMs, HOUR_W]);
 
   // [PERF #6] Pre-compute due date and planStart pixel X
   const planStartPx = useMemo(
-    () => axisStart ? LABEL_W + Math.max(0, (planStartDt.getTime() - axisStart.getTime()) / 3600000) * HOUR_W : 0,
-    [planStartDt, axisStart?.getTime(), HOUR_W]
+    () => axisStartMs != null ? LABEL_W + Math.max(0, (planStartDt.getTime() - axisStartMs) / 3600000) * HOUR_W : 0,
+    [planStartDt, axisStartMs, HOUR_W]
   );
   // Linie terminów: bez filtra — terminy WSZYSTKICH ZP w widoku (jak dotychczas).
   // Gdy wybrany jeden ZP (selectedZp) — tylko JEGO termin, żeby nie mylić go z terminami
@@ -339,27 +348,19 @@ export function GanttTab({ routing, zp, globalLookups, wcSchedule, subZP, fwdZP,
   }, [selectedZp, dates, allDues, displayZP, zp]);
 
   const duesPx = useMemo(
-    () => axisStart ? dueLines.map(({dt}) => LABEL_W + Math.max(0, (dt.getTime() - axisStart.getTime()) / 3600000) * HOUR_W) : [],
-    [dueLines, axisStart?.getTime(), HOUR_W]
+    () => axisStartMs != null ? dueLines.map(({dt}) => LABEL_W + Math.max(0, (dt.getTime() - axisStartMs) / 3600000) * HOUR_W) : [],
+    [dueLines, axisStartMs, HOUR_W]
   );
   // Żółta linia "dzień przed terminem" — tylko przy zawężeniu do jednego ZP (inaczej przy
   // tysiącach zleceń podwoiłaby liczbę linii bez potrzeby).
   const dueWarnPx = useMemo(
-    () => (axisStart && selectedZp)
-      ? dueLines.map(({dt}) => LABEL_W + Math.max(0, (dt.getTime() - 24*3600000 - axisStart.getTime()) / 3600000) * HOUR_W)
+    () => (axisStartMs != null && selectedZp)
+      ? dueLines.map(({dt}) => LABEL_W + Math.max(0, (dt.getTime() - 24*3600000 - axisStartMs) / 3600000) * HOUR_W)
       : [],
-    [dueLines, axisStart?.getTime(), HOUR_W, selectedZp]
+    [dueLines, axisStartMs, HOUR_W, selectedZp]
   );
 
-  const panXRef = useRef(0); // aktualny panX podczas drag — bez re-renderu
-  const svgGroupRef = useRef(null); // ref na scrollowaną grupę SVG
-  const debouncePanRef = useRef(null); // debounce dla setPanX po scrollu kółkiem
-
   if (!dates.length) return <EmptyState icon="📅" title="Brak danych" sub="Wgraj pliki CSV" />;
-
-  function xOf(dt) {
-    return LABEL_W + Math.max(0, (new Date(dt) - axisStart) / 3600000) * HOUR_W;
-  }
 
   function onBgMouseDown(e) {
     const tag = e.target.tagName;
@@ -385,7 +386,8 @@ export function GanttTab({ routing, zp, globalLookups, wcSchedule, subZP, fwdZP,
     setIsPan(false);
   }
 
-  // Scrollbar poziomy
+  // Scrollbar poziomy (odczyt szerokości kontenera w renderze — celowo, bez dodatkowego stanu)
+  // eslint-disable-next-line react-hooks/refs -- pomiar DOM tylko do rozmiaru thumba; bez zmiany mechanizmu pan/zoom
   const visibleW = (containerRef.current?.offsetWidth || 900) - LABEL_W;
   const thumbPct = Math.min(1, visibleW / contentW);
   const thumbPos = contentW > 0 ? (-panX / contentW) * 100 : 0;

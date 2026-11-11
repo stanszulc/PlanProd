@@ -3,8 +3,44 @@ import { T, s } from '../../constants/theme.js';
 
 const DAY_NAMES = ['Pon', 'Wt', 'Śr', 'Czw', 'Pt', 'Sob', 'Nd'];
 
-export function initBrigadeSchedule() {
-  return {};
+function SectionHeader({ icon, label }) {
+  return (
+  <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 14 }}>
+    <span style={{ fontSize: 16 }}>{icon}</span>
+    <span style={{ fontSize: 11, fontWeight: 700, letterSpacing: '.1em',
+      textTransform: 'uppercase', color: T.text2 }}>{label}</span>
+    <div style={{ flex: 1, height: 1, background: T.border, marginLeft: 4 }} />
+  </div>
+  );
+}
+
+function Row({ label, desc, children }) {
+  return (
+  <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between',
+    gap: 16, padding: '12px 0', borderBottom: `1px solid ${T.border}` }}>
+    <div>
+      <div style={{ fontSize: 13, fontWeight: 500, color: T.text }}>{label}</div>
+      {desc && <div style={{ fontSize: 11, color: T.text3, marginTop: 2 }}>{desc}</div>}
+    </div>
+    {children}
+  </div>
+  );
+}
+
+function NumInput({ value, onChange, min = 0, max = 30, unit = '' }) {
+  return (
+  <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+    <button onClick={() => onChange(Math.max(min, value - 1))}
+      style={{ ...s.btn(false), width: 28, height: 28, padding: 0, fontSize: 16,
+        display: 'flex', alignItems: 'center', justifyContent: 'center' }}>−</button>
+    <span style={{ fontSize: 15, fontWeight: 600, color: T.accent,
+      minWidth: 28, textAlign: 'center' }}>{value}</span>
+    <button onClick={() => onChange(Math.min(max, value + 1))}
+      style={{ ...s.btn(false), width: 28, height: 28, padding: 0, fontSize: 16,
+        display: 'flex', alignItems: 'center', justifyContent: 'center' }}>+</button>
+    {unit && <span style={{ fontSize: 11, color: T.text3 }}>{unit}</span>}
+  </div>
+  );
 }
 
 export function SettingsTab({ config, onConfigChange, wcCapacity = {}, onWcCapacityChange, wcToBrygada = {} }) {
@@ -36,40 +72,6 @@ export function SettingsTab({ config, onConfigChange, wcCapacity = {}, onWcCapac
     if (!onWcCapacityChange) return;
     onWcCapacityChange(prev => ({ ...prev, [wc]: Math.max(0, value) }));
   }
-
-  const SectionHeader = ({ icon, label }) => (
-    <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 14 }}>
-      <span style={{ fontSize: 16 }}>{icon}</span>
-      <span style={{ fontSize: 11, fontWeight: 700, letterSpacing: '.1em',
-        textTransform: 'uppercase', color: T.text2 }}>{label}</span>
-      <div style={{ flex: 1, height: 1, background: T.border, marginLeft: 4 }} />
-    </div>
-  );
-
-  const Row = ({ label, desc, children }) => (
-    <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between',
-      gap: 16, padding: '12px 0', borderBottom: `1px solid ${T.border}` }}>
-      <div>
-        <div style={{ fontSize: 13, fontWeight: 500, color: T.text }}>{label}</div>
-        {desc && <div style={{ fontSize: 11, color: T.text3, marginTop: 2 }}>{desc}</div>}
-      </div>
-      {children}
-    </div>
-  );
-
-  const NumInput = ({ value, onChange, min = 0, max = 30, unit = '' }) => (
-    <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
-      <button onClick={() => onChange(Math.max(min, value - 1))}
-        style={{ ...s.btn(false), width: 28, height: 28, padding: 0, fontSize: 16,
-          display: 'flex', alignItems: 'center', justifyContent: 'center' }}>−</button>
-      <span style={{ fontSize: 15, fontWeight: 600, color: T.accent,
-        minWidth: 28, textAlign: 'center' }}>{value}</span>
-      <button onClick={() => onChange(Math.min(max, value + 1))}
-        style={{ ...s.btn(false), width: 28, height: 28, padding: 0, fontSize: 16,
-          display: 'flex', alignItems: 'center', justifyContent: 'center' }}>+</button>
-      {unit && <span style={{ fontSize: 11, color: T.text3 }}>{unit}</span>}
-    </div>
-  );
 
   const brigades = Object.keys(brigadeToWc).sort();
 

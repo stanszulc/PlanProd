@@ -1,7 +1,10 @@
 import { describe, test, expect } from 'vitest';
 import { readFileSync } from 'node:fs';
 import path from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { parseGrafikGodzinXlsx, mergeGrafikGodzinIntoSchedule, buildWeeklyTemplateFromGrafik } from './grafikGodzinImport.js';
+
+const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
 function loadFixtureArrayBuffer(name) {
   const buf = readFileSync(path.join(__dirname, '__fixtures__', name));

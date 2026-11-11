@@ -2,7 +2,10 @@ import { describe, test, expect, vi } from 'vitest';
 import { render, waitFor } from '@testing-library/react';
 import { readFileSync } from 'node:fs';
 import path from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { ImportTab } from './ImportTab.jsx';
+
+const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
 const noop = () => {};
 

@@ -52,7 +52,7 @@ function heatText(v, max) {
   return t > 0.3 ? '#fff' : '#1e3a8a';
 }
 
-export function FlowMatrixTab({ fwdZP = [], routing = [], wcToBrygada = {}, wcSchedule = {} }) {
+export function FlowMatrixTab({ fwdZP = [], routing = [], wcToBrygada = {} }) {
   const [view,      setView]      = useState('machine');
   const [metric,    setMetric]    = useState('count');
   const [threshold, setThreshold] = useState(15);

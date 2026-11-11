@@ -1,4 +1,4 @@
-import { T, s } from '../../constants/theme.js';
+import { T } from '../../constants/theme.js';
 
 export function EmptyState({ icon, title, sub }) {
   return (
@@ -9,6 +9,3 @@ export function EmptyState({ icon, title, sub }) {
     </div>
   );
 }
-
-// ─── ZAKŁADKA: IMPORT ────────────────────────────────────────────────────────
-const DAY_NAMES = ['Nd','Pon','Wt','Śr','Czw','Pt','Sob'];

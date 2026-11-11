@@ -32,7 +32,7 @@ import { FlowMatrixTab }    from './components/tabs/FlowMatrixTab.jsx';
 import { mergeGrafikGodzinIntoSchedule, buildWeeklyTemplateFromGrafik } from './utils/grafikGodzinImport.js';
 import './App.css';
 import { WC_DAILY_CAPACITY } from './constants/demoData.js';
-import { initBrigadeSchedule } from './components/tabs/SettingsTab.jsx';
+import { initBrigadeSchedule } from './utils/initBrigadeSchedule.js';
 
 const MENU = [
   { id: 'dashboard', label: '🏠 Dashboard' },
@@ -202,7 +202,6 @@ export default function App() {
     schedulingGraphMode: 'graph', // 'graph' honoruje parallelMachines (fan-in), 'legacy' = dawne zachowanie
   });
 
-  const [historyData, setHistoryData]         = useState([]);
   const [zpStatusData, setZpStatusData]       = useState([]);
   const [zpStatusHeaders, setZpStatusHeaders] = useState([]);
   const [dateFrom, setDateFrom] = useState('');
@@ -257,6 +256,7 @@ export default function App() {
   // zamrożonej przy imporcie daty "dziś". Bug: okno dziś-30..dziś+horyzont liczone
   // raz w handleLoad nigdy się nie odświeżało po zmianie "Planuj od" — plan "wyglądał"
   // jakby wciąż startował od dziś, bo lista branych pod uwagę ZP się nie zmieniała.
+  // Routing/ZP są stanem edytowalnym także z importu; efekt przelicza je z erpZp po zmianie parametrów.
   useEffect(() => {
     if (erpZp.length > 0) {
       const { zpList, routingByProduct } = erpZpToSchedulerInput(erpZp, { parallelMachines, mode: scheduleConfig.schedulingGraphMode });
@@ -268,10 +268,12 @@ export default function App() {
       const horizonStr = localDateStr(horizonDate);
       const cutoffStr  = localDateStr(cutoffDate);
       const zpFiltered = zpList.filter(z => z.due_date >= cutoffStr && z.due_date <= horizonStr);
+      /* eslint-disable react-hooks/set-state-in-effect -- routing/zp to stan edytowalny; synchronizacja z erpZp po zmianie parametrów */
       setRouting(_erpRoutingToFlat(routingByProduct));
       setZP(zpFiltered);
       setWcScheduleVersion(v => v + 1);
       setGanttDirty(true);
+      /* eslint-enable react-hooks/set-state-in-effect */
     }
   }, [erpZp, parallelMachines, scheduleConfig.schedulingGraphMode, planStart, scheduleConfig.horizonDays]);
 
@@ -440,13 +442,10 @@ export default function App() {
     return map;
   }, [zp, routing, globalLookups, wcSchedule]);
 
-  useEffect(() => {
-    if (zpStatusData.length) {
-      const withWaits = zpStatusToHistoryFormat(zpStatusData, routing);
-      setHistoryData(calcCapacityLoss(withWaits, wcLoadMap));
-    } else {
-      setHistoryData([]);
-    }
+  const historyData = useMemo(() => {
+    if (!zpStatusData.length) return [];
+    const withWaits = zpStatusToHistoryFormat(zpStatusData, routing);
+    return calcCapacityLoss(withWaits, wcLoadMap);
   }, [zpStatusData, routing, wcLoadMap]);
 
   const handleLoad = useCallback((text, type) => {

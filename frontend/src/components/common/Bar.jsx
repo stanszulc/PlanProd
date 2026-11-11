@@ -1,4 +1,4 @@
-import { T, s } from '../../constants/theme.js';
+import { T } from '../../constants/theme.js';
 
 export function Bar({ value, max = 1, color, height = 6 }) {
   const utilPct = value / max;

@@ -1,4 +1,4 @@
-import { useState, useMemo, useRef, useEffect } from 'react';
+import { useState, useMemo, useRef } from 'react';
 import { T, s, heatBand } from '../../constants/theme.js';
 import { localDateStr } from '../../utils/scheduler.js';
 import { EmptyState } from '../common/EmptyState.jsx';
@@ -138,7 +138,7 @@ export function HeatmapPlanTab({ fwdZP = [], routing = [], wcSchedule = {}, onSc
     return map;
   }, [fwdZP, wcMeta]);
 
-  const { loadMap, brigadeLoadMap, dates, groups, lateKeys, lateBrigadeKeys, weekendSet } = useMemo(() => {
+  const { loadMap, dates, groups, lateKeys, weekendSet } = useMemo(() => {
     const loadMap     = {};
     const brigadeLoad = {};
     const dateSet     = new Set();
@@ -305,25 +305,6 @@ export function HeatmapPlanTab({ fwdZP = [], routing = [], wcSchedule = {}, onSc
     return brigades.filter(br => wc2s.has(br));
   }, [brigades, filteredGroups, filterWc2, filterCell?.wc2, filterCell?.date]);
 
-  // ZP w danym gnieździe × dacie
-  function getZpsForCell(wc2, dateStr, singleWc = null) {
-    const wc2Wcs = singleWc
-      ? new Set([singleWc])
-      : new Set(Object.entries(wcMeta).filter(([,m]) => m.group === wc2).map(([wc]) => wc));
-    const zps = [];
-    const seen = new Set();
-    fwdZP.forEach(op => {
-      if (!wc2Wcs.has(op.workcenter)) return;
-      const hasDate = (op.segments || []).some(seg => seg.segStart && localDateStr(seg.segStart) === dateStr);
-      if (!hasDate) return;
-      const id = op.parent_zp || op.zp_id;
-      if (seen.has(id)) return;
-      seen.add(id);
-      zps.push({ id, klient: op.klient || op.zp_id, durH: op.durH, due_date: op.due_date });
-    });
-    return zps;
-  }
-
   function getAvailH(wc, dateStr) {
     const sched = wcSchedule[wc];
     if (!sched) return 16;
@@ -411,16 +392,6 @@ export function HeatmapPlanTab({ fwdZP = [], routing = [], wcSchedule = {}, onSc
     const u    = load / avail;
     const text = mode === 'h' ? load.toFixed(1) + 'h' : Math.round(u * 100) + '%';
     return { ...heatBand(u), text };
-  }
-
-  function brStyle(capH, loadH) {
-    if (loadH === 0) return { bg: T.surface2, color: T.text3, text: '–', sub: '' };
-    const u    = capH > 0 ? loadH / capH : 999;
-    const pct  = capH > 0 ? Math.round(u * 100) + '%' : '!';
-    const hrs  = loadH.toFixed(0) + 'h';
-    const text = mode === 'h' ? hrs : pct;
-    const sub  = mode === 'h' ? pct : hrs;
-    return { ...heatBand(u), text, sub };
   }
 
   function fmtDate(d) {
@@ -758,7 +729,6 @@ export function HeatmapPlanTab({ fwdZP = [], routing = [], wcSchedule = {}, onSc
                     </td>
                     {dates.map(d => {
                       const cap  = getBrigadeCapH(br, d);
-                      const isWe = weekendSet.has(d);
                       return (
                         <td key={d} style={{ padding: 3, textAlign: 'center' }}>
                           <div style={{ display: 'inline-flex', flexDirection: 'column',

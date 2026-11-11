@@ -1,5 +1,5 @@
 import { useState, useMemo } from 'react';
-import { T, s, tocColor } from '../../constants/theme.js';
+import { T, s } from '../../constants/theme.js';
 import { parseDt, fmtIsoDate, calcOtif, aggregateZsOtif } from '../../utils/otif.js';
 import { WORK_DAY_H } from '../../constants/schedule.js';
 
@@ -196,8 +196,6 @@ function PozycjaRow({ pos }) {
 // ─── WIERSZ ZS ────────────────────────────────────────────────────────────────
 
 function ZsRow({ zs, expanded, onToggle }) {
-  const otifColor = zs.otif === true ? T.ok : zs.otif === false ? T.bn : T.text3;
-  const otifLabel = zs.otif === true ? '✅ OTIF' : zs.otif === false ? '❌ OTIF' : '⏳ W toku';
 
   return (
     <div style={{

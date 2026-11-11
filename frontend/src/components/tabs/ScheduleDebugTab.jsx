@@ -118,7 +118,7 @@ export function ScheduleDebugTab({ fwdZP = [], zpStatus = [], planStart, schedul
     const setNote = (note) => setMethodNotes(prev => ({ ...prev, [key]: { label, ...note } }));
 
     const url      = `http://localhost:8765${ENDPOINT_MAP[method] || '/optimize'}`;
-    // /optimize (stary) potrzebuje method w config; pozostałe mają własne ścieżki
+    // /optimize potrzebuje method w config; pozostałe mają własne ścieżki
     const cfgExtra = method === 'cpsat' ? { method: 'cpsat' } : {};
 
     try {
@@ -301,7 +301,7 @@ export function ScheduleDebugTab({ fwdZP = [], zpStatus = [], planStart, schedul
 
   const methodLabel = {
     cr: 'CR', due_date: 'Due date', slack: 'Slack', atc: 'ATC',
-    ortools_cpsat: 'CP-SAT (stary)', greedy_ls: 'Greedy LS',
+    ortools_cpsat: 'CP-SAT (/optimize)', greedy_ls: 'Greedy LS',
     sa: 'Simul. Annealing', cpsat_tardy: 'CP-SAT Tardiness',
   };
   const modeLabel = {
@@ -358,10 +358,10 @@ export function ScheduleDebugTab({ fwdZP = [], zpStatus = [], planStart, schedul
             {comparing ? '⏳ Liczę 8 scenariuszy...' : '⚖️ Porównaj metody'}
           </button>
 
-          {/* CP-SAT stary */}
+          {/* CP-SAT przez /optimize (ten sam solver co CP-SAT Tardiness) */}
           <button onClick={runOrTools}
             disabled={orToolsRunning || !zpList.length || serverOffline}
-            title={serverOffline ? 'Uruchom: py server.py' : 'OR-Tools CP-SAT (stary — terminy twarde)'}
+            title={serverOffline ? 'Uruchom: py server.py' : 'OR-Tools CP-SAT przez /optimize — ten sam solver co CP-SAT Tardiness (miękkie terminy)'}
             style={{ padding: '5px 14px', fontSize: 12, fontWeight: 600, borderRadius: 7,
               border: `1px solid ${serverOffline ? T.border2 : '#7c3aed'}`,
               cursor: orToolsRunning ? 'wait' : serverOffline ? 'not-allowed' : 'pointer',

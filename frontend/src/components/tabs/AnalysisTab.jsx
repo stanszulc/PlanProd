@@ -16,7 +16,7 @@ const REASON_COLORS = [
   T.bn, T.warn, '#a855f7', T.accent, T.ok, T.text2,
 ];
 
-export function AnalysisTab({ historyData, routing, wcSchedule }) {
+export function AnalysisTab({ historyData, routing }) {
   const [subTab, setSubTab] = useState('times');
   const [filterWc, setFilterWc] = useState('ALL');
   const [filterProduct, setFilterProduct] = useState('ALL');
@@ -152,6 +152,7 @@ function localDay(dt) {
 function HistorySankeySection({ historyData, routing }) {
   const svgRef  = useRef(null);
   const dragging = useRef(null);
+  const [isDragging, setIsDragging] = useState(false); // lustro dragging.current do renderu
   const [granularity, setGranularity] = useState('week'); // 'day' | 'week'
   const [selectedKey, setSelectedKey] = useState(null);
   const [hoveredWC, setHoveredWC]     = useState(null);
@@ -280,7 +281,6 @@ function HistorySankeySection({ historyData, routing }) {
     return merged;
   }, [baseLayout, nodePos]);
 
-  const { SVG_W, SVG_H } = baseLayout;
   const maxEdge   = Math.max(...Object.values(flowData.edgeTotals), 1);
   const maxNodeOp = Math.max(...Object.values(flowData.nodeOps), 1);
   const products  = useMemo(() => [...new Set(routing.map(r => r.product))], [routing]);
@@ -316,10 +316,12 @@ function HistorySankeySection({ historyData, routing }) {
     e.stopPropagation();
     const { x, y } = svgPt(e);
     dragging.current = { kind: 'node', wc, ox: x - allPositions[wc].x * view.scale - view.tx, oy: y - allPositions[wc].y * view.scale - view.ty };
+    setIsDragging(true);
   }
   function onBgMD(e) {
     if (e.target.tagName === 'rect' && e.target.getAttribute('fill') === 'transparent') {
       dragging.current = { kind: 'pan', ox: e.clientX - view.tx, oy: e.clientY - view.ty };
+      setIsDragging(true);
     }
   }
   function onMM(e) {
@@ -336,7 +338,7 @@ function HistorySankeySection({ historyData, routing }) {
       setNodePos(p => ({ ...p, [wc]: { x: gx, y: gy } }));
     }
   }
-  function onMU() { dragging.current = null; }
+  function onMU() { dragging.current = null; setIsDragging(false); }
   useEffect(() => {
     const el = svgRef.current;
     if (!el) return;
@@ -352,7 +354,6 @@ function HistorySankeySection({ historyData, routing }) {
     }
     el.addEventListener('wheel', onWheel, { passive: false });
     return () => el.removeEventListener('wheel', onWheel);
-  // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   if (!historyData.length) return <Empty />;
@@ -492,7 +493,7 @@ function HistorySankeySection({ historyData, routing }) {
                 : '—';
               return (
                 <g key={wc}
-                  style={{ cursor: 'grab', opacity: dimmed, transition: dragging.current ? 'none' : 'opacity 0.15s' }}
+                  style={{ cursor: 'grab', opacity: dimmed, transition: isDragging ? 'none' : 'opacity 0.15s' }}
                   onMouseDown={e => onNodeMD(e, wc)}
                   onMouseEnter={() => { if (!dragging.current) setHoveredWC(wc); }}
                   onMouseLeave={() => { if (!dragging.current) setHoveredWC(null); }}>
@@ -885,8 +886,6 @@ function ParetoSection({ paretoData, workcenter, paretoWc, onWcChange }) {
     </div>
   );
 
-  const maxCount = paretoData[0]?.count ?? 1;
-  const total    = paretoData.reduce((s, d) => s + d.count, 0);
 
   return (
     <div style={s.card}>

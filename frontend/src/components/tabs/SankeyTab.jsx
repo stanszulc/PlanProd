@@ -1,7 +1,7 @@
 import { useState, useMemo, useEffect, useRef } from 'react';
 import { T, PALETTE, s } from '../../constants/theme.js';
-import { Dot } from '../common/Dot.jsx';
 import { EmptyState } from '../common/EmptyState.jsx';
+import { localDateStr } from '../../utils/scheduler.js';
 
 // ── helpers dat ──────────────────────────────────────────────────────────────
 function isoWeekStr(dt) {
@@ -22,7 +22,7 @@ function segWeek(seg) {
   return isoWeekStr(seg.segStart);
 }
 
-export function SankeyTab({ routing, zp, globalLookups, wcSchedule,
+export function SankeyTab({ routing, zp, globalLookups,
   fwdZP = [], wcToBrygada = {},
   heatmapFilter = null, onHeatmapFilterChange,
   selectedWC = null, onWCSelect,
@@ -34,6 +34,7 @@ export function SankeyTab({ routing, zp, globalLookups, wcSchedule,
   const [nodePos,     setNodePos]      = useState({});
   const [view,        setView]         = useState({ scale: 1, tx: 0, ty: 0 });
   const dragging = useRef(null);
+  const [dragKind, setDragKind] = useState(null); // lustro dragging.current?.kind do renderu
   const svgRef   = useRef(null);
 
   // ── Filtr zewnętrzny (heatmapFilter / selectedWC / selectedDate z Gantta) ────
@@ -47,14 +48,14 @@ export function SankeyTab({ routing, zp, globalLookups, wcSchedule,
             : new Set(Object.entries(wcToBrygada).filter(([, v]) => v === heatmapFilter.wc2).map(([k]) => k));
           if (!targetWcSet.has(String(s2.workcenter))) return false;
           if (!heatmapFilter.date) return true;
-          return (s2.segments || []).some(seg => seg.segStart && new Date(seg.segStart).toISOString().slice(0, 10) === heatmapFilter.date);
+          return (s2.segments || []).some(seg => seg.segStart && localDateStr(seg.segStart) === heatmapFilter.date);
         })
       : fwdZP;
     const wcBase = selectedWC
       ? hmBase.filter(s2 => String(s2.workcenter) === String(selectedWC))
       : hmBase;
     const dateBase = selectedDate
-      ? wcBase.filter(s2 => (s2.segments || []).some(seg => seg.segStart && new Date(seg.segStart).toISOString().slice(0, 10) === selectedDate))
+      ? wcBase.filter(s2 => (s2.segments || []).some(seg => seg.segStart && localDateStr(seg.segStart) === selectedDate))
       : wcBase;
     const ids = new Set(dateBase.map(s2 => s2.parent_zp || s2.zp_id.split('/')[0]));
     return ids.size > 0 ? ids : null;
@@ -82,9 +83,6 @@ export function SankeyTab({ routing, zp, globalLookups, wcSchedule,
     ? selectedKey
     : (periodKeys[0] ?? null);
 
-  // Reset selectedKey gdy granularity się zmienia
-  useEffect(() => { setSelectedKey(null); }, [granularity]);
-
   // ── ZP IDs aktywne w wybranym okresie ────────────────────────────────────────
   const periodZpIds = useMemo(() => {
     if (!effectiveKey) return new Set();
@@ -111,7 +109,6 @@ export function SankeyTab({ routing, zp, globalLookups, wcSchedule,
     if (!periodZP.length || !routing.length)
       return { connections: [], edgeTotals: {}, nodeVolumes: {}, planCt: {} };
 
-    const activeProducts = [...new Set(periodZP.map(z => z.product))];
     const nodeVolumes = {}, productConns = {}, planCt = {};
 
     // Zbierz zaplanowane czasy operacji z fwdZP (dla węzłów)
@@ -129,16 +126,31 @@ export function SankeyTab({ routing, zp, globalLookups, wcSchedule,
 
     periodZP.forEach(order => {
       const ops = globalLookups.routingByProduct[order.product] || [];
-      ops.forEach((op, idx) => {
+      const addConn = (from, to) => {
+        const key = `${order.product}||${from}->${to}`;
+        if (!productConns[key])
+          productConns[key] = { product: order.product, from, to, volume: 0 };
+        productConns[key].volume += order.volume;
+      };
+      ops.forEach(op => {
         nodeVolumes[op.workcenter] = (nodeVolumes[op.workcenter] || 0) + order.volume;
-        if (idx < ops.length - 1) {
-          const next = ops[idx + 1];
-          const key  = `${order.product}||${op.workcenter}->${next.workcenter}`;
-          if (!productConns[key])
-            productConns[key] = { product: order.product, from: op.workcenter, to: next.workcenter, volume: 0 };
-          productConns[key].volume += order.volume;
-        }
       });
+      // Przepływ z predecessors (klucz zgodny z silnikiem: _opUid ?? sequence);
+      // gdy routing nie ma predecessors - fallback do kolejności w tablicy.
+      const opKey = o => o._opUid ?? o.sequence;
+      if (ops.some(o => (o.predecessors || []).length)) {
+        const byKey = new Map(ops.map(o => [opKey(o), o]));
+        ops.forEach(op => {
+          (op.predecessors || []).forEach(pk => {
+            const pred = byKey.get(pk);
+            if (pred) addConn(pred.workcenter, op.workcenter);
+          });
+        });
+      } else {
+        ops.forEach((op, idx) => {
+          if (idx < ops.length - 1) addConn(op.workcenter, ops[idx + 1].workcenter);
+        });
+      }
     });
 
     const edgeTotals = {};
@@ -191,8 +203,9 @@ export function SankeyTab({ routing, zp, globalLookups, wcSchedule,
     const key = 'flowops_nodepos_' + [...new Set(routing.map(r => r.workcenter))].sort().join(',');
     try {
       const saved = JSON.parse(localStorage.getItem(key) || '{}');
+      // eslint-disable-next-line react-hooks/set-state-in-effect -- jednorazowe wczytanie układu z localStorage przy zmianie routingu
       if (Object.keys(saved).length) setNodePos(saved);
-    } catch(e) {}
+    } catch { /* localStorage niedostępny */ }
   }, [routing]);
 
   const allPositions = useMemo(() => {
@@ -203,8 +216,6 @@ export function SankeyTab({ routing, zp, globalLookups, wcSchedule,
     return merged;
   }, [baseLayout, nodePos]);
 
-  const SVG_W = baseLayout.SVG_W;
-  const SVG_H = baseLayout.SVG_H;
   const maxVolume  = Math.max(...Object.values(flowData.edgeTotals), 1);
   const maxNodeVol = Math.max(...Object.values(flowData.nodeVolumes), 1);
 
@@ -247,10 +258,13 @@ export function SankeyTab({ routing, zp, globalLookups, wcSchedule,
     const gx = (x - view.tx) / view.scale;
     const gy = (y - view.ty) / view.scale;
     dragging.current = { kind: 'node', wc, ox: gx - cur.x, oy: gy - cur.y };
+    setDragKind('node');
   }
   function onSvgBgMouseDown(e) {
-    if (e.target.tagName === 'rect' && e.target.getAttribute('fill') === 'transparent')
+    if (e.target.tagName === 'rect' && e.target.getAttribute('fill') === 'transparent') {
       dragging.current = { kind: 'pan', ox: e.clientX - view.tx, oy: e.clientY - view.ty };
+      setDragKind('pan');
+    }
   }
   useEffect(() => {
     const el = svgRef.current;
@@ -267,7 +281,6 @@ export function SankeyTab({ routing, zp, globalLookups, wcSchedule,
     }
     el.addEventListener('wheel', onWheel, { passive: false });
     return () => el.removeEventListener('wheel', onWheel);
-  // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
   function onSvgMouseMove(e) {
     const d = dragging.current;
@@ -285,13 +298,14 @@ export function SankeyTab({ routing, zp, globalLookups, wcSchedule,
     if (!dragging.current) return;
     if (dragging.current.kind === 'node') {
       const key = 'flowops_nodepos_' + [...new Set(routing.map(r => r.workcenter))].sort().join(',');
-      setNodePos(prev => { try { localStorage.setItem(key, JSON.stringify(prev)); } catch(e) {} return prev; });
+      setNodePos(prev => { try { localStorage.setItem(key, JSON.stringify(prev)); } catch { /* ignoruj */ } return prev; });
     }
     dragging.current = null;
+    setDragKind(null);
   }
   function resetLayout() {
     const key = 'flowops_nodepos_' + [...new Set(routing.map(r => r.workcenter))].sort().join(',');
-    try { localStorage.removeItem(key); } catch(e) {}
+    try { localStorage.removeItem(key); } catch { /* ignoruj */ }
     setNodePos({});
   }
 
@@ -415,7 +429,7 @@ export function SankeyTab({ routing, zp, globalLookups, wcSchedule,
         height: 'calc(100vh - 220px)', minHeight: 400,
         border: `1px solid ${T.border}`, position: 'relative' }}>
         <svg ref={svgRef} width="100%" height="100%"
-          style={{ display: 'block', cursor: dragging.current?.kind === 'pan' ? 'grabbing' : 'default', userSelect: 'none' }}
+          style={{ display: 'block', cursor: dragKind === 'pan' ? 'grabbing' : 'default', userSelect: 'none' }}
           onMouseMove={onSvgMouseMove} onMouseUp={onSvgMouseUp} onMouseLeave={onSvgMouseUp}
           onMouseDown={onSvgBgMouseDown}>
           <rect x="0" y="0" width="100%" height="100%" fill="transparent"/>
@@ -442,7 +456,7 @@ export function SankeyTab({ routing, zp, globalLookups, wcSchedule,
               const edgeKey     = `${conn.from}->${conn.to}`;
               const prodsOnEdge = edgeProdCount[edgeKey] || [conn.product];
               const myIdx       = prodsOnEdge.indexOf(conn.product);
-              const { d, mx, my } = edgePath(fromPos, toPos, myIdx, prodsOnEdge.length);
+              const { d } = edgePath(fromPos, toPos, myIdx, prodsOnEdge.length);
               const isHov  = hoveredWC === conn.from || hoveredWC === conn.to;
               const thick  = 1.5 + (flowData.edgeTotals[edgeKey] / maxVolume) * 12;
               return (
@@ -490,7 +504,7 @@ export function SankeyTab({ routing, zp, globalLookups, wcSchedule,
               const short = opLabel.length > 18 ? opLabel.substring(0, 17) + '…' : opLabel;
               return (
                 <g key={wc}
-                  style={{ cursor: 'grab', opacity: dimmed, transition: dragging.current ? 'none' : 'opacity 0.15s' }}
+                  style={{ cursor: 'grab', opacity: dimmed, transition: dragKind ? 'none' : 'opacity 0.15s' }}
                   onMouseDown={e => onNodeMouseDown(e, wc)}
                   onMouseEnter={() => { if (!dragging.current) setHoveredWC(wc); }}
                   onMouseLeave={() => { if (!dragging.current) setHoveredWC(null); }}>
